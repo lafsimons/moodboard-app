@@ -53,6 +53,9 @@ test("migrateReferenceMetadataToTags preserves tags and merges legacy metadata",
   assert.equal(migrated.favorite, true);
   assert.equal(migrated.images.preview.src, "data:image/webp;base64,legacy");
   assert.equal(migrated.originalPreserved, false);
+  assert.equal(migrated.relinkStatus, "pending");
+  assert.ok(migrated.itemUuid);
+  assert.equal(migrated.sourceOriginalFilename, "photo.jpg");
   assert.equal("category" in migrated, false);
   assert.equal("collection" in migrated, false);
   assert.equal("productType" in migrated, false);
@@ -133,7 +136,7 @@ test("sanitizeExportedReference emits simplified metadata shape", () => {
   assert.equal(exported.cameraMake, "Canon");
 });
 
-test("sanitizeBackupReference strips embedded backups down to one thumbnail legacy image", () => {
+test("sanitizeBackupReference strips embedded backups down to one preview legacy image", () => {
   const exported = sanitizeBackupReference({
     id: "1",
     imageUrl: "data:image/webp;base64,preview",
@@ -167,11 +170,11 @@ test("sanitizeBackupReference strips embedded backups down to one thumbnail lega
   });
 
   assert.equal(exported.originalPreserved, false);
-  assert.equal(exported.imageUrl, "data:image/webp;base64,thumb");
+  assert.equal(exported.imageUrl, "data:image/webp;base64,preview");
   assert.equal(exported.mimeType, "image/webp");
-  assert.equal(exported.imageWidth, 480);
-  assert.equal(exported.imageHeight, 384);
-  assert.equal(exported.fileSize, 300);
+  assert.equal(exported.imageWidth, 1200);
+  assert.equal(exported.imageHeight, 960);
+  assert.equal(exported.fileSize, 1200);
   assert.equal(exported.originalFilename, "photo.jpg");
   assert.equal(exported.images.original.src, "");
   assert.equal(exported.images.preview.src, "");

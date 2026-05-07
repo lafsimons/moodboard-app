@@ -1,12 +1,15 @@
-import defaultWardrobe from "../data/defaultWardrobe";
-import defaultAppState from "../data/defaultAppState";
-import { migrateReferenceMetadataToTags, sanitizeExportedReference } from "./metadata";
+import defaultWardrobe from "../data/defaultWardrobe.js";
+import defaultAppState from "../data/defaultAppState.js";
+import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 
 const DB_NAME = "outfit-app-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 export const BACKUP_VERSION = 2;
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
+const ORIGINAL_STORE = "originalImageBlobs";
+
+let indexedDbFactory = () => globalThis.indexedDB;
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
@@ -28,9 +31,19 @@ function requestToPromise(request) {
   });
 }
 
+function getIndexedDb() {
+  const indexedDb = indexedDbFactory();
+
+  if (!indexedDb) {
+    throw new Error("IndexedDB is not available in this environment.");
+  }
+
+  return indexedDb;
+}
+
 function openDatabase() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    const request = getIndexedDb().open(DB_NAME, DB_VERSION);
 
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -41,6 +54,10 @@ function openDatabase() {
 
       if (!db.objectStoreNames.contains(APP_STORE)) {
         db.createObjectStore(APP_STORE, { keyPath: "key" });
+      }
+
+      if (!db.objectStoreNames.contains(ORIGINAL_STORE)) {
+        db.createObjectStore(ORIGINAL_STORE, { keyPath: "itemUuid" });
       }
     };
 
@@ -60,7 +77,8 @@ async function withStore(storeName, mode, run) {
 
     try {
       const result = run(store);
-      resultPromise = result instanceof IDBRequest ? requestToPromise(result) : Promise.resolve(result);
+      const isIdbRequest = typeof IDBRequest !== "undefined" && result instanceof IDBRequest;
+      resultPromise = isIdbRequest ? requestToPromise(result) : Promise.resolve(result);
     } catch (error) {
       reject(error);
       db.close();
@@ -146,32 +164,154 @@ export async function saveAppState(value) {
   );
 }
 
-export async function exportBackup() {
-  const [items, appState] = await Promise.all([loadItems(), loadAppState()]);
+function normalizeBackupAppState(appState) {
+  if (!appState || typeof appState !== "object" || Array.isArray(appState)) {
+    throw new Error("Backup app state is invalid.");
+  }
 
+  return {
+    ...appState,
+    recentOutfits: []
+  };
+}
+
+function prepareBackupItems(items) {
+  if (!Array.isArray(items)) {
+    throw new Error("Backup items are invalid.");
+  }
+
+  const seenIds = new Set();
+
+  return items.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`Backup item ${index + 1} is invalid.`);
+    }
+
+    if (typeof item.id !== "string" || !item.id.trim()) {
+      throw new Error(`Backup item ${index + 1} is missing an id.`);
+    }
+
+    if (seenIds.has(item.id)) {
+      throw new Error(`Backup item id "${item.id}" is duplicated.`);
+    }
+
+    seenIds.add(item.id);
+    return migrateReferenceMetadataToTags(item);
+  });
+}
+
+export function createLightweightBackupData(items, appState) {
   return {
     source: "outfit-app",
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    items: items.map(sanitizeExportedReference),
+    items: (Array.isArray(items) ? items : []).map((item) => sanitizeBackupReference(item)),
     appState: stripLocalOnlyAppState(appState)
   };
 }
 
-export async function replaceWithBackup(backup) {
-  await withStores([ITEM_STORE, APP_STORE], "readwrite", ({ items, appState }) => {
+export function prepareBackupImport(backup) {
+  if (!backup || typeof backup !== "object" || Array.isArray(backup)) {
+    throw new Error("Backup payload is invalid.");
+  }
+
+  if (backup.source !== "outfit-app") {
+    throw new Error("Backup source is invalid.");
+  }
+
+  if (![1, BACKUP_VERSION].includes(backup.version)) {
+    throw new Error("Backup version is not supported.");
+  }
+
+  return {
+    source: backup.source,
+    version: backup.version,
+    exportedAt: typeof backup.exportedAt === "string" ? backup.exportedAt : "",
+    items: prepareBackupItems(backup.items),
+    appState: normalizeBackupAppState(backup.appState)
+  };
+}
+
+export async function exportBackup() {
+  const [items, appState] = await Promise.all([loadItems(), loadAppState()]);
+  return createLightweightBackupData(items, appState);
+}
+
+export async function replaceWithPreparedBackup(backup) {
+  await withStores([ITEM_STORE, APP_STORE, ORIGINAL_STORE], "readwrite", ({ items, appState, originalImageBlobs }) => {
     items.clear();
     appState.clear();
+    originalImageBlobs.clear();
 
-    backup.items.map(migrateReferenceMetadataToTags).forEach((item) => items.put(item));
+    backup.items.forEach((item) => items.put(item));
     appState.put({
       key: "state",
-      value: {
-        ...(backup.appState ?? {}),
-        recentOutfits: []
-      }
+      value: backup.appState
     });
   });
+}
+
+export async function replaceWithBackup(backup) {
+  return replaceWithPreparedBackup(prepareBackupImport(backup));
+}
+
+export async function saveOriginalImageBlob(itemUuid, blob, metadata = {}) {
+  if (typeof itemUuid !== "string" || !itemUuid.trim()) {
+    throw new Error("Original image blob is missing an itemUuid.");
+  }
+
+  if (!(blob instanceof Blob)) {
+    throw new Error("Original image blob is invalid.");
+  }
+
+  const entry = {
+    itemUuid: itemUuid.trim(),
+    blob,
+    mimeType: typeof metadata.mimeType === "string" ? metadata.mimeType.trim() : "",
+    width: Math.max(0, Math.round(Number(metadata.width) || 0)),
+    height: Math.max(0, Math.round(Number(metadata.height) || 0)),
+    fileSize: Math.max(0, Math.round(Number(metadata.fileSize) || blob.size || 0)),
+    originalFilename: typeof metadata.originalFilename === "string" ? metadata.originalFilename.trim() : "",
+    savedAt: Date.now()
+  };
+
+  await withStore(ORIGINAL_STORE, "readwrite", (store) => store.put(entry));
+  return entry;
+}
+
+export async function loadOriginalImageBlobEntry(itemUuid) {
+  if (typeof itemUuid !== "string" || !itemUuid.trim()) {
+    return null;
+  }
+
+  return withStore(ORIGINAL_STORE, "readonly", (store) => store.get(itemUuid.trim()));
+}
+
+export async function loadOriginalImageBlob(itemUuid) {
+  const entry = await loadOriginalImageBlobEntry(itemUuid);
+  return entry?.blob ?? null;
+}
+
+export async function hasOriginalImageBlob(itemUuid) {
+  return Boolean(await loadOriginalImageBlob(itemUuid));
+}
+
+export async function deleteOriginalImageBlob(itemUuid) {
+  if (typeof itemUuid !== "string" || !itemUuid.trim()) {
+    return;
+  }
+
+  await withStore(ORIGINAL_STORE, "readwrite", (store) => store.delete(itemUuid.trim()));
+}
+
+export async function loadOriginalImageBlobUrl(itemUuid) {
+  const blob = await loadOriginalImageBlob(itemUuid);
+
+  if (!blob || typeof URL?.createObjectURL !== "function") {
+    return "";
+  }
+
+  return URL.createObjectURL(blob);
 }
 
 export function getDefaultData() {
@@ -182,6 +322,17 @@ export function getDefaultData() {
 }
 
 export async function resetToDefaults() {
-  await replaceWithBackup(getDefaultData());
-  return getDefaultData();
+  const defaultData = getDefaultData();
+  await replaceWithPreparedBackup({
+    items: defaultData.items,
+    appState: {
+      ...defaultData.appState,
+      recentOutfits: []
+    }
+  });
+  return defaultData;
+}
+
+export function __setIndexedDbFactoryForTests(factory) {
+  indexedDbFactory = typeof factory === "function" ? factory : () => globalThis.indexedDB;
 }

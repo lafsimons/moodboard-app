@@ -1,11 +1,13 @@
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
-  BACKUP_VERSION,
+  createLightweightBackupData,
   deleteItem,
   getDefaultData,
   loadAppState,
   loadItems,
+  prepareBackupImport,
   replaceWithBackup,
+  replaceWithPreparedBackup,
   resetToDefaults,
   saveAppState,
   saveItem
@@ -88,14 +90,13 @@ import {
   replaceItemImageSet,
   replaceItemOriginalImage
 } from "./lib/itemImages";
+import { normalizeItemSourceIdentity } from "./lib/itemIdentity";
 import TagInput from "./components/TagInput";
 import {
   getAllTags,
   migrateReferenceMetadataToTags,
   normalizeTag,
   renameNestedTagPath,
-  sanitizeBackupReference,
-  sanitizeExportedReference,
   uniqueTags
 } from "./lib/metadata";
 import {
@@ -2194,6 +2195,10 @@ function normalizeItem(item) {
   const { tags } = migratedItem;
   const imageWidth = normalizeWholeNumber(previewImage.width || item.imageWidth);
   const imageHeight = normalizeWholeNumber(previewImage.height || item.imageHeight);
+  const sourceIdentity = normalizeItemSourceIdentity(item, {
+    fallbackSourceOriginalFilename: normalizeFileMetadataText(item.sourceOriginalFilename || item.originalFilename || previewImage.originalFilename),
+    defaultRelinkStatus: normalizedImages.originalPreserved ? "linked" : "pending"
+  });
 
   const normalizedItem = {
     ...emptyForm,
@@ -2224,6 +2229,7 @@ function normalizeItem(item) {
       thumbnail: normalizedImages.thumbnail
     },
     originalPreserved: normalizedImages.originalPreserved,
+    ...sourceIdentity,
     createdAt: normalizeCreatedAt(item.createdAt),
     importedAt: normalizeCreatedAt(item.importedAt),
     updatedAt: normalizeCreatedAt(item.updatedAt),
@@ -2340,6 +2346,15 @@ function itemNeedsDefaultMetadataMigration(originalItem, normalizedItem) {
 function itemNeedsMoodboardMetadataMigration(originalItem, normalizedItem) {
   return (
     !areEditorValuesEqual(uniqueTags(migrateReferenceMetadataToTags(originalItem)?.tags), normalizedItem.tags) ||
+    normalizeFileMetadataText(originalItem.itemUuid) !== normalizedItem.itemUuid ||
+    normalizeFileMetadataText(originalItem.sourceNamespace) !== normalizedItem.sourceNamespace ||
+    normalizeFileMetadataText(originalItem.sourceRelativePath) !== normalizedItem.sourceRelativePath ||
+    normalizeFileMetadataText(originalItem.sourceOriginalFilename) !== normalizedItem.sourceOriginalFilename ||
+    normalizeWholeNumber(originalItem.sourceFileSize) !== normalizedItem.sourceFileSize ||
+    normalizeWholeNumber(originalItem.sourceImageWidth) !== normalizedItem.sourceImageWidth ||
+    normalizeWholeNumber(originalItem.sourceImageHeight) !== normalizedItem.sourceImageHeight ||
+    normalizeCreatedAt(originalItem.sourceLastModified) !== normalizedItem.sourceLastModified ||
+    normalizeFileMetadataText(originalItem.relinkStatus).toLowerCase() !== normalizedItem.relinkStatus ||
     normalizeCreatedAt(originalItem.createdAt) !== normalizedItem.createdAt ||
     normalizeCreatedAt(originalItem.importedAt) !== normalizedItem.importedAt ||
     normalizeCreatedAt(originalItem.updatedAt) !== normalizedItem.updatedAt ||
@@ -2807,13 +2822,7 @@ async function copyTextToClipboard(text) {
 }
 
 function buildBackupExportData(items, appState) {
-  return {
-    source: "outfit-app",
-    version: BACKUP_VERSION,
-    exportedAt: new Date().toISOString(),
-    items: items.map((item) => sanitizeBackupReference(item)),
-    appState: stripLocalOnlyAppState(appState)
-  };
+  return createLightweightBackupData(items, appState);
 }
 
 function createBackupExportBlob(backup) {
@@ -2835,27 +2844,6 @@ function createBackupExportBlob(backup) {
   parts.push(`],"appState":${JSON.stringify(backup.appState)}}`);
 
   return new Blob(parts, { type: "application/json" });
-}
-
-function validateBackup(backup) {
-  return (
-    backup &&
-    backup.source === "outfit-app" &&
-    [1, BACKUP_VERSION].includes(backup.version) &&
-    Array.isArray(backup.items) &&
-    backup.appState &&
-    typeof backup.appState === "object" &&
-    !Array.isArray(backup.appState)
-  );
-}
-
-function stripLocalOnlyAppState(appState) {
-  if (!appState || typeof appState !== "object") {
-    return {};
-  }
-
-  const { recentOutfits, ...rest } = appState;
-  return rest;
 }
 
 const emptyWeatherSettings = {
@@ -5234,7 +5222,11 @@ export default function App() {
       return;
     }
 
-    if (!validateBackup(backup)) {
+    let preparedBackup;
+
+    try {
+      preparedBackup = prepareBackupImport(backup);
+    } catch {
       window.alert("This is not a valid backup file for this app.");
       return;
     }
@@ -5249,8 +5241,8 @@ export default function App() {
       return;
     }
 
-    await replaceWithBackup(backup);
-    await applyLoadedData(backup.items, backup.appState);
+    await replaceWithPreparedBackup(preparedBackup);
+    await applyLoadedData(preparedBackup.items, preparedBackup.appState);
     window.alert("Backup imported.");
   }
 

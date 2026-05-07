@@ -1,4 +1,5 @@
 import { materializeItemImagesForExport, normalizeItemImages } from "./itemImages.js";
+import { normalizeItemSourceIdentity } from "./itemIdentity.js";
 
 const LEGACY_METADATA_FIELDS = ["category", "collection", "productType", "sourceTags", "brand"];
 
@@ -80,6 +81,12 @@ export function migrateReferenceMetadataToTags(reference) {
     ...rest
   } = reference;
   const normalizedImages = normalizeItemImages(reference);
+  const sourceIdentity = normalizeItemSourceIdentity(reference, {
+    fallbackSourceOriginalFilename:
+      reference?.originalFilename ??
+      normalizedImages.original.originalFilename ??
+      normalizedImages.preview.originalFilename
+  });
 
   return {
     ...rest,
@@ -89,6 +96,7 @@ export function migrateReferenceMetadataToTags(reference) {
       thumbnail: normalizedImages.thumbnail
     },
     originalPreserved: normalizedImages.originalPreserved,
+    ...sourceIdentity,
     tags,
     favorite: Boolean(reference.favorite)
   };
@@ -122,9 +130,13 @@ export function sanitizeBackupReference(reference) {
   const originalAsset = exported.images?.original ?? {};
   const previewAsset = exported.images?.preview ?? {};
   const thumbnailAsset = exported.images?.thumbnail ?? previewAsset;
-  const backupPreviewAsset = thumbnailAsset.src ? thumbnailAsset : previewAsset.src ? previewAsset : originalAsset;
+  const backupPreviewAsset = previewAsset.src ? previewAsset : thumbnailAsset.src ? thumbnailAsset : originalAsset;
 
-  if (!isEmbeddedImageDataUrl(originalAsset.src) && !isEmbeddedImageDataUrl(previewAsset.src)) {
+  if (
+    !isEmbeddedImageDataUrl(originalAsset.src) &&
+    !isEmbeddedImageDataUrl(previewAsset.src) &&
+    !isEmbeddedImageDataUrl(thumbnailAsset.src)
+  ) {
     return exported;
   }
 

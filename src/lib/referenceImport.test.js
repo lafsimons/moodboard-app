@@ -95,6 +95,12 @@ test("createReferenceFromFile applies defaults and persists the item", async () 
   assert.equal(item.quantity, 1);
   assert.equal(item.id, "Camel Coat_1");
   assert.equal(item.originalPreserved, true);
+  assert.ok(item.itemUuid);
+  assert.equal(item.sourceOriginalFilename, "Camel Coat.png");
+  assert.equal(item.sourceFileSize, 0);
+  assert.equal(item.sourceImageWidth, 3200);
+  assert.equal(item.sourceImageHeight, 2400);
+  assert.equal(item.relinkStatus, "linked");
   assert.equal(item.images.original.src, "data:image/png;base64,original:Camel Coat.png");
   assert.equal(item.images.preview.src, "data:image/webp;base64,preview:Camel Coat.png");
   assert.equal(item.images.thumbnail.src, "data:image/webp;base64,thumbnail:Camel Coat.png");

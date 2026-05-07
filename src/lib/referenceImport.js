@@ -1,6 +1,7 @@
 import * as exifr from "exifr";
 
 import { replaceItemImageSet } from "./itemImages.js";
+import { createImportedSourceIdentity } from "./itemIdentity.js";
 import { emptyForm } from "./typeDefaults.js";
 import { uniqueTags } from "./metadata.js";
 
@@ -262,6 +263,7 @@ export async function createReferenceFromFile(file, existingItems, dependencies)
     ...emptyForm,
     name: getFileStem(file.name),
     tags: inferredTags,
+    ...createImportedSourceIdentity(file, originalImage),
     ...importedMetadata
   }, {
     original: {
