@@ -1,0 +1,195 @@
+function normalizeImageText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeImageNumber(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.round(numericValue) : 0;
+}
+
+function roundAspectRatio(width, height) {
+  if (!width || !height) {
+    return 0;
+  }
+
+  return Math.round((width / height) * 10000) / 10000;
+}
+
+function getOrientation(width, height) {
+  if (!width || !height) {
+    return "";
+  }
+
+  const ratio = roundAspectRatio(width, height);
+  if (Math.abs(ratio - 1) <= 0.05) {
+    return "square";
+  }
+
+  return width > height ? "landscape" : "portrait";
+}
+
+export function createImageAsset(asset = {}) {
+  return {
+    src: normalizeImageText(asset.src),
+    mimeType: normalizeImageText(asset.mimeType),
+    width: normalizeImageNumber(asset.width),
+    height: normalizeImageNumber(asset.height),
+    fileSize: normalizeImageNumber(asset.fileSize),
+    originalFilename: normalizeImageText(asset.originalFilename)
+  };
+}
+
+function mergeImageAssets(primary = {}, fallback = {}) {
+  return createImageAsset({
+    src: primary.src || fallback.src || "",
+    mimeType: primary.mimeType || fallback.mimeType || "",
+    width: primary.width || fallback.width || 0,
+    height: primary.height || fallback.height || 0,
+    fileSize: primary.fileSize || fallback.fileSize || 0,
+    originalFilename: primary.originalFilename || fallback.originalFilename || ""
+  });
+}
+
+function getLegacyPreviewAsset(item) {
+  return createImageAsset({
+    src: item?.imageUrl ?? item?.img ?? "",
+    mimeType: item?.mimeType ?? "",
+    width: item?.imageWidth ?? 0,
+    height: item?.imageHeight ?? 0,
+    fileSize: item?.fileSize ?? 0,
+    originalFilename: item?.originalFilename ?? ""
+  });
+}
+
+export function normalizeItemImages(item) {
+  const legacyPreview = getLegacyPreviewAsset(item);
+  const preview = mergeImageAssets(createImageAsset(item?.images?.preview), legacyPreview);
+  const thumbnail = createImageAsset(item?.images?.thumbnail);
+  const original = createImageAsset(item?.images?.original);
+  const hasExplicitOriginal = Boolean(original.src);
+  const originalPreserved = typeof item?.originalPreserved === "boolean"
+    ? item.originalPreserved
+    : hasExplicitOriginal;
+
+  return {
+    original,
+    preview,
+    thumbnail,
+    originalPreserved
+  };
+}
+
+function materializeAssets(item) {
+  const normalized = normalizeItemImages(item);
+  const legacyPreview = getLegacyPreviewAsset(item);
+  const preview = mergeImageAssets(normalized.preview, mergeImageAssets(normalized.original, legacyPreview));
+  const original = mergeImageAssets(normalized.original, preview);
+  const thumbnail = mergeImageAssets(normalized.thumbnail, preview);
+
+  return {
+    ...normalized,
+    original,
+    preview,
+    thumbnail
+  };
+}
+
+export function getOriginalImageAsset(item) {
+  return materializeAssets(item).original;
+}
+
+export function getPreviewImageAsset(item) {
+  return materializeAssets(item).preview;
+}
+
+export function getThumbnailImageAsset(item) {
+  return materializeAssets(item).thumbnail;
+}
+
+export function getOriginalImageSrc(item) {
+  return getOriginalImageAsset(item).src;
+}
+
+export function getPreviewImageSrc(item) {
+  return getPreviewImageAsset(item).src;
+}
+
+export function getThumbnailImageSrc(item) {
+  return getThumbnailImageAsset(item).src;
+}
+
+export function materializeItemImagesForExport(item) {
+  const { original, preview, thumbnail } = materializeAssets(item);
+
+  return {
+    original,
+    preview,
+    thumbnail
+  };
+}
+
+export function applyPreviewImageFields(item, previewAsset) {
+  const normalizedPreview = createImageAsset(previewAsset);
+  const imageWidth = normalizedPreview.width;
+  const imageHeight = normalizedPreview.height;
+
+  return {
+    ...item,
+    imageUrl: normalizedPreview.src,
+    mimeType: normalizedPreview.mimeType,
+    imageWidth,
+    imageHeight,
+    fileSize: normalizedPreview.fileSize,
+    originalFilename: normalizedPreview.originalFilename,
+    aspectRatio: roundAspectRatio(imageWidth, imageHeight),
+    orientation: getOrientation(imageWidth, imageHeight)
+  };
+}
+
+export function replaceItemImageSet(item, imageSet) {
+  const nextImages = {
+    original: createImageAsset(imageSet?.original),
+    preview: createImageAsset(imageSet?.preview),
+    thumbnail: createImageAsset(imageSet?.thumbnail)
+  };
+  const withPreviewFields = applyPreviewImageFields(
+    {
+      ...item,
+      images: nextImages,
+      originalPreserved: true
+    },
+    nextImages.preview
+  );
+
+  return {
+    ...withPreviewFields,
+    images: nextImages
+  };
+}
+
+export function replaceItemOriginalImage(item, originalAsset, options = {}) {
+  const normalized = normalizeItemImages(item);
+  const nextImages = {
+    original: createImageAsset(originalAsset),
+    preview: normalized.preview,
+    thumbnail: normalized.thumbnail
+  };
+
+  if (options.regenerateOptimizedAssets) {
+    nextImages.preview = createImageAsset(options.previewAsset);
+    nextImages.thumbnail = createImageAsset(options.thumbnailAsset);
+  }
+
+  const nextItem = {
+    ...item,
+    images: nextImages,
+    originalPreserved: true
+  };
+
+  return options.regenerateOptimizedAssets
+    ? {
+        ...applyPreviewImageFields(nextItem, nextImages.preview),
+        images: nextImages
+      }
+    : nextItem;
+}

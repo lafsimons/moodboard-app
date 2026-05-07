@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Outfit Generator</title>
+
+<style>
+body {
+  font-family: sans-serif;
+  margin: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.wrapper {
+  width: 420px;
+  padding: 20px;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 15px;
+}
+
+button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* OUTER LAYOUT */
+#outfit {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* SINGLE ITEMS */
+.item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.item img {
+  width: 220px;
+  height: auto;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* LAYERED TOP ROW */
+.top-row {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+/* ensure consistent sizing */
+.layer-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.layer-item img {
+  width: 220px;
+  height: auto;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* BUTTON */
+.reroll {
+  margin-top: 4px;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+/* LOCK */
+.lock-indicator {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 11px;
+  background: rgba(0,0,0,0.75);
+  color: white;
+  padding: 2px 5px;
+  display: none;
+}
+
+.item.locked .lock-indicator,
+.layer-item.locked .lock-indicator {
+  display: block;
+}
+</style>
+</head>
+
+<body>
+
+<div class="wrapper">
+
+  <h2>Outfit Generator</h2>
+
+  <div class="header">
+    <button onclick="toggleLayering()" id="layerBtn">Layering: OFF</button>
+    <button onclick="generateOutfit()">Generate Outfit</button>
+  </div>
+
+  <div id="outfit"></div>
+
+</div>
+
+<script>
+
+/* ---------- DATA ---------- */
+
+const slots = ["Headwear", "TopInner", "TopOuter", "Bottom", "Footwear"];
+
+const clothes = {
+  Headwear: [
+    { img: "images/headwear_beanie_grey.png" },
+    { img: "images/headwear_cap_beige.png" }
+  ],
+  TopInner: [
+    { img: "images/top_shirt_106.png" },
+    { img: "images/top_shirt_111.png" }
+  ],
+  TopOuter: [
+    { img: "images/top_jacket_303sumi.png" },
+    { img: "images/top_jacket_405.png" }
+  ],
+  Bottom: [
+    { img: "images/bottom_204_black.png" },
+    { img: "images/bottom_702.png" }
+  ],
+  Footwear: [
+    { img: "images/footwear_sneaker_nb990v3levis.png" },
+    { img: "images/footwear_sneaker_gat.png" }
+  ]
+};
+
+/* ---------- STATE ---------- */
+
+let state = {
+  layering: false,
+  locked: {},
+  outfit: {}
+};
+
+/* ---------- HELPERS ---------- */
+
+function pick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+/* ---------- LOGIC ---------- */
+
+function generateOutfit() {
+  for (let slot of slots) {
+    if (state.locked[slot] && state.outfit[slot]) continue;
+    state.outfit[slot] = pick(clothes[slot]);
+  }
+  render();
+}
+
+function reroll(slot) {
+  if (state.locked[slot]) return;
+  state.outfit[slot] = pick(clothes[slot]);
+  render();
+}
+
+function toggleLock(slot) {
+  state.locked[slot] = !state.locked[slot];
+  render();
+}
+
+function toggleLayering() {
+  state.layering = !state.layering;
+  document.getElementById("layerBtn").textContent =
+    state.layering ? "Layering: ON" : "Layering: OFF";
+  render();
+}
+
+/* ---------- RENDER ---------- */
+
+function render() {
+  const container = document.getElementById("outfit");
+  container.innerHTML = "";
+
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+
+    /* ---- LAYERED TOP BLOCK ---- */
+    if (state.layering && slot === "TopInner") {
+
+      const row = document.createElement("div");
+      row.className = "top-row";
+
+      row.appendChild(renderLayer("TopInner"));
+      row.appendChild(renderLayer("TopOuter"));
+
+      container.appendChild(row);
+
+      i++; // skip TopOuter
+      continue;
+    }
+
+    if (state.layering && slot === "TopOuter") continue;
+    if (!state.layering && slot === "TopInner") continue;
+
+    container.appendChild(renderSingle(slot));
+  }
+}
+
+/* ---------- COMPONENTS ---------- */
+
+function renderSingle(slot) {
+  const item = state.outfit[slot];
+
+  const div = document.createElement("div");
+  div.className = "item" + (state.locked[slot] ? " locked" : "");
+
+  div.innerHTML = `
+    <img src="${item.img}">
+    <div class="lock-indicator">LOCKED</div>
+    <button class="reroll">reroll</button>
+  `;
+
+  div.querySelector("img").onclick = () => toggleLock(slot);
+  div.querySelector("button").onclick = (e) => {
+    e.stopPropagation();
+    reroll(slot);
+  };
+
+  return div;
+}
+
+function renderLayer(slot) {
+  const item = state.outfit[slot];
+
+  const div = document.createElement("div");
+  div.className = "layer-item" + (state.locked[slot] ? " locked" : "");
+
+  div.innerHTML = `
+    <img src="${item.img}">
+    <div class="lock-indicator">LOCKED</div>
+    <button class="reroll">reroll</button>
+  `;
+
+  div.querySelector("img").onclick = () => toggleLock(slot);
+  div.querySelector("button").onclick = (e) => {
+    e.stopPropagation();
+    reroll(slot);
+  };
+
+  return div;
+}
+
+/* ---------- INIT ---------- */
+
+generateOutfit();
+
+</script>
+
+</body>
+</html>
