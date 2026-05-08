@@ -3633,6 +3633,33 @@ button:disabled {
   gap: 4px;
 }
 
+.reference-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reference-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.reference-preview-meta span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.reference-preview-description {
+  max-width: min(42ch, 100%);
+}
+
 .reference-preview-overlay {
   width: min(1400px, calc(100vw - 120px));
   max-width: calc(100vw - 120px);

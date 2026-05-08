@@ -5944,7 +5944,9 @@ export default function App() {
     setWardrobeSavedOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
-    setReferencePreview(null);
+    if (!options.preserveReferencePreview) {
+      setReferencePreview(null);
+    }
     setSelectionEditorActive(false);
     setImageUploadError("");
     setImageProcessing(false);
@@ -6006,6 +6008,15 @@ export default function App() {
 
   function startFloatingEdit(item) {
     startEdit(item, { returnTarget: "outfit" });
+    closePickerOverlay();
+    setWardrobeFiltersOpen(false);
+    setWardrobeWorthOpen(false);
+    setWardrobeSavedOpen(false);
+    setWardrobeManageOpen(false);
+  }
+
+  function startFloatingEditFromPreview(item) {
+    startEdit(item, { returnTarget: "outfit", preserveReferencePreview: true });
     closePickerOverlay();
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
@@ -10010,15 +10021,48 @@ export default function App() {
         {referencePreview ? (
           <div className="floating-backdrop fitpic-preview-backdrop" onClick={() => setReferencePreview(null)}>
             <div className="fitpic-preview-overlay reference-preview-overlay" onClick={(event) => event.stopPropagation()}>
+              {(() => {
+                const referencePreviewTags = uniqueTags(referencePreview.tags);
+                const referencePreviewTagLabel = referencePreviewTags.map((tag) => getLeafTagLabel(tag)).join(", ");
+                const referencePreviewDescription = referencePreview.description?.trim() ?? "";
+
+                return (
               <div className="fitpic-preview-header">
                 <div className="reference-preview-title">
                   <strong>{buildDisplayName(referencePreview)}</strong>
+                  {referencePreviewTagLabel || referencePreviewDescription || referencePreview.favorite ? (
+                    <div className="reference-preview-meta" aria-label="Reference metadata">
+                      {referencePreviewTagLabel ? <span title={referencePreviewTagLabel}>{referencePreviewTagLabel}</span> : null}
+                      {referencePreviewDescription ? (
+                        <span className="reference-preview-description" title={referencePreviewDescription}>
+                          {referencePreviewDescription}
+                        </span>
+                      ) : null}
+                      {referencePreview.favorite ? (
+                        <span className="wardrobe-meta-favorite" aria-label="Favorite">
+                          ♥
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
                 </div>
-                <button type="button" className="ghost-button" onClick={() => setReferencePreview(null)}>
-                  Close
-                </button>
+                <div className="reference-preview-actions">
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => startFloatingEditFromPreview(referencePreview)}
+                    aria-label={`Edit ${buildDisplayName(referencePreview)}`}
+                  >
+                    Edit
+                  </button>
+                  <button type="button" className="ghost-button" onClick={() => setReferencePreview(null)}>
+                    Close
+                  </button>
+                </div>
               </div>
+                );
+              })()}
               <div className="reference-preview-stage">
                 <ManagedItemImage
                   item={referencePreview}
