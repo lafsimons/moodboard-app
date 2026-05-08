@@ -3633,6 +3633,33 @@ button:disabled {
   gap: 4px;
 }
 
+.reference-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.reference-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.reference-preview-meta span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.reference-preview-description {
+  max-width: min(42ch, 100%);
+}
+
 .reference-preview-overlay {
   width: min(1400px, calc(100vw - 120px));
   max-width: calc(100vw - 120px);
@@ -4841,4 +4868,32 @@ button:disabled {
     transform: none;
     margin-top: 6px;
   }
+}
+
+.nested-tag-debug-console {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 120;
+  width: min(520px, calc(100vw - 24px));
+  max-height: 38vh;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid #cf5f5f;
+  border-radius: 10px;
+  background: rgba(255, 248, 248, 0.96);
+  color: #5a1818;
+  font-size: 0.58rem;
+  line-height: 1.35;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+
+.nested-tag-debug-console-log {
+  display: grid;
+  gap: 4px;
+  overflow: auto;
+  font-family: "JetBrains Mono", monospace;
+  white-space: pre-wrap;
 }
