@@ -182,70 +182,6 @@ function isNestedTagDebugEnabled() {
   }
 }
 
-function describeDebugNode(node) {
-  if (!(node instanceof Element)) {
-    return String(node ?? "null");
-  }
-
-  const tagName = node.tagName.toLowerCase();
-  const id = node.id ? `#${node.id}` : "";
-  const className = typeof node.className === "string"
-    ? node.className.trim().split(/\s+/).filter(Boolean).slice(0, 4).join(".")
-    : "";
-  const classSuffix = className ? `.${className}` : "";
-  const role = node.getAttribute("role");
-  const name =
-    node.getAttribute("aria-label") ||
-    node.getAttribute("data-debug-id") ||
-    node.textContent?.trim?.()?.slice(0, 60) ||
-    "";
-
-  return [tagName + id + classSuffix, role ? `role=${role}` : "", name ? `name=${name}` : ""]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function getEventPhaseName(eventPhase) {
-  switch (eventPhase) {
-    case 1:
-      return "capture";
-    case 2:
-      return "target";
-    case 3:
-      return "bubble";
-    default:
-      return "unknown";
-  }
-}
-
-function recordNestedTagDebugMessage(enabled, scope, label, details) {
-  if (!enabled || typeof window === "undefined") {
-    return;
-  }
-
-  const summary = `[${scope}] ${label} ${JSON.stringify(details)}`;
-  const currentLogs = Array.isArray(window.__nestedTagDebugLogs) ? window.__nestedTagDebugLogs : [];
-  window.__nestedTagDebugLogs = [...currentLogs.slice(-79), summary];
-}
-
-function logNestedTagDebug(enabled, scope, label, event, extras = {}) {
-  if (!enabled || typeof console === "undefined") {
-    return;
-  }
-
-  const details = {
-    type: event?.type ?? null,
-    eventPhase: getEventPhaseName(event?.eventPhase),
-    defaultPrevented: Boolean(event?.defaultPrevented),
-    currentTarget: describeDebugNode(event?.currentTarget),
-    target: describeDebugNode(event?.target),
-    ...extras
-  };
-
-  console.log(`[nested-tag-debug] ${scope} ${label}`, details);
-  recordNestedTagDebugMessage(enabled, scope, label, details);
-}
-
 function isGeneratePerfDebugEnabled() {
   if (typeof window === "undefined") {
     return false;
@@ -1835,43 +1771,16 @@ function ExpandArrow({
   className,
   isExpanded,
   label,
-  onToggle,
-  debugEnabled = false,
-  debugScope = "tag-tree",
-  debugId = label
+  onToggle
 }) {
   return (
     <button
       type="button"
       className={className}
-      data-debug-id={`${debugScope}:arrow:${debugId}`}
-      onMouseDown={(event) => {
-        logNestedTagDebug(debugEnabled, debugScope, "ExpandArrow.onMouseDown", event, {
-          debugId,
-          isExpanded
-        });
-      }}
-      onPointerDown={(event) => {
-        logNestedTagDebug(debugEnabled, debugScope, "ExpandArrow.onPointerDown", event, {
-          debugId,
-          isExpanded
-        });
-        stopNestedTagTreeEvent(event);
-      }}
+      onPointerDown={stopNestedTagTreeEvent}
       onClick={(event) => {
-        logNestedTagDebug(debugEnabled, debugScope, "ExpandArrow.onClick", event, {
-          debugId,
-          isExpanded,
-          nextExpanded: !isExpanded
-        });
         stopNestedTagTreeEvent(event);
         onToggle();
-      }}
-      onFocus={(event) => {
-        logNestedTagDebug(debugEnabled, debugScope, "ExpandArrow.onFocus", event, {
-          debugId,
-          isExpanded
-        });
       }}
       aria-label={isExpanded ? `Collapse ${label}` : `Expand ${label}`}
       aria-expanded={isExpanded}
@@ -1890,9 +1799,7 @@ function TagTree({
   storageKey = "default",
   noTagsCount = 0,
   variant = "default",
-  headerActions = null,
-  debugEnabled = false,
-  debugScope = "tag-tree"
+  headerActions = null
 }) {
   const [sortMode, setSortMode] = useState("count");
   const [collapsedGroups, setCollapsedGroups] = useState({});
@@ -1913,23 +1820,9 @@ function TagTree({
   const rootNode = finalizeNestedTagNodes(buildNestedTagNodes(sortedEntries), sortMode);
 
   function toggleCollapsedGroup(groupKey) {
-    const collapsedKey = `${storageKey}:${groupKey}`;
-    const nextCollapsed = !(collapsedGroups[collapsedKey] ?? true);
-
-    if (debugEnabled) {
-      const details = {
-        groupKey,
-        collapsedKey,
-        nextCollapsed,
-        nextExpanded: !nextCollapsed
-      };
-      console.log(`[nested-tag-debug] ${debugScope} toggleCollapsedGroup`, details);
-      recordNestedTagDebugMessage(debugEnabled, debugScope, "toggleCollapsedGroup", details);
-    }
-
     setCollapsedGroups((current) => ({
       ...current,
-      [collapsedKey]: nextCollapsed
+      [`${storageKey}:${groupKey}`]: !current[`${storageKey}:${groupKey}`]
     }));
   }
 
@@ -1978,7 +1871,6 @@ function TagTree({
       "--tag-tree-indent": `${hasChildren ? depth * 10 : leafIndent}px`
     };
     const label = node.label;
-    const debugId = node.path;
 
     if (!hasChildren) {
       const leafClassName = `${rowClassName} ${depth > 0 ? "tag-tree-row-leaf-nested" : "tag-tree-row-leaf-top"}`;
@@ -1991,21 +1883,10 @@ function TagTree({
           key={node.key}
           type="button"
           className={leafClassName}
-          data-debug-id={`${debugScope}:row:${debugId}`}
           style={rowStyle}
-          onMouseDown={(event) => {
-            logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowLeaf.onMouseDown", event, { debugId });
-          }}
-          onPointerDown={(event) => {
-            logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowLeaf.onPointerDown", event, { debugId });
-          }}
           onClick={(event) => {
-            logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowLeaf.onClick", event, { debugId });
             stopNestedTagTreeEvent(event);
             activateTag(event, node.path);
-          }}
-          onFocus={(event) => {
-            logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowLeaf.onFocus", event, { debugId });
           }}
           aria-pressed={isSelected || isExcluded}
           title="Click to include. Shift-click to exclude."
@@ -2022,67 +1903,19 @@ function TagTree({
 
     return (
       <section key={node.key} className="tag-tree-group">
-        <div
-          className={rowClassName}
-          style={rowStyle}
-          data-debug-id={`${debugScope}:row-wrapper:${debugId}`}
-          onPointerDownCapture={(event) => {
-            logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowWrapper.onPointerDownCapture", event, {
-              debugId,
-              isCollapsed
-            });
-          }}
-          onClickCapture={(event) => {
-            logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowWrapper.onClickCapture", event, {
-              debugId,
-              isCollapsed
-            });
-          }}
-          onFocusCapture={(event) => {
-            logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowWrapper.onFocusCapture", event, {
-              debugId,
-              isCollapsed
-            });
-          }}
-        >
+        <div className={rowClassName} style={rowStyle}>
           <ExpandArrow
             className="tag-tree-chevron"
             isExpanded={!isCollapsed}
             label={label}
             onToggle={() => toggleCollapsedGroup(node.key)}
-            debugEnabled={debugEnabled}
-            debugScope={debugScope}
-            debugId={debugId}
           />
           <button
             type="button"
             className="tag-tree-row-main tag-tree-row-main-button tag-tree-row-main-button-parent"
-            data-debug-id={`${debugScope}:row-main:${debugId}`}
-            onMouseDown={(event) => {
-              logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowMain.onMouseDown", event, {
-                debugId,
-                isCollapsed
-              });
-            }}
-            onPointerDown={(event) => {
-              logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowMain.onPointerDown", event, {
-                debugId,
-                isCollapsed
-              });
-            }}
             onClick={(event) => {
-              logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowMain.onClick", event, {
-                debugId,
-                isCollapsed
-              });
               stopNestedTagTreeEvent(event);
               activateTagGroup(event, node.tagTargets);
-            }}
-            onFocus={(event) => {
-              logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowMain.onFocus", event, {
-                debugId,
-                isCollapsed
-              });
             }}
             aria-pressed={groupState.isActive || groupState.isExcluded || groupState.isPartial}
             title="Click to include all children. Shift-click to exclude all children."
@@ -2094,7 +1927,7 @@ function TagTree({
         </div>
 
         {!isCollapsed ? (
-          <div className="tag-tree-children" data-debug-id={`${debugScope}:children:${debugId}`}>
+          <div className="tag-tree-children">
             {node.childNodes.map((childNode) => renderTagNode(childNode, depth + 1))}
           </div>
         ) : null}
@@ -2103,19 +1936,7 @@ function TagTree({
   }
 
   return (
-    <div
-      className={`tag-tree ${variant === "compact" ? "is-compact" : ""}`.trim()}
-      data-debug-id={`${debugScope}:root`}
-      onPointerDownCapture={(event) => {
-        logNestedTagDebug(debugEnabled, debugScope, "TagTree.onPointerDownCapture", event);
-      }}
-      onClickCapture={(event) => {
-        logNestedTagDebug(debugEnabled, debugScope, "TagTree.onClickCapture", event);
-      }}
-      onFocusCapture={(event) => {
-        logNestedTagDebug(debugEnabled, debugScope, "TagTree.onFocusCapture", event);
-      }}
-    >
+    <div className={`tag-tree ${variant === "compact" ? "is-compact" : ""}`.trim()}>
       {variant === "compact" ? (
         <div className="tag-tree-header tag-tree-header-compact">
           <div className="tag-tree-meta">
@@ -2123,7 +1944,6 @@ function TagTree({
               type="button"
               className="tag-tree-sort-button"
               onClick={(event) => {
-                logNestedTagDebug(debugEnabled, debugScope, "TagTreeSort.onClick", event);
                 stopNestedTagTreeEvent(event);
                 setSortMode((current) => (current === "count" ? "alpha" : "count"));
               }}
@@ -2139,7 +1959,6 @@ function TagTree({
             type="button"
             className="tag-tree-sort-button"
             onClick={(event) => {
-              logNestedTagDebug(debugEnabled, debugScope, "TagTreeSort.onClick", event);
               stopNestedTagTreeEvent(event);
               setSortMode((current) => (current === "count" ? "alpha" : "count"));
             }}
@@ -2154,11 +1973,7 @@ function TagTree({
           <button
             type="button"
             className={`tag-tree-row tag-tree-row-leaf tag-tree-row-untagged ${noTagsSelected ? "is-active" : ""} ${noTagsExcluded ? "is-excluded" : ""}`}
-            data-debug-id={`${debugScope}:row:untagged`}
             onClick={(event) => {
-              logNestedTagDebug(debugEnabled, debugScope, "TagTreeRowUntagged.onClick", event, {
-                debugId: "untagged"
-              });
               stopNestedTagTreeEvent(event);
               activateTag(event, NO_TAGS_FILTER);
             }}
@@ -3262,8 +3077,6 @@ export default function App() {
   const paletteCacheRef = useRef(new Map());
   const boardRenderLayoutSignatureRef = useRef("");
   const pendingRestoredBoardFitRef = useRef(false);
-  const nestedTagDebugEnabled = isNestedTagDebugEnabled();
-  const [nestedTagDebugTick, setNestedTagDebugTick] = useState(0);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [layering, setLayering] = useState(false);
@@ -3491,9 +3304,6 @@ export default function App() {
                   isExpanded={isExpanded}
                   label={node.path}
                   onToggle={() => toggleTagManagerExpanded(node.path)}
-                  debugEnabled={nestedTagDebugEnabled}
-                  debugScope="manage-tags"
-                  debugId={node.path}
                 />
               ) : (
                 <span className="tag-manager-chevron tag-manager-chevron-placeholder" aria-hidden="true" />
@@ -3622,6 +3432,7 @@ export default function App() {
       return true;
     });
   }, [items]);
+  const nestedTagDebugEnabled = isNestedTagDebugEnabled();
   const tagDebugItems = useMemo(
     () => (nestedTagDebugEnabled ? NESTED_TAG_DEBUG_ITEMS : []),
     [nestedTagDebugEnabled]
@@ -3632,13 +3443,6 @@ export default function App() {
   );
   const allLibraryTags = useMemo(() => getAllTags(tagDebugSourceItems), [tagDebugSourceItems]);
   const cropEditorImageMetrics = useImageMetrics(draft.imageUrl);
-  const nestedTagDebugLogs = useMemo(() => {
-    if (!nestedTagDebugEnabled || typeof window === "undefined") {
-      return [];
-    }
-
-    return Array.isArray(window.__nestedTagDebugLogs) ? window.__nestedTagDebugLogs.slice(-18) : [];
-  }, [nestedTagDebugEnabled, nestedTagDebugTick]);
 
   function renderOutfitDebugPanel(panelClassName = "") {
     const className = ["outfit-debug-panel", panelClassName].filter(Boolean).join(" ");
@@ -3908,117 +3712,9 @@ export default function App() {
   }, [selectedReferenceCount]);
 
   useEffect(() => {
-    if (!nestedTagDebugEnabled || typeof document === "undefined") {
-      return undefined;
-    }
-
-    const createDocumentLogger = (label) => (event) => {
-      const details = {
-        type: event.type,
-        eventPhase: getEventPhaseName(event.eventPhase),
-        defaultPrevented: event.defaultPrevented,
-        currentTarget: describeDebugNode(event.currentTarget),
-        target: describeDebugNode(event.target),
-        insideLibraryFilter: Boolean(wardrobeFiltersPanelRef.current?.contains(event.target)),
-        insideControlsFilter: Boolean(generationMetadataFiltersPanelRef.current?.contains(event.target)),
-        insideManageWindow: Boolean(event.target instanceof Element && event.target.closest(".wardrobe-manage-window")),
-        wardrobeFiltersOpen,
-        generationMetadataFiltersOpen,
-        manageTagsOpen,
-        activePanel,
-        controlsOpen
-      };
-      console.log(`[nested-tag-debug] document ${label}`, details);
-      recordNestedTagDebugMessage(nestedTagDebugEnabled, "document", label, details);
-    };
-
-    const documentPointerDownCapture = createDocumentLogger("pointerdown capture");
-    const documentPointerDownBubble = createDocumentLogger("pointerdown bubble");
-    const documentMouseDownCapture = createDocumentLogger("mousedown capture");
-    const documentMouseDownBubble = createDocumentLogger("mousedown bubble");
-    const documentClickCapture = createDocumentLogger("click capture");
-    const documentClickBubble = createDocumentLogger("click bubble");
-    const documentFocusCapture = createDocumentLogger("focusin capture");
-    const documentFocusBubble = createDocumentLogger("focusin bubble");
-
-    document.addEventListener("pointerdown", documentPointerDownCapture, true);
-    document.addEventListener("pointerdown", documentPointerDownBubble);
-    document.addEventListener("mousedown", documentMouseDownCapture, true);
-    document.addEventListener("mousedown", documentMouseDownBubble);
-    document.addEventListener("click", documentClickCapture, true);
-    document.addEventListener("click", documentClickBubble);
-    document.addEventListener("focusin", documentFocusCapture, true);
-    document.addEventListener("focusin", documentFocusBubble);
-
-    return () => {
-      document.removeEventListener("pointerdown", documentPointerDownCapture, true);
-      document.removeEventListener("pointerdown", documentPointerDownBubble);
-      document.removeEventListener("mousedown", documentMouseDownCapture, true);
-      document.removeEventListener("mousedown", documentMouseDownBubble);
-      document.removeEventListener("click", documentClickCapture, true);
-      document.removeEventListener("click", documentClickBubble);
-      document.removeEventListener("focusin", documentFocusCapture, true);
-      document.removeEventListener("focusin", documentFocusBubble);
-    };
-  }, [
-    activePanel,
-    controlsOpen,
-    generationMetadataFiltersOpen,
-    manageTagsOpen,
-    nestedTagDebugEnabled,
-    wardrobeFiltersOpen
-  ]);
-
-  useEffect(() => {
-    if (!nestedTagDebugEnabled || typeof window === "undefined") {
-      return undefined;
-    }
-
-    window.__nestedTagDebugLogs = [];
-    const frame = window.setInterval(() => {
-      setNestedTagDebugTick((current) => current + 1);
-    }, 150);
-
-    return () => window.clearInterval(frame);
-  }, [nestedTagDebugEnabled]);
-
-  useEffect(() => {
-    if (!nestedTagDebugEnabled) {
-      return;
-    }
-
-    const details = {
-      wardrobeFiltersOpen,
-      generationMetadataFiltersOpen,
-      manageTagsOpen,
-      activePanel,
-      controlsOpen
-    };
-    console.log("[nested-tag-debug] panel state", details);
-    recordNestedTagDebugMessage(nestedTagDebugEnabled, "app", "panel-state", details);
-  }, [
-    activePanel,
-    controlsOpen,
-    generationMetadataFiltersOpen,
-    manageTagsOpen,
-    nestedTagDebugEnabled,
-    wardrobeFiltersOpen
-  ]);
-
-  useEffect(() => {
     function handlePointerDown(event) {
       if (!libraryTagActionMode) {
         return;
-      }
-
-      if (nestedTagDebugEnabled) {
-        const details = {
-          type: event.type,
-          target: describeDebugNode(event.target),
-          insideSelectionActions: Boolean(librarySelectionActionsRef.current?.contains(event.target))
-        };
-        console.log("[nested-tag-debug] libraryTagAction document pointerdown", details);
-        recordNestedTagDebugMessage(nestedTagDebugEnabled, "library-tag-action", "document-pointerdown", details);
       }
 
       if (!librarySelectionActionsRef.current?.contains(event.target)) {
@@ -4028,7 +3724,7 @@ export default function App() {
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [libraryTagActionMode, nestedTagDebugEnabled]);
+  }, [libraryTagActionMode]);
 
   useEffect(() => {
     return () => {
@@ -9229,27 +8925,11 @@ export default function App() {
               <div
                 className={`controls-outfit-filters ${generationMetadataFiltersOpen ? "is-open" : ""}`}
                 aria-label="Reference metadata filters"
-                data-debug-id="controls-filter-shell"
-                onPointerDownCapture={(event) => {
-                  logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterShell.onPointerDownCapture", event);
-                }}
-                onClickCapture={(event) => {
-                  logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterShell.onClickCapture", event);
-                }}
-                onFocusCapture={(event) => {
-                  logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterShell.onFocusCapture", event);
-                }}
               >
                 <button
                   type="button"
                   className={`controls-outfit-filters-toggle ${generationMetadataFiltersOpen || hasActiveGenerationMetadataFilters ? "is-active" : ""}`}
-                  data-debug-id="controls-filter-toggle"
-                  onClick={(event) => {
-                    logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterToggle.onClick", event, {
-                      nextOpen: !generationMetadataFiltersOpen
-                    });
-                    setGenerationMetadataFiltersOpen((current) => !current);
-                  }}
+                  onClick={() => setGenerationMetadataFiltersOpen((current) => !current)}
                   aria-expanded={generationMetadataFiltersOpen}
                 >
                   <span>Reference filters</span>
@@ -9264,24 +8944,8 @@ export default function App() {
                 <div
                   ref={generationMetadataFiltersPanelRef}
                   className="outfit-filters-panel"
-                  data-debug-id="controls-filter-panel"
-                  onPointerDownCapture={(event) => {
-                    logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterPanel.onPointerDownCapture", event);
-                  }}
-                  onClickCapture={(event) => {
-                    logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterPanel.onClickCapture", event);
-                  }}
-                  onFocusCapture={(event) => {
-                    logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterPanel.onFocusCapture", event);
-                  }}
-                  onPointerDown={(event) => {
-                    logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterPanel.onPointerDown", event);
-                    event.stopPropagation();
-                  }}
-                  onClick={(event) => {
-                    logNestedTagDebug(nestedTagDebugEnabled, "controls-filter", "ControlsFilterPanel.onClick", event);
-                    event.stopPropagation();
-                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
                 >
                   <div className="outfit-filter-groups">
                     <section className="outfit-filter-group controls-reference-filter-module">
@@ -9294,8 +8958,6 @@ export default function App() {
                         storageKey="controls-reference-filters"
                         noTagsCount={allLibraryNoTagsCount}
                         variant="compact"
-                        debugEnabled={nestedTagDebugEnabled}
-                        debugScope="controls-filter"
                         headerActions={(
                           <button
                             type="button"
@@ -9407,33 +9069,10 @@ export default function App() {
         ) : null}
 
         {activePanel ? (
-          <div
-            className="floating-backdrop active-panel-backdrop"
-            data-debug-id="active-panel-backdrop"
-            onPointerDown={(event) => {
-              logNestedTagDebug(nestedTagDebugEnabled, "overlay", "ActivePanelBackdrop.onPointerDown", event);
-            }}
-            onClick={(event) => {
-              logNestedTagDebug(nestedTagDebugEnabled, "overlay", "ActivePanelBackdrop.onClick", event);
-              closeWorkspacePanel();
-            }}
-          >
+          <div className="floating-backdrop active-panel-backdrop" onClick={closeWorkspacePanel}>
         <div
           className={`active-panel-overlay ${activePanel === "wardrobe" ? "is-wardrobe-panel" : ""}`}
-          data-debug-id="active-panel-overlay"
-          onPointerDownCapture={(event) => {
-            logNestedTagDebug(nestedTagDebugEnabled, "overlay", "ActivePanelOverlay.onPointerDownCapture", event);
-          }}
-          onClickCapture={(event) => {
-            logNestedTagDebug(nestedTagDebugEnabled, "overlay", "ActivePanelOverlay.onClickCapture", event);
-          }}
-          onFocusCapture={(event) => {
-            logNestedTagDebug(nestedTagDebugEnabled, "overlay", "ActivePanelOverlay.onFocusCapture", event);
-          }}
-          onClick={(event) => {
-            logNestedTagDebug(nestedTagDebugEnabled, "overlay", "ActivePanelOverlay.onClick", event);
-            event.stopPropagation();
-          }}
+          onClick={(event) => event.stopPropagation()}
         >
         {activePanel === "wardrobe" ? (
         <div className="wardrobe-workspace">
@@ -9478,13 +9117,7 @@ export default function App() {
                     <button
                       type="button"
                       className={`secondary-button filter-button ${wardrobeFiltersOpen || hasActiveWardrobeFilters ? "is-active" : ""}`}
-                      data-debug-id="library-filter-toggle"
-                      onClick={(event) => {
-                        logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterToggle.onClick", event, {
-                          nextOpen: !wardrobeFiltersOpen
-                        });
-                        openWardrobeFilters();
-                      }}
+                      onClick={openWardrobeFilters}
                       aria-pressed={wardrobeFiltersOpen}
                       aria-expanded={wardrobeFiltersOpen}
                     >
@@ -9506,24 +9139,8 @@ export default function App() {
                       ref={wardrobeFiltersPanelRef}
                       className={`wardrobe-controls ${wardrobeFiltersOpen ? "is-open" : ""}`}
                       aria-label="Library filters"
-                      data-debug-id="library-filter-panel"
-                      onPointerDownCapture={(event) => {
-                        logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterPanel.onPointerDownCapture", event);
-                      }}
-                      onClickCapture={(event) => {
-                        logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterPanel.onClickCapture", event);
-                      }}
-                      onFocusCapture={(event) => {
-                        logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterPanel.onFocusCapture", event);
-                      }}
-                      onPointerDown={(event) => {
-                        logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterPanel.onPointerDown", event);
-                        event.stopPropagation();
-                      }}
-                      onClick={(event) => {
-                        logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterPanel.onClick", event);
-                        event.stopPropagation();
-                      }}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => event.stopPropagation()}
                     >
                       <div className="wardrobe-controls-inline-row">
                         <label className="wardrobe-inline-filter">
@@ -9614,8 +9231,6 @@ export default function App() {
                           onToggleGroup={toggleLibraryTagGroup}
                           storageKey="library-filters"
                           noTagsCount={libraryNoTagsCount}
-                          debugEnabled={nestedTagDebugEnabled}
-                          debugScope="library-filter"
                         />
                       </div>
                     </div>
@@ -9740,17 +9355,7 @@ export default function App() {
             </div>
 
             {wardrobeFiltersOpen ? (
-              <div
-                className="floating-backdrop filter-backdrop"
-                data-debug-id="library-filter-backdrop"
-                onPointerDown={(event) => {
-                  logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterBackdrop.onPointerDown", event);
-                }}
-                onClick={(event) => {
-                  logNestedTagDebug(nestedTagDebugEnabled, "library-filter", "LibraryFilterBackdrop.onClick", event);
-                  setWardrobeFiltersOpen(false);
-                }}
-              />
+              <div className="floating-backdrop filter-backdrop" onClick={() => setWardrobeFiltersOpen(false)} />
             ) : null}
 
             {wardrobeAddOpen ? (
@@ -9801,20 +9406,7 @@ export default function App() {
               <div className="floating-backdrop filter-backdrop" onClick={() => setWardrobeManageOpen(false)} />
             ) : null}
 
-            <div
-              className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`}
-              aria-label="Library management"
-              data-debug-id="manage-tags-window"
-              onPointerDownCapture={(event) => {
-                logNestedTagDebug(nestedTagDebugEnabled, "manage-tags", "ManageWindow.onPointerDownCapture", event);
-              }}
-              onClickCapture={(event) => {
-                logNestedTagDebug(nestedTagDebugEnabled, "manage-tags", "ManageWindow.onClickCapture", event);
-              }}
-              onFocusCapture={(event) => {
-                logNestedTagDebug(nestedTagDebugEnabled, "manage-tags", "ManageWindow.onFocusCapture", event);
-              }}
-            >
+            <div className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`} aria-label="Library management">
               <button type="button" className="ghost-button filter-close-button" onClick={() => setWardrobeManageOpen(false)}>
                 Close
               </button>
@@ -10077,20 +9669,6 @@ export default function App() {
           </div>
         ) : null}
 
-        {nestedTagDebugEnabled ? (
-          <aside
-            className="nested-tag-debug-console"
-            data-debug-id="nested-tag-debug-console"
-            aria-label="Nested tag debug console"
-          >
-            <strong>Nested tag debug</strong>
-            <div className="nested-tag-debug-console-log">
-              {nestedTagDebugLogs.map((entry, index) => (
-                <div key={`${index}-${entry}`}>{entry}</div>
-              ))}
-            </div>
-          </aside>
-        ) : null}
       </section>
     </main>
   );
