@@ -84,6 +84,30 @@ button:disabled {
   min-height: 100vh;
 }
 
+.crash-state {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.crash-panel {
+  width: min(520px, 100%);
+  padding: 24px;
+  display: grid;
+  gap: 14px;
+}
+
+.crash-panel p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.crash-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .panel {
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);

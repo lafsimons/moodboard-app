@@ -4705,138 +4705,166 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
+    function applyDefaultBootstrapState(sourceItems, appStateOverride = null) {
+      const defaultData = getDefaultData();
+      const defaultState = appStateOverride ?? defaultData.appState;
+      const normalizedItems = sourceItems.length ? sourceItems : defaultData.items.map(normalizeItem);
+      const generatedBoard = buildGeneratedBoard(normalizedItems, {
+        imageCount: normalizeImageCount(defaultState.imageCount),
+        excluded: {},
+        generationLists: defaultGenerationLists,
+        outfitFilters: emptyOutfitFilters,
+        generationMode: defaultGenerationMode,
+        outfitAffinity: normalizeOutfitAffinity(defaultState.outfitAffinity),
+        recentOutfits: normalizeRecentOutfits(defaultState.recentOutfits)
+      });
+
+      pendingRestoredBoardFitRef.current = false;
+      setItems(normalizedItems);
+      setLayering(Boolean(defaultState.layering));
+      setAccessoriesEnabled(defaultState.accessoriesEnabled ?? true);
+      setLocked(defaultState.locked ?? {});
+      setExcluded(defaultState.excluded ?? {});
+      setBoard(generatedBoard.board);
+      setImageCount(resolvePersistedImageCount(defaultState.imageCount));
+      setOutfit(generatedBoard.syntheticOutfit);
+      setBoardView(getFittedBoardView(generatedBoard.board));
+      setGuidedDebugPayload([]);
+      setIgnoredImportImages(defaultState.ignoredImportImages ?? []);
+      setSavedOutfits([]);
+      setLikedOutfitKeys(normalizeLikedOutfitKeys(defaultState.likedOutfitKeys));
+      setOutfitAffinity(normalizeOutfitAffinity(defaultState.outfitAffinity));
+      setRecentOutfits(normalizeRecentOutfits(defaultState.recentOutfits));
+      setGenerateCount(Math.max(0, Math.round(Number(defaultState.generateCount) || 0)));
+      setGenerationLists(normalizeGenerationLists(defaultState.generationLists));
+      setGenerationMode(normalizeGenerationMode(defaultState.generationMode));
+      setGenerationMetadataFilters(normalizeMetadataFilterState(defaultState.generationMetadataFilters));
+      setOutfitFilters(normalizeOutfitFilters(defaultState.outfitFilters));
+      setWeatherSettings(normalizeWeatherSettings(defaultState.weatherSettings));
+      setWeatherLocationDraft(defaultState.weatherSettings?.locationName ?? "");
+      setWeatherData(defaultState.weatherData ?? null);
+      setFitpics(defaultState.fitpics ?? []);
+    }
+
     async function bootstrap() {
-      const [storedItems, storedAppState] = await Promise.all([loadItems(), loadAppState()]);
-      const normalizedItems = storedItems
-        .map(normalizeItem)
-        .map((item) =>
-          (storedAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION
-            ? restoreLegacyBakedImageScale(item)
-            : item
+      let fallbackItems = [];
+
+      try {
+        const [storedItems, storedAppState] = await Promise.all([loadItems(), loadAppState()]);
+        const normalizedItems = storedItems
+          .map(normalizeItem)
+          .map((item) =>
+            (storedAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION
+              ? restoreLegacyBakedImageScale(item)
+              : item
+          );
+        const shouldApplyStyleWeightMigration =
+          (storedAppState?.itemDefaultsMigrationVersion ?? 0) < ITEM_DEFAULTS_MIGRATION_VERSION;
+        const shouldApplyImagePresentationMigration =
+          (storedAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION;
+        const styleWeightedItems = shouldApplyStyleWeightMigration
+          ? normalizedItems.map(applyMappedStyleWeightDefaults)
+          : normalizedItems;
+        const effectiveItems = shouldApplyImagePresentationMigration
+          ? await Promise.all(styleWeightedItems.map((item) => bakeItemImagePresentation(item)))
+          : styleWeightedItems;
+        const migratedItems = effectiveItems.filter(
+          (item, index) =>
+            itemNeedsRetailMigration(storedItems[index], item) ||
+            itemNeedsImageFrameScaleMigration(storedItems[index], item) ||
+            itemNeedsImageScaleMigration(storedItems[index], item) ||
+            itemNeedsImageOffsetMigration(storedItems[index], item) ||
+            itemNeedsImageCropMigration(storedItems[index], item) ||
+            itemNeedsFavoriteMigration(storedItems[index], item) ||
+            itemNeedsQuantityMigration(storedItems[index], item) ||
+            itemNeedsColorMigration(storedItems[index], item) ||
+            (!shouldApplyStyleWeightMigration && itemNeedsWeightMigration(storedItems[index], item)) ||
+            itemNeedsGarmentTypeMigration(storedItems[index], item) ||
+            (!shouldApplyStyleWeightMigration && itemNeedsTagMigration(storedItems[index], item)) ||
+            itemNeedsClimateTagMigration(storedItems[index], item) ||
+            itemNeedsDefaultMetadataMigration(storedItems[index], item) ||
+            itemNeedsMoodboardMetadataMigration(storedItems[index], item) ||
+            (shouldApplyStyleWeightMigration && itemNeedsStyleWeightMappingMigration(storedItems[index], item))
         );
-      const shouldApplyStyleWeightMigration =
-        (storedAppState?.itemDefaultsMigrationVersion ?? 0) < ITEM_DEFAULTS_MIGRATION_VERSION;
-      const shouldApplyImagePresentationMigration =
-        (storedAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION;
-      const styleWeightedItems = shouldApplyStyleWeightMigration
-        ? normalizedItems.map(applyMappedStyleWeightDefaults)
-        : normalizedItems;
-      const effectiveItems = shouldApplyImagePresentationMigration
-        ? await Promise.all(styleWeightedItems.map((item) => bakeItemImagePresentation(item)))
-        : styleWeightedItems;
-      const migratedItems = effectiveItems.filter(
-        (item, index) =>
-          itemNeedsRetailMigration(storedItems[index], item) ||
-          itemNeedsImageFrameScaleMigration(storedItems[index], item) ||
-          itemNeedsImageScaleMigration(storedItems[index], item) ||
-          itemNeedsImageOffsetMigration(storedItems[index], item) ||
-          itemNeedsImageCropMigration(storedItems[index], item) ||
-          itemNeedsFavoriteMigration(storedItems[index], item) ||
-          itemNeedsQuantityMigration(storedItems[index], item) ||
-          itemNeedsColorMigration(storedItems[index], item) ||
-          (!shouldApplyStyleWeightMigration && itemNeedsWeightMigration(storedItems[index], item)) ||
-          itemNeedsGarmentTypeMigration(storedItems[index], item) ||
-          (!shouldApplyStyleWeightMigration && itemNeedsTagMigration(storedItems[index], item)) ||
-          itemNeedsClimateTagMigration(storedItems[index], item) ||
-          itemNeedsDefaultMetadataMigration(storedItems[index], item) ||
-          itemNeedsMoodboardMetadataMigration(storedItems[index], item) ||
-          (shouldApplyStyleWeightMigration && itemNeedsStyleWeightMappingMigration(storedItems[index], item))
-      );
+        fallbackItems = effectiveItems;
 
-      if (cancelled) {
-        return;
+        if (cancelled) {
+          return;
+        }
+
+        if (migratedItems.length) {
+          await Promise.all(migratedItems.map((item) => saveItem(item)));
+        }
+
+        setItems(effectiveItems);
+
+        if (storedAppState) {
+          const resolvedImageCount = resolvePersistedImageCount(storedAppState.imageCount);
+          const normalizedGenerationLists = normalizeGenerationLists(storedAppState.generationLists);
+          const normalizedGenerationMode = normalizeGenerationMode(storedAppState.generationMode);
+          const normalizedMetadataFilters = normalizeMetadataFilterState(storedAppState.generationMetadataFilters);
+          const normalizedOutfitFilters = normalizeOutfitFilters(storedAppState.outfitFilters);
+          const normalizedOutfitAffinity = normalizeOutfitAffinity(storedAppState.outfitAffinity);
+          const normalizedRecentOutfits = normalizeRecentOutfits(storedAppState.recentOutfits);
+          setLayering(Boolean(storedAppState.layering));
+          setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
+          setLocked(storedAppState.locked ?? {});
+          setExcluded(storedAppState.excluded ?? {});
+          const restoredBoard = resolveBoardFromAppState(storedAppState, effectiveItems);
+          const nextBoard = shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
+            ? buildGeneratedBoard(effectiveItems, {
+                imageCount: resolvedImageCount,
+                metadataFilters: normalizedMetadataFilters,
+                excluded: storedAppState.excluded ?? {},
+                generationLists: normalizedGenerationLists,
+                outfitFilters: normalizedOutfitFilters,
+                weatherData: storedAppState.weatherData ?? null,
+                generationMode: normalizedGenerationMode,
+                outfitAffinity: normalizedOutfitAffinity,
+                recentOutfits: normalizedRecentOutfits
+              }).board
+            : restoredBoard;
+          pendingRestoredBoardFitRef.current = Boolean(nextBoard?.images?.length);
+          setBoard(nextBoard);
+          setImageCount(resolvedImageCount);
+          setOutfit(boardToSyntheticOutfit(nextBoard));
+          setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+          setGuidedDebugPayload([]);
+          setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
+          setSavedOutfits(hydrateSavedBoards(storedAppState.savedOutfits, effectiveItems));
+          setLikedOutfitKeys(normalizeLikedOutfitKeys(storedAppState.likedOutfitKeys));
+          setOutfitAffinity(normalizedOutfitAffinity);
+          setRecentOutfits(normalizedRecentOutfits);
+          setGenerateCount(Math.max(0, Math.round(Number(storedAppState.generateCount) || 0)));
+          setGenerationLists(normalizedGenerationLists);
+          setGenerationMode(normalizedGenerationMode);
+          setGenerationMetadataFilters(normalizedMetadataFilters);
+          setOutfitFilters(normalizedOutfitFilters);
+          setWeatherSettings(normalizeWeatherSettings(storedAppState.weatherSettings));
+          setWeatherLocationDraft(storedAppState.weatherSettings?.locationName ?? "");
+          setWeatherData(storedAppState.weatherData ?? null);
+          setFitpics(storedAppState.fitpics ?? []);
+        } else {
+          applyDefaultBootstrapState(effectiveItems);
+        }
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        console.error("Failed to restore library state. Falling back to defaults.", error);
+        applyDefaultBootstrapState(fallbackItems);
+
+        try {
+          await resetToDefaults();
+        } catch (resetError) {
+          console.error("Failed to reset persisted library state after bootstrap error.", resetError);
+        }
       }
 
-      if (migratedItems.length) {
-        await Promise.all(migratedItems.map((item) => saveItem(item)));
+      if (!cancelled) {
+        setLoading(false);
       }
-
-      setItems(effectiveItems);
-
-      if (storedAppState) {
-        const resolvedImageCount = resolvePersistedImageCount(storedAppState.imageCount);
-        const normalizedGenerationLists = normalizeGenerationLists(storedAppState.generationLists);
-        const normalizedGenerationMode = normalizeGenerationMode(storedAppState.generationMode);
-        const normalizedMetadataFilters = normalizeMetadataFilterState(storedAppState.generationMetadataFilters);
-        const normalizedOutfitFilters = normalizeOutfitFilters(storedAppState.outfitFilters);
-        const normalizedOutfitAffinity = normalizeOutfitAffinity(storedAppState.outfitAffinity);
-        const normalizedRecentOutfits = normalizeRecentOutfits(storedAppState.recentOutfits);
-        setLayering(Boolean(storedAppState.layering));
-        setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
-        setLocked(storedAppState.locked ?? {});
-        setExcluded(storedAppState.excluded ?? {});
-        const restoredBoard = resolveBoardFromAppState(storedAppState, effectiveItems);
-        const nextBoard = shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
-          ? buildGeneratedBoard(effectiveItems, {
-              imageCount: resolvedImageCount,
-              metadataFilters: normalizedMetadataFilters,
-              excluded: storedAppState.excluded ?? {},
-              generationLists: normalizedGenerationLists,
-              outfitFilters: normalizedOutfitFilters,
-              weatherData: storedAppState.weatherData ?? null,
-              generationMode: normalizedGenerationMode,
-              outfitAffinity: normalizedOutfitAffinity,
-              recentOutfits: normalizedRecentOutfits
-            }).board
-          : restoredBoard;
-        pendingRestoredBoardFitRef.current = Boolean(nextBoard?.images?.length);
-        setBoard(nextBoard);
-        setImageCount(resolvedImageCount);
-        setOutfit(boardToSyntheticOutfit(nextBoard));
-        setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
-        setGuidedDebugPayload([]);
-        setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
-        setSavedOutfits(hydrateSavedBoards(storedAppState.savedOutfits, effectiveItems));
-        setLikedOutfitKeys(normalizeLikedOutfitKeys(storedAppState.likedOutfitKeys));
-        setOutfitAffinity(normalizedOutfitAffinity);
-        setRecentOutfits(normalizedRecentOutfits);
-        setGenerateCount(Math.max(0, Math.round(Number(storedAppState.generateCount) || 0)));
-        setGenerationLists(normalizedGenerationLists);
-        setGenerationMode(normalizedGenerationMode);
-        setGenerationMetadataFilters(normalizedMetadataFilters);
-        setOutfitFilters(normalizedOutfitFilters);
-        setWeatherSettings(normalizeWeatherSettings(storedAppState.weatherSettings));
-        setWeatherLocationDraft(storedAppState.weatherSettings?.locationName ?? "");
-        setWeatherData(storedAppState.weatherData ?? null);
-        setFitpics(storedAppState.fitpics ?? []);
-      } else {
-        const defaultData = getDefaultData();
-        const defaultState = defaultData.appState;
-        setLayering(Boolean(defaultState.layering));
-        setAccessoriesEnabled(defaultState.accessoriesEnabled ?? true);
-        setLocked(defaultState.locked ?? {});
-        setExcluded(defaultState.excluded ?? {});
-        const generatedBoard = buildGeneratedBoard(effectiveItems, {
-          imageCount: normalizeImageCount(defaultState.imageCount),
-          excluded: {},
-          generationLists: defaultGenerationLists,
-          outfitFilters: emptyOutfitFilters,
-          generationMode: defaultGenerationMode,
-          outfitAffinity: normalizeOutfitAffinity(defaultState.outfitAffinity),
-          recentOutfits: normalizeRecentOutfits(defaultState.recentOutfits)
-        });
-        setBoard(generatedBoard.board);
-        setImageCount(resolvePersistedImageCount(defaultState.imageCount));
-        setOutfit(generatedBoard.syntheticOutfit);
-        setBoardView(getFittedBoardView(generatedBoard.board));
-        setGuidedDebugPayload([]);
-        setIgnoredImportImages(defaultState.ignoredImportImages ?? []);
-        setSavedOutfits(hydrateSavedBoards(defaultState.savedOutfits, effectiveItems));
-        setLikedOutfitKeys(normalizeLikedOutfitKeys(defaultState.likedOutfitKeys));
-        setOutfitAffinity(normalizeOutfitAffinity(defaultState.outfitAffinity));
-        setRecentOutfits(normalizeRecentOutfits(defaultState.recentOutfits));
-        setGenerateCount(Math.max(0, Math.round(Number(defaultState.generateCount) || 0)));
-        setGenerationLists(normalizeGenerationLists(defaultState.generationLists));
-        setGenerationMode(normalizeGenerationMode(defaultState.generationMode));
-        setGenerationMetadataFilters(normalizeMetadataFilterState(defaultState.generationMetadataFilters));
-        setOutfitFilters(normalizeOutfitFilters(defaultState.outfitFilters));
-        setWeatherSettings(normalizeWeatherSettings(defaultState.weatherSettings));
-        setWeatherLocationDraft(defaultState.weatherSettings?.locationName ?? "");
-        setWeatherData(defaultState.weatherData ?? null);
-        setFitpics(defaultState.fitpics ?? []);
-      }
-
-      setLoading(false);
     }
 
     bootstrap();
