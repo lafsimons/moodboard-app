@@ -4893,31 +4893,3 @@ button:disabled {
     margin-top: 6px;
   }
 }
-
-.nested-tag-debug-console {
-  position: fixed;
-  right: 12px;
-  bottom: 12px;
-  z-index: 120;
-  width: min(520px, calc(100vw - 24px));
-  max-height: 38vh;
-  display: grid;
-  gap: 6px;
-  padding: 10px;
-  overflow: hidden;
-  border: 1px solid #cf5f5f;
-  border-radius: 10px;
-  background: rgba(255, 248, 248, 0.96);
-  color: #5a1818;
-  font-size: 0.58rem;
-  line-height: 1.35;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
-}
-
-.nested-tag-debug-console-log {
-  display: grid;
-  gap: 4px;
-  overflow: auto;
-  font-family: "JetBrains Mono", monospace;
-  white-space: pre-wrap;
-}
