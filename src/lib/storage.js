@@ -6,6 +6,8 @@ const DB_NAME = "moodboard-app-db";
 const LEGACY_DB_NAME = "outfit-app-db";
 const DB_VERSION = 2;
 export const BACKUP_VERSION = 2;
+const BACKUP_SOURCE = "moodboard-app";
+const LEGACY_BACKUP_SOURCE = "outfit-app";
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
 const ORIGINAL_STORE = "originalImageBlobs";
@@ -284,7 +286,7 @@ function prepareBackupItems(items) {
 
 export function createLightweightBackupData(items, appState) {
   return {
-    source: "outfit-app",
+    source: BACKUP_SOURCE,
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     items: (Array.isArray(items) ? items : []).map((item) => sanitizeBackupReference(item)),
@@ -297,7 +299,7 @@ export function prepareBackupImport(backup) {
     throw new Error("Backup payload is invalid.");
   }
 
-  if (backup.source !== "outfit-app") {
+  if (![LEGACY_BACKUP_SOURCE, BACKUP_SOURCE].includes(backup.source)) {
     throw new Error("Backup source is invalid.");
   }
 

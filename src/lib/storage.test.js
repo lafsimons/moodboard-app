@@ -224,6 +224,7 @@ test("createLightweightBackupData preserves preview as the portable render asset
     savedOutfits: []
   });
 
+  assert.equal(backup.source, "moodboard-app");
   assert.equal(backup.items[0].imageUrl, "data:image/webp;base64,preview");
   assert.equal(backup.items[0].imageWidth, 1400);
   assert.equal(backup.items[0].originalPreserved, false);
@@ -260,6 +261,37 @@ test("prepareBackupImport normalizes legacy backups and fills source identity de
   assert.equal(prepared.items[0].sourceOriginalFilename, "legacy.png");
   assert.equal(prepared.items[0].relinkStatus, "pending");
   assert.ok(prepared.items[0].itemUuid);
+  assert.deepEqual(prepared.appState, {
+    savedOutfits: [],
+    recentOutfits: []
+  });
+});
+
+test("prepareBackupImport accepts moodboard-app backups", () => {
+  const prepared = prepareBackupImport({
+    source: "moodboard-app",
+    version: 2,
+    exportedAt: "2026-05-18T12:00:00.000Z",
+    items: [
+      {
+        id: "item-1",
+        imageUrl: "data:image/webp;base64,preview-only",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "backup.png"
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      recentOutfits: [{ id: "drop-me" }]
+    }
+  });
+
+  assert.equal(prepared.source, "moodboard-app");
+  assert.equal(prepared.version, 2);
+  assert.equal(prepared.items[0].id, "item-1");
   assert.deepEqual(prepared.appState, {
     savedOutfits: [],
     recentOutfits: []
