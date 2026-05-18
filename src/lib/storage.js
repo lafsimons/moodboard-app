@@ -2,14 +2,17 @@ import defaultWardrobe from "../data/defaultWardrobe.js";
 import defaultAppState from "../data/defaultAppState.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 
-const DB_NAME = "outfit-app-db";
+const DB_NAME = "moodboard-app-db";
+const LEGACY_DB_NAME = "outfit-app-db";
 const DB_VERSION = 2;
 export const BACKUP_VERSION = 2;
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
 const ORIGINAL_STORE = "originalImageBlobs";
+const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 
 let indexedDbFactory = () => globalThis.indexedDB;
+let databaseReadyPromise = null;
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
@@ -41,9 +44,9 @@ function getIndexedDb() {
   return indexedDb;
 }
 
-function openDatabase() {
+function openDatabaseByName(name) {
   return new Promise((resolve, reject) => {
-    const request = getIndexedDb().open(DB_NAME, DB_VERSION);
+    const request = getIndexedDb().open(name, DB_VERSION);
 
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -64,6 +67,85 @@ function openDatabase() {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+function transactionToPromise(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+async function readAllStoreRecords(database, storeNames) {
+  const transaction = database.transaction(storeNames, "readonly");
+  const transactionDone = transactionToPromise(transaction);
+  const stores = Object.fromEntries(storeNames.map((storeName) => [storeName, transaction.objectStore(storeName)]));
+  const recordsByStore = await Promise.all(
+    storeNames.map(async (storeName) => [storeName, await requestToPromise(stores[storeName].getAll())])
+  );
+  await transactionDone;
+  return Object.fromEntries(recordsByStore);
+}
+
+function hasAnyMigratableData(recordsByStore) {
+  return MIGRATED_STORES.some((storeName) => Array.isArray(recordsByStore[storeName]) && recordsByStore[storeName].length > 0);
+}
+
+async function copyStoreRecords(database, recordsByStore) {
+  const transaction = database.transaction(MIGRATED_STORES, "readwrite");
+  const transactionDone = transactionToPromise(transaction);
+  const stores = Object.fromEntries(MIGRATED_STORES.map((storeName) => [storeName, transaction.objectStore(storeName)]));
+
+  MIGRATED_STORES.forEach((storeName) => {
+    (recordsByStore[storeName] ?? []).forEach((record) => stores[storeName].put(record));
+  });
+
+  await transactionDone;
+}
+
+async function migrateLegacyDataIfNeeded() {
+  const currentDatabase = await openDatabaseByName(DB_NAME);
+
+  try {
+    const currentRecords = await readAllStoreRecords(currentDatabase, MIGRATED_STORES);
+
+    if (hasAnyMigratableData(currentRecords)) {
+      return;
+    }
+
+    const legacyDatabase = await openDatabaseByName(LEGACY_DB_NAME);
+
+    try {
+      const legacyRecords = await readAllStoreRecords(legacyDatabase, MIGRATED_STORES);
+
+      if (!hasAnyMigratableData(legacyRecords)) {
+        return;
+      }
+
+      await copyStoreRecords(currentDatabase, legacyRecords);
+    } finally {
+      legacyDatabase.close();
+    }
+  } finally {
+    currentDatabase.close();
+  }
+}
+
+async function ensureDatabaseReady() {
+  if (!databaseReadyPromise) {
+    databaseReadyPromise = migrateLegacyDataIfNeeded().catch((error) => {
+      databaseReadyPromise = null;
+      throw error;
+    });
+  }
+
+  await databaseReadyPromise;
+}
+
+async function openDatabase() {
+  await ensureDatabaseReady();
+  return openDatabaseByName(DB_NAME);
 }
 
 async function withStore(storeName, mode, run) {
@@ -335,4 +417,5 @@ export async function resetToDefaults() {
 
 export function __setIndexedDbFactoryForTests(factory) {
   indexedDbFactory = typeof factory === "function" ? factory : () => globalThis.indexedDB;
+  databaseReadyPromise = null;
 }

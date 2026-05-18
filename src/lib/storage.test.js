@@ -6,6 +6,7 @@ import {
   createLightweightBackupData,
   deleteOriginalImageBlob,
   hasOriginalImageBlob,
+  loadAppState,
   loadItems,
   loadOriginalImageBlob,
   loadOriginalImageBlobEntry,
@@ -125,19 +126,24 @@ class FakeOpenRequest {
 
 class FakeIndexedDB {
   constructor() {
-    this.database = null;
+    this.databases = new Map();
   }
 
-  open(_name, version) {
-    const needsUpgrade = !this.database || version > this.database.version;
+  open(name, version) {
+    const database = this.databases.get(name) ?? null;
+    const needsUpgrade = !database || version > database.version;
 
-    if (!this.database) {
-      this.database = new FakeDatabase(version);
-    } else if (version > this.database.version) {
-      this.database.version = version;
+    if (!database) {
+      this.databases.set(name, new FakeDatabase(version));
+    } else if (version > database.version) {
+      database.version = version;
     }
 
-    return new FakeOpenRequest(this.database, needsUpgrade);
+    return new FakeOpenRequest(this.databases.get(name), needsUpgrade);
+  }
+
+  getDatabase(name) {
+    return this.databases.get(name) ?? null;
   }
 }
 
@@ -158,6 +164,25 @@ function installFakeIndexedDb() {
   globalThis.IDBRequest = FakeIDBRequest;
   __setIndexedDbFactoryForTests(() => indexedDb);
   return indexedDb;
+}
+
+function seedStore(indexedDb, databaseName, storeName, keyPath, records) {
+  const database = indexedDb.getDatabase(databaseName) ?? new FakeDatabase(2);
+
+  if (!indexedDb.getDatabase(databaseName)) {
+    indexedDb.databases.set(databaseName, database);
+  }
+
+  const store =
+    database.stores.get(storeName) ??
+    (() => {
+      database.createObjectStore(storeName, { keyPath });
+      return database.stores.get(storeName);
+    })();
+
+  records.forEach((record) => {
+    store.records.set(record[keyPath], record);
+  });
 }
 
 test("createLightweightBackupData preserves preview as the portable render asset", () => {
@@ -317,4 +342,93 @@ test("original image blob helpers save load and delete entries", async () => {
 
   await deleteOriginalImageBlob("uuid-1");
   assert.equal(await hasOriginalImageBlob("uuid-1"), false);
+});
+
+test("loadItems migrates legacy outfit-app-db data into moodboard-app-db when the new database is empty", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const legacyItem = {
+    id: "legacy-item",
+    itemUuid: "legacy-uuid",
+    imageUrl: "data:image/webp;base64,preview-only",
+    imageWidth: 1200,
+    imageHeight: 800,
+    mimeType: "image/webp",
+    fileSize: 1111,
+    originalFilename: "legacy.png",
+    tags: ["archive"]
+  };
+  const legacyAppState = {
+    savedOutfits: [{ id: "saved-1" }],
+    recentOutfits: [{ id: "recent-1" }]
+  };
+  const legacyBlob = new Blob(["legacy-original"], { type: "image/jpeg" });
+
+  seedStore(indexedDb, "outfit-app-db", "items", "id", [legacyItem]);
+  seedStore(indexedDb, "outfit-app-db", "appState", "key", [{ key: "state", value: legacyAppState }]);
+  seedStore(indexedDb, "outfit-app-db", "originalImageBlobs", "itemUuid", [
+    {
+      itemUuid: "legacy-uuid",
+      blob: legacyBlob,
+      mimeType: "image/jpeg",
+      width: 2400,
+      height: 1800,
+      fileSize: 1024,
+      originalFilename: "legacy.jpg",
+      savedAt: 1
+    }
+  ]);
+
+  const migratedItems = await loadItems();
+  const migratedAppState = await loadAppState();
+  const migratedBlobEntry = await loadOriginalImageBlobEntry("legacy-uuid");
+  const newDatabase = indexedDb.getDatabase("moodboard-app-db");
+  const legacyDatabase = indexedDb.getDatabase("outfit-app-db");
+
+  assert.equal(migratedItems.length, 1);
+  assert.equal(migratedItems[0].id, "legacy-item");
+  assert.deepEqual(migratedAppState, legacyAppState);
+  assert.equal(await migratedBlobEntry.blob.text(), "legacy-original");
+  assert.equal(newDatabase.stores.get("items").records.size, 1);
+  assert.equal(newDatabase.stores.get("appState").records.size, 1);
+  assert.equal(newDatabase.stores.get("originalImageBlobs").records.size, 1);
+  assert.equal(legacyDatabase.stores.get("items").records.size, 1);
+});
+
+test("loadItems does not overwrite moodboard-app-db when the new database already has data", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  seedStore(indexedDb, "outfit-app-db", "items", "id", [
+    {
+      id: "legacy-item",
+      itemUuid: "legacy-uuid",
+      imageUrl: "data:image/webp;base64,legacy-preview",
+      imageWidth: 1200,
+      imageHeight: 800,
+      mimeType: "image/webp",
+      fileSize: 1111,
+      originalFilename: "legacy.png"
+    }
+  ]);
+  seedStore(indexedDb, "moodboard-app-db", "items", "id", [
+    {
+      id: "current-item",
+      itemUuid: "current-uuid",
+      imageUrl: "data:image/webp;base64,current-preview",
+      imageWidth: 1200,
+      imageHeight: 800,
+      mimeType: "image/webp",
+      fileSize: 1111,
+      originalFilename: "current.png"
+    }
+  ]);
+  seedStore(indexedDb, "moodboard-app-db", "appState", "key", []);
+  seedStore(indexedDb, "moodboard-app-db", "originalImageBlobs", "itemUuid", []);
+
+  const items = await loadItems();
+  const newDatabase = indexedDb.getDatabase("moodboard-app-db");
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].id, "current-item");
+  assert.equal(newDatabase.stores.get("items").records.size, 1);
+  assert.equal(newDatabase.stores.get("items").records.has("legacy-item"), false);
 });
