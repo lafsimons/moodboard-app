@@ -1,3 +1,5 @@
+# Core
+
 OA = Outfit-App
 MBA = Moodboard-App
 
@@ -197,3 +199,39 @@ MBA = Moodboard-App
 - Helps make sense of visual attraction and recurring aesthetic patterns.
 - Can function like an Obsidian-style visual thinking space for taste development.
 
+# Shared reusable systems
+
+The ecosystem should gradually move toward shared reusable infrastructure rather than duplicating app-specific implementations.
+
+Examples of reusable/shared systems:
+- image import
+- image compression
+- image storage
+- metadata/tagging
+- library grid virtualization
+- selection + bulk editing
+- export/import backup
+- local persistence
+- sync-ready storage abstractions
+
+OA and MBA may remain separate apps, but should increasingly share foundational modules and data concepts.
+
+# Shared vs app-specific logic
+
+Reusable systems:
+- Library grid
+- Tag editor
+- Metadata filters
+- Image handling
+- Bulk editing
+- Persistence/backups
+
+OA-specific:
+- outfit slot logic
+- climate/style scoring
+- outfit generation
+
+MBA-specific:
+- board layout
+- spatial canvas logic
+- moodboard generation scoring

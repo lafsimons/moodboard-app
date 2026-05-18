@@ -1,3 +1,5 @@
+# Roadmap
+
 # **Long-term ecosystem direction**
 
 - Main hub page with access to OA and MBA.
@@ -35,8 +37,6 @@ The system could reveal:
 - Supabase Auth/Postgres
 - Cloudflare R2 object storage
 
-
-
 ---
 
 # **Near-term priorities**
@@ -59,4 +59,20 @@ The system could reveal:
 - Defer bulk original relinking until object-storage architecture is stable.
 - Do not merge OA and MBA yet.
 - Defer sync/public sharing until local data models and repository boundaries are stable.
+
+## Pre-sync foundation cleanup
+
+Before implementing accounts/sync/cloud:
+- extract reusable modules from App.jsx
+- standardize storage shapes
+- standardize backup/export structure
+- remove duplicated OA/MBA infrastructure
+- keep feature work moving while gradually modularizing shared systems
+
+## Moodboard app cleanup
+
+- rename remaining outfit-app identifiers
+- clean obsolete copied root files
+- separate app identity from shared infrastructure
+- improve repo structure before public sharing
 
