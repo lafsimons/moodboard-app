@@ -1,13 +1,16 @@
 import defaultWardrobe from "../data/defaultWardrobe.js";
 import defaultAppState from "../data/defaultAppState.js";
+import {
+  BACKUP_SOURCE,
+  INDEXED_DB_NAME,
+  LEGACY_INDEXED_DB_NAME,
+  SUPPORTED_BACKUP_SOURCES,
+  SUPPORTED_BACKUP_VERSIONS
+} from "./appIdentity.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 
-const DB_NAME = "moodboard-app-db";
-const LEGACY_DB_NAME = "outfit-app-db";
 const DB_VERSION = 2;
 export const BACKUP_VERSION = 2;
-const BACKUP_SOURCE = "moodboard-app";
-const LEGACY_BACKUP_SOURCE = "outfit-app";
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
 const ORIGINAL_STORE = "originalImageBlobs";
@@ -107,7 +110,7 @@ async function copyStoreRecords(database, recordsByStore) {
 }
 
 async function migrateLegacyDataIfNeeded() {
-  const currentDatabase = await openDatabaseByName(DB_NAME);
+  const currentDatabase = await openDatabaseByName(INDEXED_DB_NAME);
 
   try {
     const currentRecords = await readAllStoreRecords(currentDatabase, MIGRATED_STORES);
@@ -116,7 +119,7 @@ async function migrateLegacyDataIfNeeded() {
       return;
     }
 
-    const legacyDatabase = await openDatabaseByName(LEGACY_DB_NAME);
+    const legacyDatabase = await openDatabaseByName(LEGACY_INDEXED_DB_NAME);
 
     try {
       const legacyRecords = await readAllStoreRecords(legacyDatabase, MIGRATED_STORES);
@@ -147,7 +150,7 @@ async function ensureDatabaseReady() {
 
 async function openDatabase() {
   await ensureDatabaseReady();
-  return openDatabaseByName(DB_NAME);
+  return openDatabaseByName(INDEXED_DB_NAME);
 }
 
 async function withStore(storeName, mode, run) {
@@ -299,11 +302,11 @@ export function prepareBackupImport(backup) {
     throw new Error("Backup payload is invalid.");
   }
 
-  if (![LEGACY_BACKUP_SOURCE, BACKUP_SOURCE].includes(backup.source)) {
+  if (!SUPPORTED_BACKUP_SOURCES.includes(backup.source)) {
     throw new Error("Backup source is invalid.");
   }
 
-  if (![1, BACKUP_VERSION].includes(backup.version)) {
+  if (!SUPPORTED_BACKUP_VERSIONS.includes(backup.version)) {
     throw new Error("Backup version is not supported.");
   }
 
