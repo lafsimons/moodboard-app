@@ -1,0 +1,264 @@
+# Working Notes
+
+OA = Outfit-App  
+MBA = Moodboard-App
+
+Before making changes, read:
+- `docs/ecosystem/core-outfitmoodboardapp.md`
+- `docs/ecosystem/roadmap-outfitmoodboardapp.md`
+- `docs/ecosystem/working-notes-outfitmoodboardapp.md`
+
+Preserve existing ecosystem direction and shared architectural goals.
+Avoid introducing isolated app-specific systems when reusable/shared concepts already exist.
+
+---
+
+# Current local environments
+
+```bash
+npm run dev -- --host 0.0.0.0
+````
+
+## **OA**
+
+- https://layerfit.vercel.app/ — current primary mobile dataset
+- http://localhost:5173/
+
+## **MBA**
+
+- http://localhost:5174/ — current primary Mac dataset
+
+---
+
+# **Development philosophy**
+
+- Continue feature work normally.
+- Avoid large-scale rewrites during active feature development.
+- Prefer extraction over rewrites.
+- Prefer behavioral stability over architectural purity.
+- Extract shared systems incrementally when already touching that area.
+- Preserve working UX and generation behavior during refactors.
+- Add regression tests before modifying sensitive logic where feasible.
+- Avoid simultaneous UI redesign + architectural migration in the same area.
+- Preserve backward compatibility for imports/exports where reasonably possible.
+- Stability and long-term maintainability are more important than theoretical cleanliness.
+
+---
+
+# **Active priorities**
+
+## **OA**
+
+- improve cropping
+- mobile wardrobe controls below cards
+- bottom-sheet behavior
+- separate sort from filter
+
+## **MBA**
+
+### **Tags**
+
+- infinite nesting support
+- keyboard selection improvements
+- rename hierarchy issues
+
+### **Crop**
+
+- incorrect crop boundaries
+- oversized crop UI on tall images
+
+### **Canvas**
+
+- occasional distortion
+- preview/render mismatch
+
+---
+
+# **Active refactor state**
+
+## **OA**
+
+### **Current extraction progress**
+
+- Extracted item metadata and normalization helpers from `App.jsx` into:
+    - `src/lib/itemModel.js`
+- Added:
+    - `src/lib/itemModel.test.js`
+- Extracted image presentation normalization helpers from `App.jsx` into:
+    - `src/lib/imagePresentation.js`
+- Added:
+    - `src/lib/imagePresentation.test.js`
+
+### **Current refactor goal**
+
+Reduce `App.jsx` responsibilities incrementally without changing behavior.
+
+### **Current intentional boundaries**
+
+The following remain intentionally inside `App.jsx` for now:
+
+- `ManagedItemImage`
+- `useImageMetrics`
+- `resolveImageUrl`
+- export handlers
+- upload/compression handlers
+- crop baking/migration logic
+
+These systems remain tightly coupled and behavior-sensitive.
+
+Build/tests passed after current extraction steps.
+
+---
+
+# **Sensitive systems**
+
+## **Image system**
+
+Crop, scale, frame scale, offset, preview rendering, and export alignment are tightly connected.
+
+Do not casually “clean up”:
+
+- crop math
+- export math
+- image transforms
+- preview alignment
+- migration behavior
+
+Future crop fixes should ideally happen only after:
+
+- isolating behavior
+- adding regression coverage
+- validating export compatibility
+
+Avoid changing persisted image fields unless migration/backward compatibility is explicitly handled.
+
+---
+
+## **Metadata & persistence**
+
+- preserve import metadata
+- preserve timestamps
+- update `updatedAt` only on actual edits
+- preserve backward compatibility for imports/exports where feasible
+- avoid unnecessary metadata rewrites during migrations
+
+Historical continuity matters.
+
+---
+
+## **Generation systems**
+
+Generation behavior should remain stable during refactors.
+
+Avoid unintentionally changing:
+
+- scoring behavior
+- weighting behavior
+- filtering behavior
+- slot logic
+- guided generation outcomes
+
+Add small regression fixtures/tests where useful.
+
+---
+
+# **Shared-system extraction opportunities**
+
+The ecosystem should gradually move toward shared reusable infrastructure instead of duplicated app-specific implementations.
+
+Potential shared systems:
+
+- bulk editing
+- multi-select
+- tag editing
+- metadata normalization
+- metadata filters
+- image import/compression
+- image storage handling
+- library virtualization
+- selection systems
+- persistence abstractions
+- export/import backups
+
+Prefer reusable abstractions when already touching:
+
+- image systems
+- metadata
+- filters
+- tags
+- selection
+- persistence
+- import/export
+
+---
+
+# **OA architectural concerns**
+
+- Dresses/Jumpsuits slot integration
+- TopInner accepting Outerwear
+- minimum guided-score floor
+- config-table refactor for defaults
+- tiny wardrobe fixture datasets for testing
+
+---
+
+# **MBA cleanup direction**
+
+- rename remaining Outfit-App identifiers
+- remove obsolete copied root files
+- separate app identity from shared infrastructure
+- improve repository structure before public sharing
+
+---
+
+# **Deferred systems**
+
+Do not prioritize yet:
+
+- accounts
+- public sharing
+- cloud sync
+- collaborative features
+- object-storage relinking
+- large-scale storage migrations
+
+Before sync/cloud work:
+
+- extract reusable modules from `App.jsx`
+- standardize storage shapes
+- standardize export/import structures
+- reduce duplicated OA/MBA infrastructure
+- stabilize repository boundaries
+
+IndexedDB should continue functioning as the active local-first layer until shared storage architecture is mature.
+
+---
+
+# **Known architectural risks**
+
+- `App.jsx` still contains tightly coupled image/export behavior.
+- Crop/export alignment remains fragile.
+- Existing import/export datasets may contain inconsistent historical shapes.
+- OA and MBA still duplicate some infrastructure concepts.
+- Current local-first assumptions may complicate future sync architecture.
+- Image handling and metadata migrations remain high-risk areas for regressions.
+
+---
+
+# **Temporary ideas / backlog**
+
+## **OA**
+
+- linked references
+- lifecycle tracking
+- wardrobe-role metadata
+- multi-outfit generation
+- canvas-style outfit comparison
+
+## **MBA**
+
+- bulk rename
+- ordered board generation
+- higher image counts
+- auto backup updates
+- remove default images

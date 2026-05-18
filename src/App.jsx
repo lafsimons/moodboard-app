@@ -1,17 +1,11 @@
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   createLightweightBackupData,
-  deleteItem,
   getDefaultData,
-  loadAppState,
-  loadItems,
   prepareBackupImport,
-  replaceWithBackup,
   replaceWithPreparedBackup,
-  resetToDefaults,
-  saveAppState,
-  saveItem
-} from "./lib/storage";
+  resetToDefaults
+} from "./repositories/backupRepository";
 import {
   applyMappedStyleWeightDefaults,
   defaultTypeSuggestions,
@@ -110,6 +104,22 @@ import {
   buildBoardRenderMetadata,
   getBoardItemRenderedBounds
 } from "./lib/boardBounds.js";
+import {
+  normalizeBoard,
+  normalizeSavedOutfit,
+  hydrateSavedBoards,
+  resolveBoardFromAppState,
+  savedOutfitHasMissingItems
+} from "./repositories/boardsRepository.js";
+import {
+  deleteItem,
+  deleteItems,
+  loadItems,
+  prepareLoadedItems,
+  saveItem,
+  saveItems
+} from "./repositories/itemsRepository.js";
+import { loadAppState, saveAppState } from "./repositories/appStateRepository.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
   eager: true,
@@ -1820,9 +1830,11 @@ function TagTree({
   const rootNode = finalizeNestedTagNodes(buildNestedTagNodes(sortedEntries), sortMode);
 
   function toggleCollapsedGroup(groupKey) {
+    const collapsedKey = `${storageKey}:${groupKey}`;
+
     setCollapsedGroups((current) => ({
       ...current,
-      [`${storageKey}:${groupKey}`]: !current[`${storageKey}:${groupKey}`]
+      [collapsedKey]: !(current[collapsedKey] ?? true)
     }));
   }
 
@@ -2463,73 +2475,10 @@ function createSavedOutfitName(savedOutfits) {
   return `Moodboard ${savedOutfits.length + 1}`;
 }
 
-function normalizeBoardImage(image, index = 0) {
-  if (!image || typeof image !== "object") {
-    return null;
-  }
-
-  const width = Math.max(80, Math.round(Number(image.width) || 220));
-  const height = Math.max(80, Math.round(Number(image.height) || 260));
-
-  return {
-    id: typeof image.id === "string" ? image.id : `board_image_${index}`,
-    referenceId: typeof image.referenceId === "string" ? image.referenceId : "",
-    x: Math.round(Number(image.x) || 0),
-    y: Math.round(Number(image.y) || 0),
-    width,
-    height,
-    rotation: Math.round((Number(image.rotation) || 0) * 10) / 10,
-    zIndex: Math.max(1, Math.round(Number(image.zIndex) || index + 1)),
-    generationSlot: typeof image.generationSlot === "string" ? image.generationSlot : visibleSlots[index % visibleSlots.length]
-  };
-}
-
-function normalizeBoard(board) {
-  if (!board || typeof board !== "object") {
-    return null;
-  }
-
-  const images = Array.isArray(board.images)
-    ? board.images.map(normalizeBoardImage).filter((image) => image?.referenceId)
-    : [];
-
-  if (!images.length) {
-    return null;
-  }
-
-  return {
-    id: typeof board.id === "string" ? board.id : `board_${Date.now()}`,
-    width: Math.max(800, Math.round(Number(board.width) || 1600)),
-    height: Math.max(600, Math.round(Number(board.height) || 1200)),
-    images
-  };
-}
-
-function getBoardReferenceIds(board) {
-  return Array.isArray(board?.images) ? board.images.map((image) => image.referenceId).filter(Boolean) : [];
-}
-
 function getSavedOutfitPreviewSlots(savedOutfit) {
   return savedOutfit.layering
     ? ["Headwear", "TopInner", "TopOuter", "Bottom", "Footwear"]
     : ["Headwear", "TopInner", "Bottom", "Footwear"];
-}
-
-function sanitizeOutfitForExistingItems(outfit, itemsById) {
-  return Object.fromEntries(
-    Object.entries(outfit ?? {}).map(([slot, itemId]) => [
-      slot,
-      itemId && itemsById[itemId] ? itemId : null
-    ])
-  );
-}
-
-function savedOutfitHasMissingItems(savedOutfit, itemsById) {
-  if (savedOutfit.board?.images?.length) {
-    return savedOutfit.board.images.some((image) => image.referenceId && !itemsById[image.referenceId]);
-  }
-
-  return Object.values(savedOutfit.outfit ?? {}).some((itemId) => itemId && !itemsById[itemId]);
 }
 
 function replaceItemIdInOutfit(outfit, oldItemId, newItemId) {
@@ -2555,38 +2504,6 @@ function normalizeGenerationLists(generationLists) {
     ...defaultGenerationLists,
     ...(generationLists ?? {})
   };
-}
-
-function normalizeSavedOutfit(savedOutfit) {
-  return {
-    id: savedOutfit.id,
-    name: savedOutfit.name ?? "Saved board",
-    description: savedOutfit.description ?? "",
-    board: normalizeBoard(savedOutfit.board),
-    outfit: savedOutfit.outfit ?? {},
-    layering: Boolean(savedOutfit.layering)
-  };
-}
-
-function normalizeSavedOutfits(savedOutfits) {
-  if (!Array.isArray(savedOutfits)) {
-    return [];
-  }
-
-  const seenOutfitKeys = new Set();
-
-  return savedOutfits.reduce((normalized, savedOutfit) => {
-    const nextSavedOutfit = normalizeSavedOutfit(savedOutfit);
-    const outfitKey = nextSavedOutfit.board ? getBoardKey(nextSavedOutfit.board) : getOutfitKey(nextSavedOutfit.outfit, nextSavedOutfit.layering);
-
-    if (seenOutfitKeys.has(outfitKey)) {
-      return normalized;
-    }
-
-    seenOutfitKeys.add(outfitKey);
-    normalized.push(nextSavedOutfit);
-    return normalized;
-  }, []);
 }
 
 function getWorthCategory(item) {
@@ -4303,43 +4220,41 @@ export default function App() {
     });
   }, [applyGeneratedBoardResult, clearBoardGenerationFeedback]);
 
-  function hydrateSavedBoards(rawSavedOutfits, sourceItems) {
-    return normalizeSavedOutfits(rawSavedOutfits)
-      .map((savedOutfit) => {
-        const boardFromState = normalizeBoard(savedOutfit.board);
-        const hydratedBoard = boardFromState
-          ? {
-              ...boardFromState,
-              images: boardFromState.images.filter((image) => itemsById[image.referenceId])
-            }
-          : buildBoardFromLegacyReferences(Object.values(savedOutfit.outfit ?? {}).filter(Boolean), sourceItems);
-
-        return hydratedBoard?.images?.length
-          ? {
-              ...savedOutfit,
-              board: hydratedBoard
-            }
-          : null;
-      })
-      .filter(Boolean);
+  function getBoardRepositoryDependencies() {
+    return {
+      visibleSlots,
+      getBoardKey,
+      getOutfitKey,
+      itemsById,
+      buildBoardFromLegacyReferences
+    };
   }
 
-  function resolveBoardFromAppState(appState, sourceItems) {
-    const normalizedBoard = normalizeBoard(appState?.board);
-
-    if (normalizedBoard?.images?.length) {
-      const filteredBoard = {
-        ...normalizedBoard,
-        images: normalizedBoard.images.filter((image) => itemsById[image.referenceId])
-      };
-
-      if (filteredBoard.images.length) {
-        return filteredBoard;
-      }
-    }
-
-    const legacyReferenceIds = Object.values(appState?.outfit ?? {}).filter(Boolean);
-    return buildBoardFromLegacyReferences(legacyReferenceIds, sourceItems);
+  function getItemRepositoryDependencies() {
+    return {
+      normalizeItem,
+      restoreLegacyBakedImageScale,
+      applyMappedStyleWeightDefaults,
+      bakeItemImagePresentation,
+      itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
+      imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION,
+      itemNeedsRetailMigration,
+      itemNeedsImageFrameScaleMigration,
+      itemNeedsImageScaleMigration,
+      itemNeedsImageOffsetMigration,
+      itemNeedsImageCropMigration,
+      itemNeedsFavoriteMigration,
+      itemNeedsQuantityMigration,
+      itemNeedsColorMigration,
+      itemNeedsWeightMigration,
+      itemNeedsGarmentTypeMigration,
+      itemNeedsTagMigration,
+      itemNeedsClimateTagMigration,
+      itemNeedsDefaultMetadataMigration,
+      itemNeedsMoodboardMetadataMigration,
+      itemNeedsImageAssetMigration,
+      itemNeedsStyleWeightMappingMigration
+    };
   }
 
   useEffect(() => {
@@ -4447,49 +4362,20 @@ export default function App() {
 
       try {
         const [storedItems, storedAppState] = await Promise.all([loadItems(), loadAppState()]);
-        const normalizedItems = storedItems
-          .map(normalizeItem)
-          .map((item) =>
-            (storedAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION
-              ? restoreLegacyBakedImageScale(item)
-              : item
-          );
-        const shouldApplyStyleWeightMigration =
-          (storedAppState?.itemDefaultsMigrationVersion ?? 0) < ITEM_DEFAULTS_MIGRATION_VERSION;
-        const shouldApplyImagePresentationMigration =
-          (storedAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION;
-        const styleWeightedItems = shouldApplyStyleWeightMigration
-          ? normalizedItems.map(applyMappedStyleWeightDefaults)
-          : normalizedItems;
-        const effectiveItems = shouldApplyImagePresentationMigration
-          ? await Promise.all(styleWeightedItems.map((item) => bakeItemImagePresentation(item)))
-          : styleWeightedItems;
-        const migratedItems = effectiveItems.filter(
-          (item, index) =>
-            itemNeedsRetailMigration(storedItems[index], item) ||
-            itemNeedsImageFrameScaleMigration(storedItems[index], item) ||
-            itemNeedsImageScaleMigration(storedItems[index], item) ||
-            itemNeedsImageOffsetMigration(storedItems[index], item) ||
-            itemNeedsImageCropMigration(storedItems[index], item) ||
-            itemNeedsFavoriteMigration(storedItems[index], item) ||
-            itemNeedsQuantityMigration(storedItems[index], item) ||
-            itemNeedsColorMigration(storedItems[index], item) ||
-            (!shouldApplyStyleWeightMigration && itemNeedsWeightMigration(storedItems[index], item)) ||
-            itemNeedsGarmentTypeMigration(storedItems[index], item) ||
-            (!shouldApplyStyleWeightMigration && itemNeedsTagMigration(storedItems[index], item)) ||
-            itemNeedsClimateTagMigration(storedItems[index], item) ||
-            itemNeedsDefaultMetadataMigration(storedItems[index], item) ||
-            itemNeedsMoodboardMetadataMigration(storedItems[index], item) ||
-            (shouldApplyStyleWeightMigration && itemNeedsStyleWeightMappingMigration(storedItems[index], item))
+        const { items: effectiveItems } = await prepareLoadedItems(
+          storedItems,
+          storedAppState,
+          getItemRepositoryDependencies(),
+          {
+            includeWeightMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
+            includeTagMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
+            includeStyleWeightMappingMigration: true
+          }
         );
         fallbackItems = effectiveItems;
 
         if (cancelled) {
           return;
-        }
-
-        if (migratedItems.length) {
-          await Promise.all(migratedItems.map((item) => saveItem(item)));
         }
 
         setItems(effectiveItems);
@@ -4506,7 +4392,11 @@ export default function App() {
           setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
           setLocked(storedAppState.locked ?? {});
           setExcluded(storedAppState.excluded ?? {});
-          const restoredBoard = resolveBoardFromAppState(storedAppState, effectiveItems);
+          const restoredBoard = resolveBoardFromAppState(
+            storedAppState,
+            effectiveItems,
+            getBoardRepositoryDependencies()
+          );
           const nextBoard = shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
             ? buildGeneratedBoard(effectiveItems, {
                 imageCount: resolvedImageCount,
@@ -4527,7 +4417,9 @@ export default function App() {
           setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
           setGuidedDebugPayload([]);
           setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
-          setSavedOutfits(hydrateSavedBoards(storedAppState.savedOutfits, effectiveItems));
+          setSavedOutfits(
+            hydrateSavedBoards(storedAppState.savedOutfits, effectiveItems, getBoardRepositoryDependencies())
+          );
           setLikedOutfitKeys(normalizeLikedOutfitKeys(storedAppState.likedOutfitKeys));
           setOutfitAffinity(normalizedOutfitAffinity);
           setRecentOutfits(normalizedRecentOutfits);
@@ -5169,39 +5061,9 @@ export default function App() {
   }
 
   async function applyLoadedData(nextItems, nextAppState) {
-    const normalizedItems = nextItems
-      .map(normalizeItem)
-      .map((item) =>
-        (nextAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION
-          ? restoreLegacyBakedImageScale(item)
-          : item
-      );
-    const effectiveItems =
-      (nextAppState?.imagePresentationMigrationVersion ?? 0) < IMAGE_PRESENTATION_MIGRATION_VERSION
-        ? await Promise.all(normalizedItems.map((item) => bakeItemImagePresentation(item)))
-        : normalizedItems;
-    const migratedItems = effectiveItems.filter(
-      (item, index) =>
-        itemNeedsRetailMigration(nextItems[index], item) ||
-        itemNeedsImageFrameScaleMigration(nextItems[index], item) ||
-        itemNeedsImageScaleMigration(nextItems[index], item) ||
-        itemNeedsImageOffsetMigration(nextItems[index], item) ||
-        itemNeedsImageCropMigration(nextItems[index], item) ||
-        itemNeedsFavoriteMigration(nextItems[index], item) ||
-        itemNeedsQuantityMigration(nextItems[index], item) ||
-        itemNeedsColorMigration(nextItems[index], item) ||
-        itemNeedsWeightMigration(nextItems[index], item) ||
-        itemNeedsGarmentTypeMigration(nextItems[index], item) ||
-        itemNeedsTagMigration(nextItems[index], item) ||
-        itemNeedsClimateTagMigration(nextItems[index], item) ||
-        itemNeedsDefaultMetadataMigration(nextItems[index], item) ||
-        itemNeedsMoodboardMetadataMigration(nextItems[index], item) ||
-        itemNeedsImageAssetMigration(nextItems[index], item)
-    );
-
-    if (migratedItems.length) {
-      await Promise.all(migratedItems.map((item) => saveItem(item)));
-    }
+    const { items: effectiveItems } = await prepareLoadedItems(nextItems, nextAppState, getItemRepositoryDependencies(), {
+      includeImageAssetMigration: true
+    });
 
     setItems(effectiveItems);
     setLayering(Boolean(nextAppState?.layering));
@@ -5215,7 +5077,7 @@ export default function App() {
     const normalizedOutfitFilters = normalizeOutfitFilters(nextAppState?.outfitFilters);
     const normalizedOutfitAffinity = normalizeOutfitAffinity(nextAppState?.outfitAffinity);
     const normalizedRecentOutfits = normalizeRecentOutfits(nextAppState?.recentOutfits);
-    const restoredBoard = resolveBoardFromAppState(nextAppState, effectiveItems);
+    const restoredBoard = resolveBoardFromAppState(nextAppState, effectiveItems, getBoardRepositoryDependencies());
     const nextBoard = shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
       ? buildGeneratedBoard(effectiveItems, {
           imageCount: resolvedImageCount,
@@ -5236,7 +5098,7 @@ export default function App() {
     setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
     setGuidedDebugPayload([]);
     setIgnoredImportImages(nextAppState?.ignoredImportImages ?? []);
-    setSavedOutfits(hydrateSavedBoards(nextAppState?.savedOutfits, effectiveItems));
+    setSavedOutfits(hydrateSavedBoards(nextAppState?.savedOutfits, effectiveItems, getBoardRepositoryDependencies()));
     setLikedOutfitKeys(normalizeLikedOutfitKeys(nextAppState?.likedOutfitKeys));
     setOutfitAffinity(normalizedOutfitAffinity);
     setRecentOutfits(normalizedRecentOutfits);
@@ -5950,7 +5812,7 @@ export default function App() {
       return;
     }
 
-    await Promise.all(updatedItems.map((item) => saveItem(item)));
+    await saveItems(updatedItems);
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
     setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
@@ -5974,7 +5836,7 @@ export default function App() {
       return 0;
     }
 
-    await Promise.all(updatedItems.map((item) => saveItem(item)));
+    await saveItems(updatedItems);
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
     setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
@@ -7065,7 +6927,7 @@ export default function App() {
 
     const deletedReferenceIdSet = new Set(uniqueReferenceIds);
 
-    await Promise.all(uniqueReferenceIds.map((itemId) => deleteItem(itemId)));
+    await deleteItems(uniqueReferenceIds);
     setItems((current) => current.filter((item) => !deletedReferenceIdSet.has(item.id)));
     setSelectedReferenceIds((current) =>
       Object.fromEntries(Object.entries(current).filter(([itemId, isSelected]) => !deletedReferenceIdSet.has(itemId) && isSelected))
@@ -7468,15 +7330,20 @@ export default function App() {
       }
 
       return [
-        normalizeSavedOutfit({
-          id: `saved_outfit_${Date.now()}`,
-          name: createSavedOutfitName(current),
-          description: "",
-          board: {
-            ...board,
-            images: board.images.map((image) => ({ ...image }))
+        normalizeSavedOutfit(
+          {
+            id: `saved_outfit_${Date.now()}`,
+            name: createSavedOutfitName(current),
+            description: "",
+            board: {
+              ...board,
+              images: board.images.map((image) => ({ ...image }))
+            }
+          },
+          {
+            visibleSlots
           }
-        }),
+        ),
         ...current
       ];
     });
@@ -7518,7 +7385,7 @@ export default function App() {
   }
 
   function loadSavedOutfit(savedOutfit) {
-    const nextBoard = normalizeBoard(savedOutfit.board);
+    const nextBoard = normalizeBoard(savedOutfit.board, visibleSlots);
 
     if (!nextBoard) {
       return;
@@ -8969,12 +8836,7 @@ export default function App() {
                 </button>
 
                 {generationMetadataFiltersOpen ? (
-                <div
-                  ref={generationMetadataFiltersPanelRef}
-                  className="outfit-filters-panel"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => event.stopPropagation()}
-                >
+                <div className="outfit-filters-panel">
                   <div className="outfit-filter-groups">
                     <section className="outfit-filter-group controls-reference-filter-module">
                       <TagTree

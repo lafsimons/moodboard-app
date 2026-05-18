@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { resetToDefaults } from "./lib/storage";
+import { resetToDefaults } from "./repositories/backupRepository.js";
 import "./styles.css";
 
 class RootErrorBoundary extends React.Component {
