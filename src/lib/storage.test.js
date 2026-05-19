@@ -3,8 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   __setIndexedDbFactoryForTests,
+  backfillLocalSyncMetadata,
+  clearSyncMetadata,
   createLightweightBackupData,
   deleteOriginalImageBlob,
+  getOrCreateDeviceId,
+  getSyncMetadata,
   hasOriginalImageBlob,
   loadAppState,
   loadItems,
@@ -13,7 +17,12 @@ import {
   prepareBackupImport,
   replaceWithBackup,
   replaceWithPreparedBackup,
-  saveOriginalImageBlob
+  resetToDefaults,
+  saveAppState,
+  saveItem,
+  saveOriginalImageBlob,
+  deleteItem,
+  upsertSyncMetadata
 } from "./storage.js";
 
 class FakeIDBRequest {
@@ -248,6 +257,426 @@ test("createLightweightBackupData preserves preview as the portable render asset
   assert.deepEqual(backup.appState, {
     savedOutfits: []
   });
+  assert.equal("syncState" in backup, false);
+  assert.equal("syncMetadata" in backup, false);
+});
+
+test("db upgrade creates sync stores", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await getOrCreateDeviceId();
+
+  const database = indexedDb.getDatabase("moodboard-app-db");
+  assert.equal(database.version, 3);
+  assert.equal(database.stores.has("syncState"), true);
+  assert.equal(database.stores.has("syncMetadata"), true);
+});
+
+test("getOrCreateDeviceId creates and reuses a stable local device id", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  const firstDeviceId = await getOrCreateDeviceId();
+  const secondDeviceId = await getOrCreateDeviceId();
+  const syncStateStore = indexedDb.getDatabase("moodboard-app-db").stores.get("syncState");
+
+  assert.equal(firstDeviceId.length > 0, true);
+  assert.equal(secondDeviceId, firstDeviceId);
+  assert.equal(syncStateStore.records.size, 1);
+  assert.equal(syncStateStore.records.get("state").deviceId, firstDeviceId);
+});
+
+test("backfillLocalSyncMetadata creates local-only reference metadata keyed by itemUuid", async () => {
+  installFakeIndexedDb();
+
+  const result = await backfillLocalSyncMetadata([
+    {
+      id: "item-1",
+      itemUuid: "uuid-1",
+      imageUrl: "data:image/webp;base64,preview",
+      imageWidth: 1200,
+      imageHeight: 800,
+      mimeType: "image/webp",
+      fileSize: 1111,
+      originalFilename: "ref.png"
+    }
+  ], []);
+
+  const metadata = await getSyncMetadata("mba:reference:uuid-1");
+
+  assert.equal(result.createdCount, 1);
+  assert.equal(metadata.entityType, "mbaReference");
+  assert.equal(metadata.stableKey, "uuid-1");
+  assert.equal(metadata.localId, "item-1");
+  assert.equal(metadata.recordVersion, 0);
+  assert.equal(metadata.syncStatus, "local_only");
+  assert.equal(metadata.pendingDelete, false);
+  assert.equal(metadata.lastModifiedByDevice, result.deviceId);
+});
+
+test("backfillLocalSyncMetadata creates local-only saved-board metadata keyed by boardUuid", async () => {
+  installFakeIndexedDb();
+
+  const result = await backfillLocalSyncMetadata([], [
+    {
+      id: "saved-1",
+      name: "Saved board",
+      board: {
+        id: "board-1",
+        boardUuid: "board-uuid-1",
+        images: [{ referenceId: "item-1" }]
+      }
+    }
+  ]);
+
+  const metadata = await getSyncMetadata("mba:board:board-uuid-1");
+
+  assert.equal(result.createdCount, 1);
+  assert.equal(metadata.entityType, "mbaBoard");
+  assert.equal(metadata.stableKey, "board-uuid-1");
+  assert.equal(metadata.localId, "saved-1");
+  assert.equal(metadata.recordVersion, 0);
+  assert.equal(metadata.syncStatus, "local_only");
+  assert.equal(metadata.pendingDelete, false);
+  assert.equal(metadata.lastModifiedByDevice, result.deviceId);
+});
+
+test("backfillLocalSyncMetadata keeps the current working board unsynced", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "ref.png"
+      }
+    ],
+    appState: {
+      board: {
+        id: "working-board",
+        boardUuid: "working-board-uuid",
+        images: [{ referenceId: "item-1" }]
+      },
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  });
+
+  const allMetadata = await getSyncMetadata();
+
+  assert.deepEqual(
+    allMetadata.map((entry) => entry.key).sort(),
+    ["mba:reference:uuid-1"]
+  );
+  assert.equal(await getSyncMetadata("mba:board:working-board-uuid"), null);
+});
+
+test("reference create and update mark metadata pending upload", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-1",
+    imageUrl: "data:image/webp;base64,preview",
+    imageWidth: 1200,
+    imageHeight: 800,
+    mimeType: "image/webp",
+    fileSize: 1111,
+    originalFilename: "ref.png"
+  });
+
+  const createdMetadata = await getSyncMetadata("mba:reference:uuid-1");
+  assert.equal(createdMetadata.syncStatus, "pending_upload");
+  assert.equal(createdMetadata.recordVersion, 1);
+  assert.equal(createdMetadata.pendingDelete, false);
+  assert.equal(createdMetadata.lastLocalChangeAt.length > 0, true);
+
+  await upsertSyncMetadata({
+    ...createdMetadata,
+    syncStatus: "synced",
+    recordVersion: 4,
+    lastSyncedAt: "2026-05-18T12:00:00.000Z",
+    lastSyncError: "old-error"
+  });
+
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-1",
+    imageUrl: "data:image/webp;base64,preview-2",
+    imageWidth: 1200,
+    imageHeight: 800,
+    mimeType: "image/webp",
+    fileSize: 1111,
+    originalFilename: "ref.png"
+  });
+
+  const updatedMetadata = await getSyncMetadata("mba:reference:uuid-1");
+  assert.equal(updatedMetadata.syncStatus, "pending_upload");
+  assert.equal(updatedMetadata.recordVersion, 5);
+  assert.equal(updatedMetadata.lastSyncedAt, "2026-05-18T12:00:00.000Z");
+  assert.equal(updatedMetadata.lastSyncError, "");
+  assert.equal(updatedMetadata.pendingDelete, false);
+});
+
+test("reference delete preserves metadata as a tombstone pending upload", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "ref.png"
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  });
+
+  await deleteItem("item-1");
+
+  const metadata = await getSyncMetadata("mba:reference:uuid-1");
+  assert.equal(metadata.pendingDelete, true);
+  assert.equal(metadata.syncStatus, "pending_upload");
+  assert.equal(metadata.recordVersion, 1);
+  assert.equal(metadata.lastLocalChangeAt.length > 0, true);
+});
+
+test("reference legacy id rename preserves one metadata row keyed by itemUuid", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-old",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "ref.png"
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  });
+
+  await saveItem({
+    id: "item-new",
+    itemUuid: "uuid-1",
+    imageUrl: "data:image/webp;base64,preview",
+    imageWidth: 1200,
+    imageHeight: 800,
+    mimeType: "image/webp",
+    fileSize: 1111,
+    originalFilename: "ref.png"
+  });
+  await deleteItem("item-old");
+
+  const metadata = await getSyncMetadata();
+
+  assert.deepEqual(metadata.map((entry) => entry.key), ["mba:reference:uuid-1"]);
+  assert.equal(metadata[0].localId, "item-new");
+  assert.equal(metadata[0].pendingDelete, false);
+  assert.equal(metadata[0].recordVersion, 1);
+});
+
+test("saved board create edit and delete mark metadata pending upload", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "",
+        board: {
+          id: "board-1",
+          boardUuid: "board-uuid-1",
+          images: [{ referenceId: "item-1" }]
+        }
+      }
+    ]
+  });
+
+  const createdMetadata = await getSyncMetadata("mba:board:board-uuid-1");
+  assert.equal(createdMetadata.syncStatus, "pending_upload");
+  assert.equal(createdMetadata.recordVersion, 1);
+  assert.equal(createdMetadata.pendingDelete, false);
+
+  await upsertSyncMetadata({
+    ...createdMetadata,
+    syncStatus: "synced",
+    recordVersion: 3,
+    lastSyncedAt: "2026-05-18T12:00:00.000Z"
+  });
+
+  await saveAppState({
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Renamed board",
+        description: "",
+        board: {
+          id: "board-1",
+          boardUuid: "board-uuid-1",
+          images: [{ referenceId: "item-1" }]
+        }
+      }
+    ]
+  });
+
+  const updatedMetadata = await getSyncMetadata("mba:board:board-uuid-1");
+  assert.equal(updatedMetadata.syncStatus, "pending_upload");
+  assert.equal(updatedMetadata.recordVersion, 4);
+  assert.equal(updatedMetadata.lastSyncedAt, "2026-05-18T12:00:00.000Z");
+
+  await saveAppState({
+    savedOutfits: []
+  });
+
+  const deletedMetadata = await getSyncMetadata("mba:board:board-uuid-1");
+  assert.equal(deletedMetadata.pendingDelete, true);
+  assert.equal(deletedMetadata.syncStatus, "pending_upload");
+  assert.equal(deletedMetadata.recordVersion, 5);
+});
+
+test("saved boards dirty when reference id rewrites change persisted payload", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [],
+    appState: {
+      savedOutfits: [
+        {
+          id: "saved-1",
+          name: "Saved board",
+          description: "",
+          board: {
+            id: "board-1",
+            boardUuid: "board-uuid-1",
+            images: [{ referenceId: "item-old", referenceItemUuid: "uuid-1" }]
+          },
+          outfit: {
+            TopInner: "item-old"
+          }
+        }
+      ],
+      recentOutfits: []
+    }
+  });
+
+  await saveAppState({
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "",
+        board: {
+          id: "board-1",
+          boardUuid: "board-uuid-1",
+          images: [{ referenceId: "item-new", referenceItemUuid: "uuid-1" }]
+        },
+        outfit: {
+          TopInner: "item-new"
+        }
+      }
+    ]
+  });
+
+  const metadata = await getSyncMetadata("mba:board:board-uuid-1");
+  assert.equal(metadata.recordVersion, 1);
+  assert.equal(metadata.syncStatus, "pending_upload");
+  assert.equal(metadata.pendingDelete, false);
+});
+
+test("saved boards dirty when reference delete changes persisted payload", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [],
+    appState: {
+      savedOutfits: [
+        {
+          id: "saved-1",
+          name: "Saved board",
+          description: "",
+          board: {
+            id: "board-1",
+            boardUuid: "board-uuid-1",
+            images: [{ referenceId: "item-1", referenceItemUuid: "uuid-1" }]
+          },
+          outfit: {
+            TopInner: "item-1"
+          }
+        }
+      ],
+      recentOutfits: []
+    }
+  });
+
+  await saveAppState({
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "",
+        board: {
+          id: "board-1",
+          boardUuid: "board-uuid-1",
+          images: []
+        },
+        outfit: {
+          TopInner: null
+        }
+      }
+    ]
+  });
+
+  const metadata = await getSyncMetadata("mba:board:board-uuid-1");
+  assert.equal(metadata.recordVersion, 1);
+  assert.equal(metadata.syncStatus, "pending_upload");
+});
+
+test("current working board changes stay unsynced", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    board: {
+      id: "working-board",
+      boardUuid: "working-board-uuid",
+      images: [{ referenceId: "item-1" }]
+    },
+    savedOutfits: []
+  });
+
+  assert.deepEqual(await getSyncMetadata(), []);
+
+  await saveAppState({
+    board: {
+      id: "working-board",
+      boardUuid: "working-board-uuid",
+      images: [{ referenceId: "item-2" }]
+    },
+    savedOutfits: []
+  });
+
+  assert.deepEqual(await getSyncMetadata(), []);
 });
 
 test("prepareBackupImport normalizes legacy backups and fills source identity defaults", () => {
@@ -542,6 +971,87 @@ test("replaceWithBackup leaves existing items untouched when validation fails", 
   assert.equal(persistedItems[0].id, "existing-item");
 });
 
+test("replaceWithPreparedBackup clears stale sync metadata and rebuilds local-only records", async () => {
+  installFakeIndexedDb();
+
+  await getOrCreateDeviceId();
+  await upsertSyncMetadata({
+    key: "mba:reference:stale-uuid",
+    entityType: "mbaReference",
+    stableKey: "stale-uuid",
+    localId: "stale-item",
+    recordVersion: 4,
+    syncStatus: "error",
+    lastSyncedAt: "2026-05-18T12:00:00.000Z",
+    lastModifiedByDevice: "device-stale",
+    pendingDelete: false,
+    lastSyncError: "stale",
+    lastLocalChangeAt: "2026-05-18T12:00:00.000Z"
+  });
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "ref.png"
+      }
+    ],
+    appState: {
+      savedOutfits: [
+        {
+          id: "saved-1",
+          board: {
+            id: "board-1",
+            boardUuid: "board-uuid-1",
+            images: [{ referenceId: "item-1" }]
+          }
+        }
+      ],
+      recentOutfits: []
+    }
+  });
+
+  const metadata = await getSyncMetadata();
+
+  assert.deepEqual(
+    metadata.map((entry) => entry.key).sort(),
+    ["mba:board:board-uuid-1", "mba:reference:uuid-1"]
+  );
+  assert.equal(await getSyncMetadata("mba:reference:stale-uuid"), null);
+  assert.equal(metadata.every((entry) => entry.syncStatus === "local_only"), true);
+});
+
+test("resetToDefaults clears stale sync metadata and rebuilds metadata for default references", async () => {
+  installFakeIndexedDb();
+
+  await upsertSyncMetadata({
+    key: "mba:reference:stale-uuid",
+    entityType: "mbaReference",
+    stableKey: "stale-uuid",
+    localId: "stale-item",
+    recordVersion: 1,
+    syncStatus: "error",
+    lastSyncedAt: "",
+    lastModifiedByDevice: "device-stale",
+    pendingDelete: false,
+    lastSyncError: "stale",
+    lastLocalChangeAt: ""
+  });
+
+  const defaultData = await resetToDefaults();
+  const metadata = await getSyncMetadata();
+
+  assert.equal(await getSyncMetadata("mba:reference:stale-uuid"), null);
+  assert.equal(metadata.length, defaultData.items.length);
+  assert.equal(metadata.every((entry) => entry.entityType === "mbaReference"), true);
+});
+
 test("original image blob helpers save load and delete entries", async () => {
   installFakeIndexedDb();
 
@@ -615,6 +1125,29 @@ test("loadItems migrates legacy outfit-app-db data into moodboard-app-db when th
   assert.equal(newDatabase.stores.get("appState").records.size, 1);
   assert.equal(newDatabase.stores.get("originalImageBlobs").records.size, 1);
   assert.equal(legacyDatabase.stores.get("items").records.size, 1);
+});
+
+test("clearSyncMetadata clears metadata records without affecting the device id", async () => {
+  installFakeIndexedDb();
+
+  const deviceId = await getOrCreateDeviceId();
+  await backfillLocalSyncMetadata([
+    {
+      id: "item-1",
+      itemUuid: "uuid-1",
+      imageUrl: "data:image/webp;base64,preview",
+      imageWidth: 1200,
+      imageHeight: 800,
+      mimeType: "image/webp",
+      fileSize: 1111,
+      originalFilename: "ref.png"
+    }
+  ], []);
+
+  await clearSyncMetadata();
+
+  assert.deepEqual(await getSyncMetadata(), []);
+  assert.equal(await getOrCreateDeviceId(), deviceId);
 });
 
 test("loadItems does not overwrite moodboard-app-db when the new database already has data", async () => {

@@ -10,11 +10,14 @@ import {
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./boardIdentity.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 export const BACKUP_VERSION = 2;
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
 const ORIGINAL_STORE = "originalImageBlobs";
+const SYNC_STATE_STORE = "syncState";
+const SYNC_METADATA_STORE = "syncMetadata";
+const SYNC_STATE_KEY = "state";
 const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 
 let indexedDbFactory = () => globalThis.indexedDB;
@@ -22,6 +25,197 @@ let databaseReadyPromise = null;
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function createDeviceId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `device_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function normalizeSyncText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeSyncBoolean(value) {
+  return Boolean(value);
+}
+
+function normalizeSyncNumber(value, fallback = 0) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue >= 0 ? Math.round(numericValue) : fallback;
+}
+
+function normalizeSyncTimestamp(value) {
+  const trimmedValue = normalizeSyncText(value);
+
+  if (!trimmedValue) {
+    return "";
+  }
+
+  const parsedValue = Date.parse(trimmedValue);
+  return Number.isFinite(parsedValue) ? new Date(parsedValue).toISOString() : "";
+}
+
+function createDefaultSyncState(deviceId = "") {
+  return {
+    key: SYNC_STATE_KEY,
+    deviceId: normalizeSyncText(deviceId)
+  };
+}
+
+function getCurrentSyncTimestamp() {
+  return new Date().toISOString();
+}
+
+function normalizeSyncMetadataKey(value) {
+  return normalizeSyncText(value);
+}
+
+function createReferenceSyncMetadataKey(itemUuid) {
+  const stableKey = normalizeSyncText(itemUuid);
+  return stableKey ? `mba:reference:${stableKey}` : "";
+}
+
+function createBoardSyncMetadataKey(boardUuid) {
+  const stableKey = normalizeSyncText(boardUuid);
+  return stableKey ? `mba:board:${stableKey}` : "";
+}
+
+function normalizeSyncMetadataRecord(record) {
+  const key = normalizeSyncMetadataKey(record?.key);
+
+  if (!key) {
+    throw new Error("Sync metadata entry is missing a key.");
+  }
+
+  return {
+    key,
+    entityType: normalizeSyncText(record?.entityType),
+    stableKey: normalizeSyncText(record?.stableKey),
+    localId: normalizeSyncText(record?.localId),
+    recordVersion: normalizeSyncNumber(record?.recordVersion),
+    syncStatus: normalizeSyncText(record?.syncStatus),
+    lastSyncedAt: normalizeSyncTimestamp(record?.lastSyncedAt),
+    lastModifiedByDevice: normalizeSyncText(record?.lastModifiedByDevice),
+    pendingDelete: normalizeSyncBoolean(record?.pendingDelete),
+    lastSyncError: normalizeSyncText(record?.lastSyncError),
+    lastLocalChangeAt: normalizeSyncTimestamp(record?.lastLocalChangeAt)
+  };
+}
+
+function createNextDirtySyncMetadataRecord({
+  key,
+  entityType,
+  stableKey,
+  localId,
+  existingRecord = null,
+  deviceId = "",
+  pendingDelete = false,
+  now = getCurrentSyncTimestamp()
+}) {
+  return normalizeSyncMetadataRecord({
+    key,
+    entityType,
+    stableKey,
+    localId,
+    recordVersion: normalizeSyncNumber(existingRecord?.recordVersion) + 1,
+    syncStatus: "pending_upload",
+    lastSyncedAt: normalizeSyncTimestamp(existingRecord?.lastSyncedAt),
+    lastModifiedByDevice: normalizeSyncText(deviceId),
+    pendingDelete,
+    lastSyncError: "",
+    lastLocalChangeAt: now
+  });
+}
+
+function buildReferenceSyncMetadata(item, deviceId, existingRecord = null) {
+  const normalizedItem = migrateReferenceMetadataToTags(item);
+  const stableKey = normalizeSyncText(normalizedItem?.itemUuid);
+  const key = createReferenceSyncMetadataKey(stableKey);
+
+  if (!key) {
+    return null;
+  }
+
+  if (existingRecord) {
+    return null;
+  }
+
+  return normalizeSyncMetadataRecord({
+    key,
+    entityType: "mbaReference",
+    stableKey,
+    localId: normalizeSyncText(normalizedItem?.id),
+    recordVersion: 0,
+    syncStatus: "local_only",
+    lastSyncedAt: "",
+    lastModifiedByDevice: normalizeSyncText(deviceId),
+    pendingDelete: false,
+    lastSyncError: "",
+    lastLocalChangeAt: ""
+  });
+}
+
+function buildSavedBoardSyncMetadata(savedOutfit, deviceId, existingRecord = null) {
+  const normalizedSavedOutfit = ensureSavedBoardUuid(savedOutfit);
+  const stableKey = normalizeSyncText(normalizedSavedOutfit?.board?.boardUuid);
+  const key = createBoardSyncMetadataKey(stableKey);
+
+  if (!key) {
+    return null;
+  }
+
+  if (existingRecord) {
+    return null;
+  }
+
+  return normalizeSyncMetadataRecord({
+    key,
+    entityType: "mbaBoard",
+    stableKey,
+    localId: normalizeSyncText(normalizedSavedOutfit?.id),
+    recordVersion: 0,
+    syncStatus: "local_only",
+    lastSyncedAt: "",
+    lastModifiedByDevice: normalizeSyncText(deviceId),
+    pendingDelete: false,
+    lastSyncError: "",
+    lastLocalChangeAt: ""
+  });
+}
+
+function getSavedBoardSyncableRecord(savedOutfit) {
+  const normalizedSavedOutfit = ensureSavedBoardUuid(savedOutfit);
+  const boardUuid = normalizeSyncText(normalizedSavedOutfit?.board?.boardUuid);
+
+  if (!boardUuid) {
+    return null;
+  }
+
+  return {
+    ...normalizedSavedOutfit,
+    board: normalizedSavedOutfit.board
+  };
+}
+
+function createSavedBoardMetadataByStableKey(savedOutfits = []) {
+  return (Array.isArray(savedOutfits) ? savedOutfits : []).reduce((lookup, savedOutfit) => {
+    const syncableSavedOutfit = getSavedBoardSyncableRecord(savedOutfit);
+
+    if (!syncableSavedOutfit) {
+      return lookup;
+    }
+
+    lookup[syncableSavedOutfit.board.boardUuid] = syncableSavedOutfit;
+    return lookup;
+  }, {});
+}
+
+function haveSavedBoardRecordsChanged(previousSavedOutfit, nextSavedOutfit) {
+  return JSON.stringify(previousSavedOutfit) !== JSON.stringify(nextSavedOutfit);
 }
 
 function stripLocalOnlyAppState(appState) {
@@ -67,6 +261,14 @@ function openDatabaseByName(name) {
 
       if (!db.objectStoreNames.contains(ORIGINAL_STORE)) {
         db.createObjectStore(ORIGINAL_STORE, { keyPath: "itemUuid" });
+      }
+
+      if (!db.objectStoreNames.contains(SYNC_STATE_STORE)) {
+        db.createObjectStore(SYNC_STATE_STORE, { keyPath: "key" });
+      }
+
+      if (!db.objectStoreNames.contains(SYNC_METADATA_STORE)) {
+        db.createObjectStore(SYNC_METADATA_STORE, { keyPath: "key" });
       }
     };
 
@@ -195,9 +397,10 @@ async function withStores(storeNames, mode, run) {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeNames, mode);
     const stores = Object.fromEntries(storeNames.map((storeName) => [storeName, transaction.objectStore(storeName)]));
+    let resultPromise;
 
     try {
-      run(stores);
+      resultPromise = Promise.resolve(run(stores));
     } catch (error) {
       reject(error);
       db.close();
@@ -205,8 +408,12 @@ async function withStores(storeNames, mode, run) {
     }
 
     transaction.oncomplete = () => {
-      resolve();
-      db.close();
+      resultPromise
+        .then(resolve)
+        .catch(reject)
+        .finally(() => {
+          db.close();
+        });
     };
 
     transaction.onerror = () => {
@@ -232,10 +439,66 @@ export async function loadItems() {
 
 export async function saveItem(item) {
   await withStore(ITEM_STORE, "readwrite", (store) => store.put(item));
+
+  const stableKey = normalizeSyncText(item?.itemUuid);
+
+  if (!stableKey) {
+    return;
+  }
+
+  const [deviceId, existingRecord] = await Promise.all([
+    getOrCreateDeviceId(),
+    getSyncMetadata(createReferenceSyncMetadataKey(stableKey))
+  ]);
+
+  await upsertSyncMetadata(
+    createNextDirtySyncMetadataRecord({
+      key: createReferenceSyncMetadataKey(stableKey),
+      entityType: "mbaReference",
+      stableKey,
+      localId: normalizeSyncText(item?.id),
+      existingRecord,
+      deviceId,
+      pendingDelete: false
+    })
+  );
 }
 
 export async function deleteItem(id) {
+  const existingItem = await withStore(ITEM_STORE, "readonly", (store) => store.get(id));
   await withStore(ITEM_STORE, "readwrite", (store) => store.delete(id));
+
+  const stableKey = normalizeSyncText(existingItem?.itemUuid);
+
+  if (!stableKey) {
+    return;
+  }
+
+  const remainingItems = await withStore(ITEM_STORE, "readonly", (store) => store.getAll());
+  const matchingItem = (Array.isArray(remainingItems) ? remainingItems : []).find(
+    (item) => item?.id !== id && normalizeSyncText(item?.itemUuid) === stableKey
+  );
+
+  if (matchingItem) {
+    return;
+  }
+
+  const [deviceId, existingRecord] = await Promise.all([
+    getOrCreateDeviceId(),
+    getSyncMetadata(createReferenceSyncMetadataKey(stableKey))
+  ]);
+
+  await upsertSyncMetadata(
+    createNextDirtySyncMetadataRecord({
+      key: createReferenceSyncMetadataKey(stableKey),
+      entityType: "mbaReference",
+      stableKey,
+      localId: normalizeSyncText(existingRecord?.localId) || normalizeSyncText(existingItem?.id),
+      existingRecord,
+      deviceId,
+      pendingDelete: true
+    })
+  );
 }
 
 export async function loadAppState() {
@@ -244,12 +507,141 @@ export async function loadAppState() {
 }
 
 export async function saveAppState(value) {
+  const previousAppState = await loadAppState();
+
   await withStore(APP_STORE, "readwrite", (store) =>
     store.put({
       key: "state",
       value
     })
   );
+
+  const previousSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(previousAppState?.savedOutfits);
+  const nextSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(value?.savedOutfits);
+  const affectedStableKeys = new Set([
+    ...Object.keys(previousSavedBoardsByStableKey),
+    ...Object.keys(nextSavedBoardsByStableKey)
+  ]);
+
+  if (!affectedStableKeys.size) {
+    return;
+  }
+
+  const deviceId = await getOrCreateDeviceId();
+  const nextMetadataEntries = await Promise.all(
+    [...affectedStableKeys].map(async (stableKey) => {
+      const previousSavedBoard = previousSavedBoardsByStableKey[stableKey] ?? null;
+      const nextSavedBoard = nextSavedBoardsByStableKey[stableKey] ?? null;
+
+      if (previousSavedBoard && nextSavedBoard && !haveSavedBoardRecordsChanged(previousSavedBoard, nextSavedBoard)) {
+        return null;
+      }
+
+      const metadataKey = createBoardSyncMetadataKey(stableKey);
+      const existingRecord = await getSyncMetadata(metadataKey);
+
+      if (nextSavedBoard) {
+        return createNextDirtySyncMetadataRecord({
+          key: metadataKey,
+          entityType: "mbaBoard",
+          stableKey,
+          localId: normalizeSyncText(nextSavedBoard.id),
+          existingRecord,
+          deviceId,
+          pendingDelete: false
+        });
+      }
+
+      return createNextDirtySyncMetadataRecord({
+        key: metadataKey,
+        entityType: "mbaBoard",
+        stableKey,
+        localId: normalizeSyncText(previousSavedBoard?.id) || normalizeSyncText(existingRecord?.localId),
+        existingRecord,
+        deviceId,
+        pendingDelete: true
+      });
+    })
+  );
+
+  await Promise.all(nextMetadataEntries.filter(Boolean).map((entry) => upsertSyncMetadata(entry)));
+}
+
+export async function getOrCreateDeviceId() {
+  const existingState = await withStore(SYNC_STATE_STORE, "readonly", (store) => store.get(SYNC_STATE_KEY));
+  const existingDeviceId = normalizeSyncText(existingState?.deviceId);
+
+  if (existingDeviceId) {
+    return existingDeviceId;
+  }
+
+  const nextDeviceId = createDeviceId();
+  await withStore(SYNC_STATE_STORE, "readwrite", (store) =>
+    store.put(createDefaultSyncState(nextDeviceId))
+  );
+  return nextDeviceId;
+}
+
+export async function getSyncMetadata(key = null) {
+  if (typeof key === "string") {
+    const normalizedKey = normalizeSyncMetadataKey(key);
+
+    if (!normalizedKey) {
+      return null;
+    }
+
+    const entry = await withStore(SYNC_METADATA_STORE, "readonly", (store) => store.get(normalizedKey));
+    return entry ? normalizeSyncMetadataRecord(entry) : null;
+  }
+
+  const entries = await withStore(SYNC_METADATA_STORE, "readonly", (store) => store.getAll());
+  return entries.map((entry) => normalizeSyncMetadataRecord(entry));
+}
+
+export async function upsertSyncMetadata(record) {
+  const normalizedRecord = normalizeSyncMetadataRecord(record);
+  await withStore(SYNC_METADATA_STORE, "readwrite", (store) => store.put(normalizedRecord));
+  return normalizedRecord;
+}
+
+export async function clearSyncMetadata() {
+  await withStore(SYNC_METADATA_STORE, "readwrite", (store) => store.clear());
+}
+
+export async function backfillLocalSyncMetadata(items = [], savedOutfits = []) {
+  const deviceId = await getOrCreateDeviceId();
+  const existingMetadataEntries = await getSyncMetadata();
+  const existingMetadataByKey = Object.fromEntries(existingMetadataEntries.map((entry) => [entry.key, entry]));
+  const nextMetadataEntries = [
+    ...(Array.isArray(items) ? items : [])
+      .map((item) => buildReferenceSyncMetadata(item, deviceId, existingMetadataByKey[createReferenceSyncMetadataKey(item?.itemUuid)]))
+      .filter(Boolean),
+    ...(Array.isArray(savedOutfits) ? savedOutfits : [])
+      .map((savedOutfit) =>
+        buildSavedBoardSyncMetadata(
+          savedOutfit,
+          deviceId,
+          existingMetadataByKey[createBoardSyncMetadataKey(savedOutfit?.board?.boardUuid ?? ensureSavedBoardUuid(savedOutfit)?.board?.boardUuid)]
+        )
+      )
+      .filter(Boolean)
+  ];
+
+  if (!nextMetadataEntries.length) {
+    return {
+      deviceId,
+      createdCount: 0
+    };
+  }
+
+  await withStore(SYNC_METADATA_STORE, "readwrite", (store) => {
+    nextMetadataEntries.forEach((entry) => store.put(entry));
+  });
+
+  return {
+    deviceId,
+    createdCount: nextMetadataEntries.length
+  };
 }
 
 function normalizeBackupAppState(appState) {
@@ -330,17 +722,24 @@ export async function exportBackup() {
 }
 
 export async function replaceWithPreparedBackup(backup) {
-  await withStores([ITEM_STORE, APP_STORE, ORIGINAL_STORE], "readwrite", ({ items, appState, originalImageBlobs }) => {
+  await withStores(
+    [ITEM_STORE, APP_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE],
+    "readwrite",
+    ({ items, appState, originalImageBlobs, syncMetadata }) => {
     items.clear();
     appState.clear();
     originalImageBlobs.clear();
+    syncMetadata.clear();
 
     backup.items.forEach((item) => items.put(item));
     appState.put({
       key: "state",
       value: backup.appState
     });
-  });
+    }
+  );
+
+  await backfillLocalSyncMetadata(backup.items, backup.appState?.savedOutfits ?? []);
 }
 
 export async function replaceWithBackup(backup) {

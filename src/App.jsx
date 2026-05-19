@@ -121,6 +121,7 @@ import {
   saveItems
 } from "./repositories/itemsRepository.js";
 import { loadAppState, saveAppState } from "./repositories/appStateRepository.js";
+import { backfillLocalSyncMetadata } from "./repositories/syncRepository.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
   eager: true,
@@ -4421,9 +4422,12 @@ export default function App() {
           setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
           setGuidedDebugPayload([]);
           setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
-          setSavedOutfits(
-            hydrateSavedBoards(storedAppState.savedOutfits, effectiveItems, getBoardRepositoryDependencies())
+          const hydratedSavedBoards = hydrateSavedBoards(
+            storedAppState.savedOutfits,
+            effectiveItems,
+            getBoardRepositoryDependencies()
           );
+          setSavedOutfits(hydratedSavedBoards);
           setLikedOutfitKeys(normalizeLikedOutfitKeys(storedAppState.likedOutfitKeys));
           setOutfitAffinity(normalizedOutfitAffinity);
           setRecentOutfits(normalizedRecentOutfits);
@@ -4436,8 +4440,20 @@ export default function App() {
           setWeatherLocationDraft(storedAppState.weatherSettings?.locationName ?? "");
           setWeatherData(storedAppState.weatherData ?? null);
           setFitpics(storedAppState.fitpics ?? []);
+
+          try {
+            await backfillLocalSyncMetadata(effectiveItems, hydratedSavedBoards);
+          } catch (syncMetadataError) {
+            console.error("Failed to initialize local sync metadata.", syncMetadataError);
+          }
         } else {
           applyDefaultBootstrapState(effectiveItems);
+
+          try {
+            await backfillLocalSyncMetadata(effectiveItems, []);
+          } catch (syncMetadataError) {
+            console.error("Failed to initialize local sync metadata.", syncMetadataError);
+          }
         }
       } catch (error) {
         if (cancelled) {
