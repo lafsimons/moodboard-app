@@ -148,96 +148,6 @@ MBA = Moodboard-App
     - thumbnail assets
     - original archival assets
 
-## **Canonical shared image contract**
-
-The canonical shared image shape for OA and MBA should be:
-
-```js
-images: {
-  original: {
-    src: "",
-    mimeType: "",
-    width: 0,
-    height: 0,
-    fileSize: 0,
-    originalFilename: ""
-  },
-  preview: {
-    src: "",
-    mimeType: "",
-    width: 0,
-    height: 0,
-    fileSize: 0,
-    originalFilename: ""
-  },
-  thumbnail: {
-    src: "",
-    mimeType: "",
-    width: 0,
-    height: 0,
-    fileSize: 0,
-    originalFilename: ""
-  }
-}
-```
-
-Meaning of each image asset:
-- `images.original`
-  archival source image when preserved; may be larger, less processed, or absent
-- `images.preview`
-  canonical cross-device render asset for normal browsing, boards, outfit rendering, exports, and sync-safe display
-- `images.thumbnail`
-  optional smaller render asset for dense library/grid views; may fall back to preview when no separate thumbnail exists
-
-## **Meaning of `originalPreserved`**
-
-- `originalPreserved = true`
-  means the system intentionally considers an original archival asset to exist or be preserved for this item
-- `originalPreserved = false`
-  means the item should be treated as preview-only for archival purposes, even if preview browsing still works normally
-- `originalPreserved` should describe archival intent/state, not crop state, not presentation state, and not whether preview rendering is available
-
-## **Continued `imageUrl` compatibility role**
-
-- `imageUrl` must remain supported for backward compatibility
-- `imageUrl` should continue functioning as a preview-facing compatibility mirror of `images.preview.src`
-- Existing code and backups may continue reading `imageUrl` until both apps are fully migrated
-- `imageUrl` should not remain the long-term canonical image container once both apps are fully normalized around `images.*`
-
-## **Local-first behavior now**
-
-- Local-first behavior should continue working without backend or sync changes
-- `images.preview` should be treated as the canonical local render asset
-- `images.thumbnail` may be omitted and fall back to preview
-- `images.original` should remain optional
-- Normal browsing, outfit generation, board generation, and exports should not require original archival assets
-- Backup/import/export behavior must remain backward-compatible during this phase
-
-## **Future cloud behavior**
-
-- `images.preview` should remain the canonical sync-safe render asset across devices
-- `images.thumbnail` should remain optional but preferred for large grids and low-bandwidth views
-- `images.original` should remain optional archival storage, potentially private and quota-limited
-- Cloud sync should allow items to remain valid even when only preview/thumbnail assets are available locally
-- Original archival assets and preview render assets should remain conceptually separate so that storage policy can evolve without changing the item contract
-
-## **Migration rule for legacy `imageUrl` items**
-
-- Legacy items with only `imageUrl` should migrate additively, not destructively
-- During normalization/import, legacy items should gain `images.preview` derived from `imageUrl`
-- `imageUrl` must continue being preserved during the compatibility window
-- Migration should not assume that a legacy `imageUrl` implies a true preserved original archival asset
-- Legacy items should receive safe defaults for missing `images.original`, `images.thumbnail`, and `originalPreserved`
-
-## **What must not change yet**
-
-- Do not remove `imageUrl` compatibility yet
-- Do not change backup payload behavior yet
-- Do not change import/export behavior yet
-- Do not rewrite crop, frame scale, offset, or presentation behavior yet
-- Do not change the current meaning of persisted crop/presentation fields without explicit migration handling
-- Do not require originals for normal browsing, generation, or export yet
-
 # **Relationship model**
 
 - Garment → many outfits.
@@ -275,6 +185,38 @@ Meaning of each image asset:
 - linked references
 - multi-outfit generation
 - canvas-style outfit comparison
+
+## OA Garment Lifecycle / Acquisition Pipeline
+
+OA should eventually support garment lifecycle states instead of treating every item as simply owned.
+
+Possible lifecycle states:
+- inspiration
+- under evaluation
+- wishlist
+- active target
+- grail
+- owned
+- maybe sell
+- archived
+- retired
+- sold
+
+The goal is not to create separate databases for wishlist, archive, sold, and owned items. The goal is one garment/item model with a lifecycle/status field.
+
+These states have different behavior:
+- owned items can be used in normal outfit generation
+- wishlist or active-target items may be used for planning outfits
+- inspiration items may inform style direction but should not appear as owned wardrobe items
+- sold/retired items should remain linked to historical outfits, fitpics, and notes
+- maybe-sell items remain owned but may need filtering or review views
+- grail/investment/collector pieces may need different priority or acquisition tracking
+
+This supports a future acquisition pipeline:
+inspiration → under evaluation → wishlist/active target → owned → archived/retired/sold
+
+Lifecycle state should be treated separately from tags. Tags describe what an item is or evokes; lifecycle state describes where the item sits in the wardrobe/acquisition process.
+
 ## **Climate system**
 - > 24°C → Hot
 - 16–24°C → Warm
