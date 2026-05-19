@@ -81,9 +81,10 @@ Ownership:
 
 ## **Current priorities**
 
-- improve cropping
-- mobile wardrobe controls below cards
-- bottom-sheet behavior
+- need a description field like in MBA  
+- need search in wardrobe window like in MBA  
+- list filter in library wardrobe: should also be multi select like in controls
+- the view in wardrobe should be like in MBA full screen without the editor on the right
 - separate sort from filter
 
 ## **Current implemented foundations**
@@ -444,6 +445,9 @@ Spec location:
 
 ## **OA**
 
+- improve cropping
+- mobile wardrobe controls below cards
+- bottom-sheet behavior
 - linked references
 - wardrobe-role metadata
 - multi-outfit generation
