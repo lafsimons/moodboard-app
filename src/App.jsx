@@ -85,6 +85,7 @@ import {
   replaceItemOriginalImage
 } from "./lib/itemImages";
 import { normalizeItemSourceIdentity } from "./lib/itemIdentity";
+import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
 import TagInput from "./components/TagInput";
 import {
   getAllTags,
@@ -4467,6 +4468,22 @@ export default function App() {
 
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
 
+  useEffect(() => {
+    if (!board?.images?.length || (typeof board.boardUuid === "string" && board.boardUuid.trim())) {
+      return;
+    }
+
+    setBoard((current) => ensureBoardUuid(current));
+  }, [board]);
+
+  useEffect(() => {
+    if (!savedOutfits.some((savedOutfit) => savedOutfit?.board && !(typeof savedOutfit.board.boardUuid === "string" && savedOutfit.board.boardUuid.trim()))) {
+      return;
+    }
+
+    setSavedOutfits((current) => current.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)));
+  }, [savedOutfits]);
+
   useEffect(() => () => {
     if (boardRelayoutFrameRef.current) {
       cancelAnimationFrame(boardRelayoutFrameRef.current);
@@ -4486,9 +4503,9 @@ export default function App() {
       locked,
       excluded,
       outfit,
-      board,
+      board: ensureBoardUuid(board),
       ignoredImportImages,
-      savedOutfits,
+      savedOutfits: savedOutfits.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)),
       likedOutfitKeys,
       outfitAffinity,
       recentOutfits,
@@ -4556,9 +4573,9 @@ export default function App() {
       locked,
       excluded,
       outfit,
-      board,
+      board: ensureBoardUuid(board),
       ignoredImportImages,
-      savedOutfits,
+      savedOutfits: savedOutfits.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)),
       likedOutfitKeys,
       outfitAffinity,
       recentOutfits,

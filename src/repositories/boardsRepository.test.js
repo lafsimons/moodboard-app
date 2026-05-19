@@ -44,6 +44,7 @@ test("normalizeSavedOutfits deduplicates equivalent saved boards", () => {
       {
         id: "saved-1",
         board: {
+          boardUuid: "board-uuid-1",
           images: [{ referenceId: "itemA" }]
         },
         outfit: {}
@@ -51,6 +52,7 @@ test("normalizeSavedOutfits deduplicates equivalent saved boards", () => {
       {
         id: "saved-2",
         board: {
+          boardUuid: "board-uuid-2",
           images: [{ referenceId: "itemA" }]
         },
         outfit: {}
@@ -61,6 +63,7 @@ test("normalizeSavedOutfits deduplicates equivalent saved boards", () => {
 
   assert.equal(normalized.length, 1);
   assert.equal(normalized[0].id, "saved-1");
+  assert.ok(normalized[0].board.boardUuid);
 });
 
 test("hydrateSavedBoards filters missing board references and falls back to legacy outfits", () => {
@@ -158,9 +161,23 @@ test("normalizeBoard preserves valid board images and fills defaults", () => {
     dependencies.itemsById
   );
 
+  assert.ok(normalized.boardUuid);
   assert.equal(normalized.images[0].generationSlot, "TopInner");
   assert.equal(normalized.images[0].width, 150);
   assert.equal(normalized.images[0].referenceItemUuid, "uuid-a");
+});
+
+test("normalizeBoard preserves existing boardUuid values", () => {
+  const normalized = normalizeBoard(
+    {
+      boardUuid: "board-uuid-1",
+      images: [{ referenceId: "itemA" }]
+    },
+    visibleSlots,
+    dependencies.itemsById
+  );
+
+  assert.equal(normalized.boardUuid, "board-uuid-1");
 });
 
 test("normalizeBoard preserves existing referenceItemUuid values for unresolved ids", () => {
@@ -174,4 +191,25 @@ test("normalizeBoard preserves existing referenceItemUuid values for unresolved 
 
   assert.equal(normalized.images[0].referenceId, "missing");
   assert.equal(normalized.images[0].referenceItemUuid, "uuid-missing");
+});
+
+test("hydrateSavedBoards backfills missing boardUuid values for legacy boards", () => {
+  const hydrated = hydrateSavedBoards(
+    [
+      {
+        id: "saved-legacy-board",
+        board: {
+          id: "legacy-board",
+          images: [{ referenceId: "itemA" }]
+        },
+        outfit: {}
+      }
+    ],
+    [dependencies.itemsById.itemA],
+    dependencies
+  );
+
+  assert.equal(hydrated.length, 1);
+  assert.equal(hydrated[0].board.id, "legacy-board");
+  assert.ok(hydrated[0].board.boardUuid);
 });

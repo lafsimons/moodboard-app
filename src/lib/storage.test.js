@@ -308,10 +308,51 @@ test("prepareBackupImport accepts moodboard-app backups", () => {
   assert.equal(prepared.source, "moodboard-app");
   assert.equal(prepared.version, 2);
   assert.equal(prepared.items[0].id, "item-1");
+  assert.equal(prepared.appState.board, undefined);
   assert.deepEqual(prepared.appState, {
     savedOutfits: [],
     recentOutfits: []
   });
+});
+
+test("prepareBackupImport preserves and backfills boardUuid for persisted boards and saved boards", () => {
+  const prepared = prepareBackupImport({
+    source: "moodboard-app",
+    version: 2,
+    exportedAt: "2026-05-18T12:00:00.000Z",
+    items: [],
+    appState: {
+      board: {
+        id: "active-board",
+        boardUuid: "board-uuid-active",
+        images: [{ referenceId: "item-1" }]
+      },
+      savedOutfits: [
+        {
+          id: "saved-legacy",
+          board: {
+            id: "legacy-board",
+            images: [{ referenceId: "item-1" }]
+          }
+        },
+        {
+          id: "saved-current",
+          board: {
+            id: "current-board",
+            boardUuid: "board-uuid-saved",
+            images: [{ referenceId: "item-2" }]
+          }
+        }
+      ],
+      recentOutfits: [{ id: "drop-me" }]
+    }
+  });
+
+  assert.equal(prepared.appState.board.boardUuid, "board-uuid-active");
+  assert.ok(prepared.appState.savedOutfits[0].board.boardUuid);
+  assert.equal(prepared.appState.savedOutfits[0].board.id, "legacy-board");
+  assert.equal(prepared.appState.savedOutfits[1].board.boardUuid, "board-uuid-saved");
+  assert.deepEqual(prepared.appState.recentOutfits, []);
 });
 
 test("backup import export round-trip preserves unknown list values", () => {

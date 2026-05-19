@@ -7,6 +7,7 @@ import {
   SUPPORTED_BACKUP_SOURCES,
   SUPPORTED_BACKUP_VERSIONS
 } from "./appIdentity.js";
+import { ensureBoardUuid, ensureSavedBoardUuid } from "./boardIdentity.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 
 const DB_VERSION = 2;
@@ -256,8 +257,12 @@ function normalizeBackupAppState(appState) {
     throw new Error("Backup app state is invalid.");
   }
 
+  const normalizedBoard = ensureBoardUuid(appState.board);
+
   return {
     ...appState,
+    ...(normalizedBoard === undefined ? {} : { board: normalizedBoard }),
+    savedOutfits: Array.isArray(appState.savedOutfits) ? appState.savedOutfits.map(ensureSavedBoardUuid) : appState.savedOutfits,
     recentOutfits: []
   };
 }

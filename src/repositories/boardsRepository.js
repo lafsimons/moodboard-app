@@ -1,3 +1,5 @@
+import { createBoardUuid, normalizeBoardUuid } from "../lib/boardIdentity.js";
+
 function normalizeBoardImageReferenceItemUuid(image, itemsById) {
   if (typeof image?.referenceItemUuid === "string" && image.referenceItemUuid.trim()) {
     return image.referenceItemUuid;
@@ -24,6 +26,7 @@ export function normalizeBoard(board, visibleSlots = [], itemsById = {}) {
 
   return {
     id: typeof board.id === "string" ? board.id : `board_${Date.now()}`,
+    boardUuid: normalizeBoardUuid(board.boardUuid) || createBoardUuid(),
     width: Math.max(800, Math.round(Number(board.width) || 1600)),
     height: Math.max(600, Math.round(Number(board.height) || 1200)),
     images
