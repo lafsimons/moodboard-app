@@ -17,20 +17,20 @@ Avoid introducing isolated app-specific systems when reusable/shared concepts al
 
 ```bash
 npm run dev -- --host 0.0.0.0
-````
+```
 
-## **OA**
+## OA
 
 - https://layerfit.vercel.app/ — current primary mobile dataset
 - http://localhost:5173/
 
-## **MBA**
+## MBA
 
 - http://localhost:5174/ — current primary Mac dataset
 
 ---
 
-# **Development philosophy**
+# Current development philosophy
 
 - Continue feature work normally.
 - Avoid large-scale rewrites during active feature development.
@@ -45,55 +45,79 @@ npm run dev -- --host 0.0.0.0
 
 ---
 
-# **Active priorities**
+# Active priorities
 
-## **OA**
+## OA
 
 - improve cropping
 - mobile wardrobe controls below cards
 - bottom-sheet behavior
 - separate sort from filter
 
-## **MBA**
+### OA selection & bulk-management direction
 
-### **Tags**
+OA now uses an explicit manage/select mode instead of always-on selection behavior.
+
+Normal mode preserves outfit/equip interaction.
+
+Manage/select mode is intended for:
+- bulk metadata editing
+- batch wardrobe/wishlist operations
+- future lifecycle operations
+- future relationship editing
+- future sync-safe batch actions
+
+OA is action-oriented and state-oriented.
+
+This is intentionally different from MBA’s current always-selection-first library behavior.
+
+MBA is exploration-oriented and browsing-oriented.
+
+MBA may later adopt a related browse/select distinction for library interactions while preserving board interactions.
+
+---
+
+## MBA
+
+### Tags
 
 - infinite nesting support
 - keyboard selection improvements
 - rename hierarchy issues
 
-### **Crop**
+### Crop
 
 - incorrect crop boundaries
 - oversized crop UI on tall images
 
-### **Canvas**
+### Canvas
 
 - occasional distortion
 - preview/render mismatch
 
 ---
 
-# **Active refactor state**
+# Active refactor state
 
-## **OA**
+## OA
 
-### **Current extraction progress**
+### Current extraction progress
 
-- Extracted item metadata and normalization helpers from `App.jsx` into:
-    - `src/lib/itemModel.js`
-- Added:
-    - `src/lib/itemModel.test.js`
-- Extracted image presentation normalization helpers from `App.jsx` into:
-    - `src/lib/imagePresentation.js`
-- Added:
-    - `src/lib/imagePresentation.test.js`
+Extracted from `App.jsx`:
 
-### **Current refactor goal**
+- `src/lib/itemModel.js`
+- `src/lib/imagePresentation.js`
+
+Added:
+
+- `src/lib/itemModel.test.js`
+- `src/lib/imagePresentation.test.js`
+
+### Current refactor goal
 
 Reduce `App.jsx` responsibilities incrementally without changing behavior.
 
-### **Current intentional boundaries**
+### Current intentional boundaries
 
 The following remain intentionally inside `App.jsx` for now:
 
@@ -106,15 +130,39 @@ The following remain intentionally inside `App.jsx` for now:
 
 These systems remain tightly coupled and behavior-sensitive.
 
+### Current extraction guidance
+
+- Prefer extracting pure utility logic first.
+- Keep extraction targets dependency-light.
+- Avoid circular abstractions.
+- Avoid prematurely building shared UI systems.
+- Shared utilities are preferred before shared component layers.
+
 Build/tests passed after current extraction steps.
+
+### Known OA architectural concerns
+
+- Dresses/Jumpsuits slot integration
+- TopInner accepting Outerwear
+- minimum guided-score floor
+- config-table refactor for defaults
+- tiny wardrobe fixture datasets for testing
+
+### Deferred OA lifecycle systems
+
+Define garment lifecycle/acquisition pipeline before implementing:
+- wishlist
+- archive
+- sold states
+- acquisition tracking
 
 ---
 
-# **Sensitive systems**
+# Sensitive systems
 
-## **Image system**
+## Image system
 
-Crop, scale, frame scale, offset, preview rendering, and export alignment are tightly connected.
+Crop, scale, frame scale, offset, preview rendering, rendered bounds, and export alignment are tightly connected.
 
 Do not casually “clean up”:
 
@@ -122,10 +170,10 @@ Do not casually “clean up”:
 - export math
 - image transforms
 - preview alignment
+- rendered/stored bounds alignment
 - migration behavior
 
 Future crop fixes should ideally happen only after:
-
 - isolating behavior
 - adding regression coverage
 - validating export compatibility
@@ -134,7 +182,7 @@ Avoid changing persisted image fields unless migration/backward compatibility is
 
 ---
 
-## **Metadata & persistence**
+## Metadata & persistence
 
 - preserve import metadata
 - preserve timestamps
@@ -146,12 +194,11 @@ Historical continuity matters.
 
 ---
 
-## **Generation systems**
+## Generation systems
 
 Generation behavior should remain stable during refactors.
 
 Avoid unintentionally changing:
-
 - scoring behavior
 - weighting behavior
 - filtering behavior
@@ -162,12 +209,13 @@ Add small regression fixtures/tests where useful.
 
 ---
 
-# **Shared-system extraction opportunities**
+# Shared-system extraction opportunities
 
 The ecosystem should gradually move toward shared reusable infrastructure instead of duplicated app-specific implementations.
 
-Potential shared systems:
+Prefer shared pure utility logic before shared UI abstractions.
 
+Potential shared systems:
 - bulk editing
 - multi-select
 - tag editing
@@ -181,7 +229,6 @@ Potential shared systems:
 - export/import backups
 
 Prefer reusable abstractions when already touching:
-
 - image systems
 - metadata
 - filters
@@ -192,17 +239,7 @@ Prefer reusable abstractions when already touching:
 
 ---
 
-# **OA architectural concerns**
-
-- Dresses/Jumpsuits slot integration
-- TopInner accepting Outerwear
-- minimum guided-score floor
-- config-table refactor for defaults
-- tiny wardrobe fixture datasets for testing
-
----
-
-# **MBA cleanup direction**
+# MBA cleanup direction
 
 - rename remaining Outfit-App identifiers
 - remove obsolete copied root files
@@ -211,10 +248,9 @@ Prefer reusable abstractions when already touching:
 
 ---
 
-# **Deferred systems**
+# Deferred systems
 
 Do not prioritize yet:
-
 - accounts
 - public sharing
 - cloud sync
@@ -222,8 +258,9 @@ Do not prioritize yet:
 - object-storage relinking
 - large-scale storage migrations
 
-Before sync/cloud work:
+Sync readiness should still influence current architectural decisions.
 
+Before sync/cloud work:
 - extract reusable modules from `App.jsx`
 - standardize storage shapes
 - standardize export/import structures
@@ -234,7 +271,7 @@ IndexedDB should continue functioning as the active local-first layer until shar
 
 ---
 
-# **Known architectural risks**
+# Known architectural risks
 
 - `App.jsx` still contains tightly coupled image/export behavior.
 - Crop/export alignment remains fragile.
@@ -245,9 +282,9 @@ IndexedDB should continue functioning as the active local-first layer until shar
 
 ---
 
-# **Temporary ideas / backlog**
+# Temporary ideas / backlog
 
-## **OA**
+## OA
 
 - linked references
 - lifecycle tracking
@@ -255,7 +292,7 @@ IndexedDB should continue functioning as the active local-first layer until shar
 - multi-outfit generation
 - canvas-style outfit comparison
 
-## **MBA**
+## MBA
 
 - bulk rename
 - ordered board generation
