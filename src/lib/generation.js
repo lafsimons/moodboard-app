@@ -1043,10 +1043,12 @@ export function boardToSyntheticOutfit(board) {
 
 export function createBoardFromReferenceIds(referenceIds = [], layoutOptions = {}) {
   const normalizedReferenceIds = referenceIds.filter(Boolean);
+  const itemsByReferenceId = layoutOptions.itemsByReferenceId ?? {};
   const relaidBoard = relayoutBoardImages(
     normalizedReferenceIds.map((referenceId, index) => ({
       id: createBoardId("board_image"),
       referenceId,
+      referenceItemUuid: itemsByReferenceId[referenceId]?.itemUuid ?? "",
       generationSlot: getBoardGenerationSlot(index)
     })),
     layoutOptions
@@ -3054,6 +3056,7 @@ export function generateBoard({
     return {
       id: createBoardId("board_image"),
       referenceId: selected?.item?.id ?? null,
+      referenceItemUuid: selected?.item?.itemUuid ?? "",
       generationSlot: selected?.generationSlot ?? getBoardGenerationSlot(index),
       ...frame
     };
@@ -3126,6 +3129,7 @@ export function rerollBoardImage({
       boardImage: {
         ...targetImage,
         referenceId: selection.item.id,
+        referenceItemUuid: selection.item.itemUuid ?? "",
         generationSlot: boardGenerationSlots.includes(targetImage.generationSlot)
           ? targetImage.generationSlot
           : getBoardGenerationSlot(board.images.findIndex((image) => image.id === imageId))
@@ -3185,6 +3189,7 @@ export function rerollBoardImage({
     boardImage: {
       ...targetImage,
       referenceId: selection.item.id,
+      referenceItemUuid: selection.item.itemUuid ?? "",
       generationSlot
     },
     guidedDebugEntry: normalizeGenerationMode(generationMode) === "guided" && selection.breakdown

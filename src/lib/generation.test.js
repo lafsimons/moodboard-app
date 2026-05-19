@@ -418,6 +418,72 @@ test("formal structure rejects casual shirt with smart-casual footwear", () => {
   assert.ok(!actual.includes("shoe_boots"));
 });
 
+test("generateBoard stamps referenceItemUuid without changing referenceId links", () => {
+  const references = [
+    createMoodboardReference("ref-1", [], { itemUuid: "uuid-1" }),
+    createMoodboardReference("ref-2", [], { itemUuid: "uuid-2" }),
+    createMoodboardReference("ref-3", [], { itemUuid: "uuid-3" })
+  ];
+
+  const result = generateBoard({
+    items: references,
+    imageCount: 3,
+    generationMode: "random"
+  });
+
+  assert.equal(result.board.images.length, 3);
+  result.board.images.forEach((image) => {
+    const sourceItem = references.find((item) => item.id === image.referenceId);
+    assert.ok(sourceItem);
+    assert.equal(image.referenceItemUuid, sourceItem.itemUuid);
+  });
+});
+
+test("createBoardFromReferenceIds can carry additive referenceItemUuid metadata", async () => {
+  const { createBoardFromReferenceIds } = await import("./generation.js");
+  const board = createBoardFromReferenceIds(["ref-1"], {
+    itemsByReferenceId: {
+      "ref-1": { id: "ref-1", itemUuid: "uuid-1" }
+    }
+  });
+
+  assert.equal(board.images[0].referenceId, "ref-1");
+  assert.equal(board.images[0].referenceItemUuid, "uuid-1");
+});
+
+test("rerollBoardImage preserves active id behavior while stamping referenceItemUuid", () => {
+  const references = [
+    createMoodboardReference("ref-1", [], { itemUuid: "uuid-1" }),
+    createMoodboardReference("ref-2", [], { itemUuid: "uuid-2" })
+  ];
+  const result = rerollBoardImage({
+    board: {
+      id: "board-1",
+      images: [
+        {
+          id: "image-1",
+          referenceId: "ref-1",
+          referenceItemUuid: "uuid-1",
+          generationSlot: "TopInner",
+          x: 0,
+          y: 0,
+          width: 220,
+          height: 260,
+          rotation: 0,
+          zIndex: 1
+        }
+      ]
+    },
+    imageId: "image-1",
+    items: references,
+    generationMode: "random"
+  });
+
+  assert.ok(result);
+  assert.equal(result.boardImage.referenceId, "ref-2");
+  assert.equal(result.boardImage.referenceItemUuid, "uuid-2");
+});
+
 test("formal structure treats knit-vest as bridge instead of a formal anchor", () => {
   const actual = eligiblePoolIds(
     "Footwear",

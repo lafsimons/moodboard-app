@@ -4126,7 +4126,10 @@ export default function App() {
     const validReferenceIds = referenceIds.filter((referenceId) => sourceItemsById[referenceId]);
 
     if (validReferenceIds.length) {
-      return createBoardFromReferenceIds(validReferenceIds, boardLayoutOptions);
+      return createBoardFromReferenceIds(validReferenceIds, {
+        ...boardLayoutOptions,
+        itemsByReferenceId: sourceItemsById
+      });
     }
 
     return buildGeneratedBoard(filteredSourceItems, {
@@ -6413,7 +6416,7 @@ export default function App() {
         ...current,
         images: current.images.map((image) =>
           image.referenceId === draft.id
-            ? { ...image, referenceId: nextItem.id }
+            ? { ...image, referenceId: nextItem.id, referenceItemUuid: nextItem.itemUuid || image.referenceItemUuid || "" }
             : image
         )
       } : current);
@@ -6422,15 +6425,15 @@ export default function App() {
           ...savedOutfit,
           outfit: replaceItemIdInOutfit(savedOutfit.outfit, draft.id, nextItem.id),
           board: savedOutfit.board
-            ? {
-                ...savedOutfit.board,
-                images: savedOutfit.board.images.map((image) =>
-                  image.referenceId === draft.id
-                    ? { ...image, referenceId: nextItem.id }
-                    : image
-                )
-              }
-            : savedOutfit.board
+              ? {
+                  ...savedOutfit.board,
+                  images: savedOutfit.board.images.map((image) =>
+                    image.referenceId === draft.id
+                      ? { ...image, referenceId: nextItem.id, referenceItemUuid: nextItem.itemUuid || image.referenceItemUuid || "" }
+                      : image
+                  )
+                }
+              : savedOutfit.board
         }))
       );
     }
@@ -7001,10 +7004,12 @@ export default function App() {
         return current;
       }
 
+      const nextItemUuid = itemsById[referenceId]?.itemUuid ?? "";
+
       return relayoutBoardStateImages(
         current.images.map((image) =>
           image.id === imageId
-            ? { ...image, referenceId }
+            ? { ...image, referenceId, referenceItemUuid: nextItemUuid || image.referenceItemUuid || "" }
             : image
         )
       );
@@ -7341,7 +7346,8 @@ export default function App() {
             }
           },
           {
-            visibleSlots
+            visibleSlots,
+            itemsById
           }
         ),
         ...current

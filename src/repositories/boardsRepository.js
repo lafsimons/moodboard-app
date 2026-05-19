@@ -1,11 +1,20 @@
-export function normalizeBoard(board, visibleSlots = []) {
+function normalizeBoardImageReferenceItemUuid(image, itemsById) {
+  if (typeof image?.referenceItemUuid === "string" && image.referenceItemUuid.trim()) {
+    return image.referenceItemUuid;
+  }
+
+  const resolvedItem = itemsById?.[image?.referenceId];
+  return typeof resolvedItem?.itemUuid === "string" ? resolvedItem.itemUuid.trim() : "";
+}
+
+export function normalizeBoard(board, visibleSlots = [], itemsById = {}) {
   if (!board || typeof board !== "object") {
     return null;
   }
 
   const images = Array.isArray(board.images)
     ? board.images
-        .map((image, index) => normalizeBoardImage(image, index, visibleSlots))
+        .map((image, index) => normalizeBoardImage(image, index, visibleSlots, itemsById))
         .filter((entry) => entry?.referenceId)
     : [];
 
@@ -21,7 +30,7 @@ export function normalizeBoard(board, visibleSlots = []) {
   };
 }
 
-function normalizeBoardImage(image, index = 0, visibleSlots = []) {
+function normalizeBoardImage(image, index = 0, visibleSlots = [], itemsById = {}) {
   if (!image || typeof image !== "object") {
     return null;
   }
@@ -33,6 +42,7 @@ function normalizeBoardImage(image, index = 0, visibleSlots = []) {
   return {
     id: typeof image.id === "string" ? image.id : `board_image_${index}`,
     referenceId: typeof image.referenceId === "string" ? image.referenceId : "",
+    referenceItemUuid: normalizeBoardImageReferenceItemUuid(image, itemsById),
     x: Math.round(Number(image.x) || 0),
     y: Math.round(Number(image.y) || 0),
     width,
@@ -48,7 +58,7 @@ export function normalizeSavedOutfit(savedOutfit, dependencies) {
     id: savedOutfit.id,
     name: savedOutfit.name ?? "Saved board",
     description: savedOutfit.description ?? "",
-    board: normalizeBoard(savedOutfit.board, dependencies.visibleSlots),
+    board: normalizeBoard(savedOutfit.board, dependencies.visibleSlots, dependencies.itemsById),
     outfit: savedOutfit.outfit ?? {},
     layering: Boolean(savedOutfit.layering)
   };
@@ -80,7 +90,7 @@ export function normalizeSavedOutfits(savedOutfits, dependencies) {
 export function hydrateSavedBoards(rawSavedOutfits, sourceItems, dependencies) {
   return normalizeSavedOutfits(rawSavedOutfits, dependencies)
     .map((savedOutfit) => {
-      const boardFromState = normalizeBoard(savedOutfit.board, dependencies.visibleSlots);
+      const boardFromState = normalizeBoard(savedOutfit.board, dependencies.visibleSlots, dependencies.itemsById);
       const hydratedBoard = boardFromState
         ? {
             ...boardFromState,
@@ -99,7 +109,7 @@ export function hydrateSavedBoards(rawSavedOutfits, sourceItems, dependencies) {
 }
 
 export function resolveBoardFromAppState(appState, sourceItems, dependencies) {
-  const normalizedBoard = normalizeBoard(appState?.board, dependencies.visibleSlots);
+  const normalizedBoard = normalizeBoard(appState?.board, dependencies.visibleSlots, dependencies.itemsById);
 
   if (normalizedBoard?.images?.length) {
     const filteredBoard = {
