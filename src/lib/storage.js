@@ -59,10 +59,20 @@ function normalizeSyncTimestamp(value) {
   return Number.isFinite(parsedValue) ? new Date(parsedValue).toISOString() : "";
 }
 
-function createDefaultSyncState(deviceId = "") {
+function normalizeSyncState(record, fallbackDeviceId = "", now = getCurrentSyncTimestamp()) {
+  const normalizedDeviceId = normalizeSyncText(record?.deviceId) || normalizeSyncText(fallbackDeviceId);
+  const normalizedCreatedAt = normalizeSyncTimestamp(record?.createdAt);
+  const normalizedUpdatedAt = normalizeSyncTimestamp(record?.updatedAt);
+  const createdAt = normalizedCreatedAt || normalizedUpdatedAt || now;
+  const updatedAt = normalizedUpdatedAt || normalizedCreatedAt || createdAt;
+
   return {
     key: SYNC_STATE_KEY,
-    deviceId: normalizeSyncText(deviceId)
+    deviceId: normalizedDeviceId,
+    createdAt,
+    updatedAt,
+    lastPushCursor: normalizeSyncText(record?.lastPushCursor),
+    lastPullCursor: normalizeSyncText(record?.lastPullCursor)
   };
 }
 
@@ -569,15 +579,20 @@ export async function saveAppState(value) {
 
 export async function getOrCreateDeviceId() {
   const existingState = await withStore(SYNC_STATE_STORE, "readonly", (store) => store.get(SYNC_STATE_KEY));
-  const existingDeviceId = normalizeSyncText(existingState?.deviceId);
+  const normalizedExistingState = normalizeSyncState(existingState);
 
-  if (existingDeviceId) {
-    return existingDeviceId;
+  if (normalizedExistingState.deviceId) {
+    if (JSON.stringify(existingState) !== JSON.stringify(normalizedExistingState)) {
+      await withStore(SYNC_STATE_STORE, "readwrite", (store) => store.put(normalizedExistingState));
+    }
+
+    return normalizedExistingState.deviceId;
   }
 
   const nextDeviceId = createDeviceId();
+  const nextState = normalizeSyncState(existingState, nextDeviceId);
   await withStore(SYNC_STATE_STORE, "readwrite", (store) =>
-    store.put(createDefaultSyncState(nextDeviceId))
+    store.put(nextState)
   );
   return nextDeviceId;
 }

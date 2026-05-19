@@ -194,7 +194,7 @@ function seedStore(indexedDb, databaseName, storeName, keyPath, records) {
   });
 }
 
-test("createLightweightBackupData preserves preview as the portable render asset", () => {
+test("createLightweightBackupData preserves preview as the portable render asset and leaves sync state out of backup exports", () => {
   const backup = createLightweightBackupData([
     {
       id: "item-1",
@@ -278,11 +278,99 @@ test("getOrCreateDeviceId creates and reuses a stable local device id", async ()
   const firstDeviceId = await getOrCreateDeviceId();
   const secondDeviceId = await getOrCreateDeviceId();
   const syncStateStore = indexedDb.getDatabase("moodboard-app-db").stores.get("syncState");
+  const syncState = syncStateStore.records.get("state");
 
   assert.equal(firstDeviceId.length > 0, true);
   assert.equal(secondDeviceId, firstDeviceId);
   assert.equal(syncStateStore.records.size, 1);
-  assert.equal(syncStateStore.records.get("state").deviceId, firstDeviceId);
+  assert.equal(syncState.deviceId, firstDeviceId);
+  assert.equal(typeof syncState.createdAt, "string");
+  assert.equal(typeof syncState.updatedAt, "string");
+  assert.equal(syncState.createdAt.length > 0, true);
+  assert.equal(syncState.updatedAt.length > 0, true);
+  assert.equal(syncState.lastPushCursor, "");
+  assert.equal(syncState.lastPullCursor, "");
+});
+
+test("getOrCreateDeviceId migrates an existing minimal sync state row to the full shared shape", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  seedStore(indexedDb, "moodboard-app-db", "syncState", "key", [
+    {
+      key: "state",
+      deviceId: "device-existing"
+    }
+  ]);
+
+  const deviceId = await getOrCreateDeviceId();
+  const syncState = indexedDb.getDatabase("moodboard-app-db").stores.get("syncState").records.get("state");
+
+  assert.equal(deviceId, "device-existing");
+  assert.deepEqual(syncState, {
+    key: "state",
+    deviceId: "device-existing",
+    createdAt: syncState.createdAt,
+    updatedAt: syncState.updatedAt,
+    lastPushCursor: "",
+    lastPullCursor: ""
+  });
+  assert.equal(syncState.createdAt.length > 0, true);
+  assert.equal(syncState.updatedAt.length > 0, true);
+});
+
+test("getOrCreateDeviceId preserves an existing device id while normalizing sync state", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  seedStore(indexedDb, "moodboard-app-db", "syncState", "key", [
+    {
+      key: "state",
+      deviceId: "device-preserved",
+      createdAt: "2026-05-01T10:00:00.000Z",
+      updatedAt: "2026-05-02T11:30:00.000Z",
+      lastPushCursor: " push-1 ",
+      lastPullCursor: "pull-1"
+    }
+  ]);
+
+  const deviceId = await getOrCreateDeviceId();
+  const syncState = indexedDb.getDatabase("moodboard-app-db").stores.get("syncState").records.get("state");
+
+  assert.equal(deviceId, "device-preserved");
+  assert.deepEqual(syncState, {
+    key: "state",
+    deviceId: "device-preserved",
+    createdAt: "2026-05-01T10:00:00.000Z",
+    updatedAt: "2026-05-02T11:30:00.000Z",
+    lastPushCursor: "push-1",
+    lastPullCursor: "pull-1"
+  });
+});
+
+test("getOrCreateDeviceId safely normalizes invalid or missing sync state fields", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  seedStore(indexedDb, "moodboard-app-db", "syncState", "key", [
+    {
+      key: "state",
+      deviceId: "device-normalized",
+      createdAt: "not-a-date",
+      updatedAt: 123,
+      lastPushCursor: null,
+      lastPullCursor: 42
+    }
+  ]);
+
+  const deviceId = await getOrCreateDeviceId();
+  const syncState = indexedDb.getDatabase("moodboard-app-db").stores.get("syncState").records.get("state");
+
+  assert.equal(deviceId, "device-normalized");
+  assert.equal(syncState.key, "state");
+  assert.equal(syncState.deviceId, "device-normalized");
+  assert.equal(syncState.createdAt.length > 0, true);
+  assert.equal(syncState.updatedAt.length > 0, true);
+  assert.equal(syncState.createdAt, syncState.updatedAt);
+  assert.equal(syncState.lastPushCursor, "");
+  assert.equal(syncState.lastPullCursor, "");
 });
 
 test("backfillLocalSyncMetadata creates local-only reference metadata keyed by itemUuid", async () => {
