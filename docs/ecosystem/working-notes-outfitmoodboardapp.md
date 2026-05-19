@@ -11,6 +11,9 @@ Before making changes, read:
 Preserve ecosystem direction and shared architectural goals.
 Avoid isolated app-specific systems when reusable/shared concepts already exist.
 
+Current sync/cloud implementation spec:
+- `/Users/lafsimons/Desktop/outfit-app/docs/ecosystem/sync-cloud-v1-outfitmoodboardapp.md`
+
 ---
 
 # Local environments
@@ -378,6 +381,25 @@ Before major sync/cloud work:
 - reduce duplicated OA/MBA infrastructure
 
 IndexedDB remains the active local-first layer for now.
+
+## **Sync/cloud v1 direction**
+
+Documented implementation direction:
+
+- IndexedDB remains runtime source/cache
+- cloud becomes durable sync target/source
+- preview assets sync first
+- originals remain optional/deferred
+- `itemUuid` is canonical cloud identity
+- `id` remains legacy/local-active
+- OA and MBA remain separate apps
+- hub remains resolver/router, not workflow owner
+- no collaboration/public sharing in v1
+- v1 conflicts use last-write-wins with timestamps/device metadata
+
+Spec location:
+
+- `/Users/lafsimons/Desktop/outfit-app/docs/ecosystem/sync-cloud-v1-outfitmoodboardapp.md`
 
 ---
 

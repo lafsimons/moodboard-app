@@ -51,6 +51,7 @@ The system could reveal:
 - Stable architecture belongs in `core.md`.
 - Temporary ideas, fixes, and implementation notes belong in `working-notes.md`.
 - Document the future portable shared schema before hub/sync/cloud implementation expands.
+- Use `sync-cloud-v1-outfitmoodboardapp.md` as the concrete first implementation spec for private sync/cloud rollout.
 
 ## App work
 - Stabilize repository-boundary refactors in OA and MBA.
@@ -70,6 +71,7 @@ Before implementing accounts/sync/cloud:
 - standardize portable hub item/link/backup contract
 - remove duplicated OA/MBA infrastructure
 - keep feature work moving while gradually modularizing shared systems
+- complete missing additive stable UUID fields for any syncable non-item entities before rollout
 
 ## Moodboard app cleanup
 
