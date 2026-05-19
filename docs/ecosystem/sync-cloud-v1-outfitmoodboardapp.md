@@ -82,6 +82,83 @@ The goal is to move from browser-only persistence toward a sync-ready architectu
 
 ---
 
+## Shared local sync contract
+
+### syncState
+
+Both OA and MBA use a normalized local singleton sync state:
+
+```js
+{
+  key: "state",
+  deviceId: "",
+  createdAt: "",
+  updatedAt: "",
+  lastPushCursor: "",
+  lastPullCursor: ""
+}
+````
+
+### **syncMetadata**
+
+Both OA and MBA use normalized per-record sync metadata:
+
+```js
+{
+  key: "",
+  entityType: "",
+  stableKey: "",
+  localId: "",
+  recordVersion: 0,
+  syncStatus: "",
+  lastSyncedAt: "",
+  lastModifiedByDevice: "",
+  pendingDelete: false,
+  lastSyncError: "",
+  lastLocalChangeAt: ""
+}
+```
+
+### **entityType values**
+
+OA:
+
+- `oaItem`
+- `oaSavedOutfit`
+
+MBA:
+
+- `mbaReference`
+- `mbaBoard`
+
+### **local sync key format**
+
+OA:
+
+- `oa:item:<itemUuid>`
+- `oa:savedOutfit:<outfitUuid>`
+
+MBA:
+
+- `mba:reference:<itemUuid>`
+- `mba:board:<boardUuid>`
+
+### **behavioral rules**
+
+- IndexedDB remains runtime source of truth.
+- Sync metadata is additive only.
+- Stable UUIDs are canonical sync identity.
+- Legacy local ids remain runtime-active during migration.
+- Deletes create tombstones instead of removing sync metadata.
+- Rename/id rewrites must preserve one stable metadata row.
+- Sync metadata is excluded from backup export.
+- Sync metadata is rebuilt on backup import/reset.
+- Current MBA working board remains local-only.
+- Dirty marking increments `recordVersion`.
+- `lastLocalChangeAt` updates on local mutations.
+
+---
+
 # **Supabase schema**
 
 ## **Conventions**

@@ -132,12 +132,38 @@ Implemented:
     - `sourceOriginalFilename`
     - `relinkStatus`
     - `importSource`
+- additive `outfitUuid`
+- additive `boardUuid`
 
 Current behavior:
 
 - `id` still drives runtime outfit relationships
 - UUID sidecars are additive only
 - no UUID-based runtime lookup yet
+
+## Current sync/cloud preparation state
+
+Implemented locally in both OA and MBA:
+
+- dedicated `syncState` + `syncMetadata` IndexedDB stores
+- stable local `deviceId`
+- sync metadata backfill for existing records
+- dirty marking for syncable entities
+- tombstone delete handling
+- stable UUID-based sync keys
+- aligned local sync metadata contract across OA and MBA
+- sync metadata excluded from backup export
+- sync metadata rebuilt on backup import/reset
+
+Current behavior:
+
+- IndexedDB remains runtime source of truth
+- no cloud sync yet
+- no auth yet
+- no Supabase integration yet
+- no collaboration/public sharing
+- MBA current working board remains local-only
+- preview-first asset sync direction remains planned
 
 ## **Image contract direction**
 
