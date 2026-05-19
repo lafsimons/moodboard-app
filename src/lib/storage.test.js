@@ -298,6 +298,58 @@ test("prepareBackupImport accepts moodboard-app backups", () => {
   });
 });
 
+test("backup import export round-trip preserves unknown list values", () => {
+  const backup = createLightweightBackupData(
+    [
+      {
+        id: "item-1",
+        list: "Incoming",
+        imageUrl: "data:image/webp;base64,preview-only",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "backup.png",
+        images: {
+          original: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0,
+            fileSize: 0,
+            originalFilename: ""
+          },
+          preview: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0,
+            fileSize: 0,
+            originalFilename: ""
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0,
+            fileSize: 0,
+            originalFilename: ""
+          }
+        }
+      }
+    ],
+    {
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  );
+
+  const prepared = prepareBackupImport(backup);
+
+  assert.equal(backup.items[0].list, "Incoming");
+  assert.equal(prepared.items[0].list, "Incoming");
+});
+
 test("prepareBackupImport rejects invalid payloads before replacement", () => {
   assert.throws(
     () => prepareBackupImport({

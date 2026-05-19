@@ -242,7 +242,12 @@ export const typeDefaultsByKey = {
 };
 
 export function normalizeList(list) {
-  return itemLists.includes(list) ? list : "Wardrobe";
+  if (typeof list !== "string") {
+    return "Wardrobe";
+  }
+
+  const normalizedList = list.trim();
+  return normalizedList || "Wardrobe";
 }
 
 export function normalizeItemType(type) {
