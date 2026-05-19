@@ -75,6 +75,12 @@ MBA is exploration-oriented and browsing-oriented.
 
 MBA may later adopt a related browse/select distinction for library interactions while preserving board interactions.
 
+OA future UX question:
+- Reconsider wardrobe card click behavior now that preview and select mode exist.
+- Current behavior: normal click equips, double-click previews.
+- Possible future behavior: click opens preview, explicit Equip button equips.
+- Do not change until mobile/desktop workflow is tested.
+
 ---
 
 ## MBA
