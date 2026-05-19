@@ -81,11 +81,11 @@ Ownership:
 
 ## **Current priorities**
 
-- need a description field like in MBA  
-- need search in wardrobe window like in MBA  
-- list filter in library wardrobe: should also be multi select like in controls
-- the view in wardrobe should be like in MBA full screen without the editor on the right
-- separate sort from filter
+- in multi select, actions should open dropdown: favorite, move, exclude, delete. then clicking them, opens the controls. remove style and climate from here. edit should open bulk editor 
+- Refactor Fitpics into broader Outfits section
+- when clicking a button in the main toolbar (e.g. wardrobe) and then clicking esc, there is a blue outline visible after
+- Fix OA filter popover positioning and clipping
+- Normalize wardrobe card image rendering so garments use a consistent visual safe area.
 
 ## **Current implemented foundations**
 
@@ -452,7 +452,29 @@ Spec location:
 - wardrobe-role metadata
 - multi-outfit generation
 - canvas-style outfit comparison
-
+- Unify overlay systems
+	- preview
+	- filter popover
+	- select actions
+	- edit drawers
+	- saved outfits
+	- manage dialogs
+	- all likely want one shared overlay/modal architecture eventually.
+- transparent PNG auto-fit
+	- Explore detecting visible pixel bounds for transparent PNGs so garments with huge transparent margins render more consistently.
+	- Do not implement auto-fit yet unless simple and low-risk.
+	- This may need cached metadata such as visibleBounds.
+- Later: Wardrobe density modes
+	- Add optional wardrobe grid density modes once the base card layout is stable.
+	- Modes:
+		- Comfortable: current visual browsing layout
+		- Compact: more columns, smaller gaps, name-only cards for large wardrobes
+	- Requirements:
+	- preserve image aspect ratio
+	- preserve visual safe area
+	- preserve selection/preview behavior
+	- make setting persistent
+	- avoid adding this before the main card layout stabilizes
 ## **MBA**
 
 - bulk rename
