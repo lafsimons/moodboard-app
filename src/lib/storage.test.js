@@ -190,6 +190,10 @@ test("createLightweightBackupData preserves preview as the portable render asset
     {
       id: "item-1",
       itemUuid: "uuid-1",
+      importSource: "oa-backup",
+      relinkStatus: "hub-awaiting-rebind",
+      styleTags: ["Smart Casual"],
+      climateTags: ["Cold"],
       imageUrl: "data:image/webp;base64,legacy-preview",
       images: {
         original: {
@@ -198,7 +202,8 @@ test("createLightweightBackupData preserves preview as the portable render asset
           width: 3000,
           height: 2000,
           fileSize: 9000,
-          originalFilename: "look.jpg"
+          originalFilename: "look.jpg",
+          checksum: "orig-checksum"
         },
         preview: {
           src: "data:image/webp;base64,preview",
@@ -206,7 +211,8 @@ test("createLightweightBackupData preserves preview as the portable render asset
           width: 1400,
           height: 933,
           fileSize: 1500,
-          originalFilename: "look.jpg"
+          originalFilename: "look.jpg",
+          cdnPath: "/portable/preview.webp"
         },
         thumbnail: {
           src: "data:image/webp;base64,thumb",
@@ -214,7 +220,8 @@ test("createLightweightBackupData preserves preview as the portable render asset
           width: 520,
           height: 346,
           fileSize: 300,
-          originalFilename: "look.jpg"
+          originalFilename: "look.jpg",
+          blurHash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj"
         }
       },
       originalPreserved: true
@@ -228,7 +235,16 @@ test("createLightweightBackupData preserves preview as the portable render asset
   assert.equal(backup.items[0].imageUrl, "data:image/webp;base64,preview");
   assert.equal(backup.items[0].imageWidth, 1400);
   assert.equal(backup.items[0].originalPreserved, false);
-  assert.equal(backup.items[0].images.preview.src, "");
+  assert.equal(backup.items[0].images.original.src, "");
+  assert.equal(backup.items[0].images.original.checksum, "orig-checksum");
+  assert.equal(backup.items[0].images.preview.src, "data:image/webp;base64,preview");
+  assert.equal(backup.items[0].images.preview.cdnPath, "/portable/preview.webp");
+  assert.equal(backup.items[0].images.thumbnail.src, "data:image/webp;base64,thumb");
+  assert.equal(backup.items[0].images.thumbnail.blurHash, "LEHV6nWB2yk8pyo0adR*.7kCMdnj");
+  assert.equal(backup.items[0].importSource, "oa-backup");
+  assert.equal(backup.items[0].relinkStatus, "hub-awaiting-rebind");
+  assert.deepEqual(backup.items[0].styleTags, ["Smart Casual"]);
+  assert.deepEqual(backup.items[0].climateTags, ["Cold"]);
   assert.deepEqual(backup.appState, {
     savedOutfits: []
   });
@@ -348,6 +364,88 @@ test("backup import export round-trip preserves unknown list values", () => {
 
   assert.equal(backup.items[0].list, "Incoming");
   assert.equal(prepared.items[0].list, "Incoming");
+});
+
+test("backup import export round-trip preserves OA-shaped portable fields except stripped original binary src", () => {
+  const backup = createLightweightBackupData(
+    [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        importSource: "oa-backup",
+        relinkStatus: "hub-awaiting-rebind",
+        styleTags: ["Formal"],
+        climateTags: ["Rain"],
+        tags: ["archive/source"],
+        imageUrl: "data:image/webp;base64,preview",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "backup.png",
+        images: {
+          original: {
+            src: "data:image/png;base64,original",
+            mimeType: "image/png",
+            width: 3000,
+            height: 2000,
+            fileSize: 9999,
+            originalFilename: "backup.png",
+            checksum: "orig-checksum"
+          },
+          preview: {
+            src: "data:image/webp;base64,preview",
+            mimeType: "image/webp",
+            width: 1200,
+            height: 800,
+            fileSize: 1111,
+            originalFilename: "backup.png",
+            cdnPath: "/portable/preview.webp"
+          },
+          thumbnail: {
+            src: "data:image/webp;base64,thumb",
+            mimeType: "image/webp",
+            width: 480,
+            height: 320,
+            fileSize: 222,
+            originalFilename: "backup.png",
+            blurHash: "thumb-hash"
+          }
+        },
+        originalPreserved: true
+      }
+    ],
+    {
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  );
+
+  const prepared = prepareBackupImport(backup);
+  const reExported = createLightweightBackupData(prepared.items, prepared.appState);
+
+  assert.equal(prepared.items[0].importSource, "oa-backup");
+  assert.equal(prepared.items[0].relinkStatus, "hub-awaiting-rebind");
+  assert.deepEqual(prepared.items[0].styleTags, ["Formal"]);
+  assert.deepEqual(prepared.items[0].climateTags, ["Rain"]);
+  assert.deepEqual(prepared.items[0].tags, ["archive/source"]);
+  assert.equal(prepared.items[0].images.original.src, "");
+  assert.equal(prepared.items[0].images.original.checksum, "orig-checksum");
+  assert.equal(prepared.items[0].images.preview.src, "data:image/webp;base64,preview");
+  assert.equal(prepared.items[0].images.preview.cdnPath, "/portable/preview.webp");
+  assert.equal(prepared.items[0].images.thumbnail.src, "data:image/webp;base64,thumb");
+  assert.equal(prepared.items[0].images.thumbnail.blurHash, "thumb-hash");
+  assert.equal(prepared.items[0].originalPreserved, false);
+
+  assert.equal(reExported.items[0].importSource, "oa-backup");
+  assert.equal(reExported.items[0].relinkStatus, "hub-awaiting-rebind");
+  assert.deepEqual(reExported.items[0].styleTags, ["Formal"]);
+  assert.deepEqual(reExported.items[0].climateTags, ["Rain"]);
+  assert.deepEqual(reExported.items[0].tags, ["archive/source"]);
+  assert.equal(reExported.items[0].images.original.src, "");
+  assert.equal(reExported.items[0].images.original.checksum, "orig-checksum");
+  assert.equal(reExported.items[0].images.preview.src, "data:image/webp;base64,preview");
+  assert.equal(reExported.items[0].images.thumbnail.src, "data:image/webp;base64,thumb");
 });
 
 test("prepareBackupImport rejects invalid payloads before replacement", () => {

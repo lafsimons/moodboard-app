@@ -29,25 +29,41 @@ function getOrientation(width, height) {
 }
 
 export function createImageAsset(asset = {}) {
+  const {
+    src,
+    mimeType,
+    width,
+    height,
+    fileSize,
+    originalFilename,
+    ...rest
+  } = asset && typeof asset === "object" && !Array.isArray(asset) ? asset : {};
+
   return {
-    src: normalizeImageText(asset.src),
-    mimeType: normalizeImageText(asset.mimeType),
-    width: normalizeImageNumber(asset.width),
-    height: normalizeImageNumber(asset.height),
-    fileSize: normalizeImageNumber(asset.fileSize),
-    originalFilename: normalizeImageText(asset.originalFilename)
+    ...rest,
+    src: normalizeImageText(src),
+    mimeType: normalizeImageText(mimeType),
+    width: normalizeImageNumber(width),
+    height: normalizeImageNumber(height),
+    fileSize: normalizeImageNumber(fileSize),
+    originalFilename: normalizeImageText(originalFilename)
   };
 }
 
 function mergeImageAssets(primary = {}, fallback = {}) {
-  return createImageAsset({
-    src: primary.src || fallback.src || "",
-    mimeType: primary.mimeType || fallback.mimeType || "",
-    width: primary.width || fallback.width || 0,
-    height: primary.height || fallback.height || 0,
-    fileSize: primary.fileSize || fallback.fileSize || 0,
-    originalFilename: primary.originalFilename || fallback.originalFilename || ""
-  });
+  const normalizedPrimary = createImageAsset(primary);
+  const normalizedFallback = createImageAsset(fallback);
+
+  return {
+    ...normalizedFallback,
+    ...normalizedPrimary,
+    src: normalizedPrimary.src || normalizedFallback.src || "",
+    mimeType: normalizedPrimary.mimeType || normalizedFallback.mimeType || "",
+    width: normalizedPrimary.width || normalizedFallback.width || 0,
+    height: normalizedPrimary.height || normalizedFallback.height || 0,
+    fileSize: normalizedPrimary.fileSize || normalizedFallback.fileSize || 0,
+    originalFilename: normalizedPrimary.originalFilename || normalizedFallback.originalFilename || ""
+  };
 }
 
 function getLegacyPreviewAsset(item) {
@@ -66,10 +82,9 @@ export function normalizeItemImages(item) {
   const preview = mergeImageAssets(createImageAsset(item?.images?.preview), legacyPreview);
   const thumbnail = createImageAsset(item?.images?.thumbnail);
   const original = createImageAsset(item?.images?.original);
-  const hasExplicitOriginal = Boolean(original.src);
   const originalPreserved = typeof item?.originalPreserved === "boolean"
     ? item.originalPreserved
-    : hasExplicitOriginal;
+    : false;
 
   return {
     original,

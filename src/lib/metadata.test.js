@@ -136,7 +136,26 @@ test("sanitizeExportedReference emits simplified metadata shape", () => {
   assert.equal(exported.cameraMake, "Canon");
 });
 
-test("sanitizeBackupReference strips embedded backups down to one preview legacy image", () => {
+test("migrateReferenceMetadataToTags preserves opaque relinkStatus importSource and OA portable metadata", () => {
+  const migrated = migrateReferenceMetadataToTags({
+    id: "1",
+    imageUrl: "data:image/webp;base64,preview",
+    originalFilename: "photo.jpg",
+    relinkStatus: "hub-awaiting-rebind",
+    importSource: "oa-backup",
+    styleTags: ["Smart Casual"],
+    climateTags: ["Cold"],
+    tags: ["archive"]
+  });
+
+  assert.equal(migrated.relinkStatus, "hub-awaiting-rebind");
+  assert.equal(migrated.importSource, "oa-backup");
+  assert.deepEqual(migrated.styleTags, ["Smart Casual"]);
+  assert.deepEqual(migrated.climateTags, ["Cold"]);
+  assert.deepEqual(migrated.tags, ["archive"]);
+});
+
+test("sanitizeBackupReference preserves portable preview assets and strips only embedded original src", () => {
   const exported = sanitizeBackupReference({
     id: "1",
     imageUrl: "data:image/webp;base64,preview",
@@ -147,7 +166,8 @@ test("sanitizeBackupReference strips embedded backups down to one preview legacy
         width: 3000,
         height: 2400,
         fileSize: 9000,
-        originalFilename: "photo.jpg"
+        originalFilename: "photo.jpg",
+        checksum: "orig-checksum"
       },
       preview: {
         src: "data:image/webp;base64,preview",
@@ -155,7 +175,8 @@ test("sanitizeBackupReference strips embedded backups down to one preview legacy
         width: 1200,
         height: 960,
         fileSize: 1200,
-        originalFilename: "photo.jpg"
+        originalFilename: "photo.jpg",
+        cdnPath: "/portable/preview.webp"
       },
       thumbnail: {
         src: "data:image/webp;base64,thumb",
@@ -163,7 +184,8 @@ test("sanitizeBackupReference strips embedded backups down to one preview legacy
         width: 480,
         height: 384,
         fileSize: 300,
-        originalFilename: "photo.jpg"
+        originalFilename: "photo.jpg",
+        blurHash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj"
       }
     },
     originalPreserved: true
@@ -177,8 +199,11 @@ test("sanitizeBackupReference strips embedded backups down to one preview legacy
   assert.equal(exported.fileSize, 1200);
   assert.equal(exported.originalFilename, "photo.jpg");
   assert.equal(exported.images.original.src, "");
-  assert.equal(exported.images.preview.src, "");
-  assert.equal(exported.images.thumbnail.src, "");
+  assert.equal(exported.images.original.checksum, "orig-checksum");
+  assert.equal(exported.images.preview.src, "data:image/webp;base64,preview");
+  assert.equal(exported.images.preview.cdnPath, "/portable/preview.webp");
+  assert.equal(exported.images.thumbnail.src, "data:image/webp;base64,thumb");
+  assert.equal(exported.images.thumbnail.blurHash, "LEHV6nWB2yk8pyo0adR*.7kCMdnj");
 });
 
 test("getAllTags returns sorted unique library tags", () => {

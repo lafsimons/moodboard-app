@@ -80,6 +80,111 @@ MBA = Moodboard-App
 - Stable immutable IDs are foundational for relationships, sync, relinking, migrations, and long-term data integrity.
 - Relationships should survive renames, lifecycle changes, and storage migrations.
 
+## **Portable hub schema direction**
+
+The future shared ecosystem contract should stay portable, additive, and app-owned. The hub should route, resolve, index, and link cross-app data, but should not become the place where domain workflows are owned.
+
+### **HubItem**
+
+- `HubItem` should represent the portable cross-app view of an entity.
+- `itemUuid` is the stable cross-app item identity.
+- `id` remains app-local and may stay active during migration and compatibility phases.
+- A `HubItem` should carry enough shared metadata for routing, linking, previews, backup, import/export, and cross-app resolution without flattening app-specific behavior.
+- OA should remain the owning app for outfits.
+- MBA should remain the owning app for boards and references.
+- App-specific metadata must remain preserved rather than silently collapsed into a lowest-common-denominator shape.
+- Long-term provenance, import, and source metadata should converge between OA and MBA where possible.
+
+Minimal direction:
+
+```js
+{
+  itemUuid: "",
+  id: "",
+  app: "oa" | "mba",
+  kind: "",
+  title: "",
+  preview: {},
+  metadata: {},
+  provenance: {}
+}
+```
+
+### **HubLink**
+
+- `HubLink` should represent portable relationships between items across OA and MBA.
+- Relationships may carry additive UUID sidecars while legacy/local ids remain active.
+- During transition, existing `id`-based relationships should continue working.
+- New relationship shapes should increasingly preserve both local compatibility and stable cross-app resolution.
+- Links should remain additive and migration-safe rather than forcing abrupt key replacement.
+
+Minimal direction:
+
+```js
+{
+  type: "",
+  sourceId: "",
+  targetId: "",
+  sourceItemUuid: "",
+  targetItemUuid: "",
+  metadata: {}
+}
+```
+
+### **HubBackup**
+
+- `HubBackup` should package portable items, portable links, and app-owned payloads in one durable export/import shape.
+- The backup layer should preserve unknown fields where possible.
+- The backup layer should not discard app-specific metadata simply because another app does not yet understand it.
+- Portable/shared fields should be normalized, but app-owned payloads should remain intact.
+- The contract should support forward-compatible additive fields and backward-compatible import behavior.
+
+Minimal direction:
+
+```js
+{
+  version: 1,
+  items: [],
+  links: [],
+  apps: {
+    oa: {},
+    mba: {}
+  }
+}
+```
+
+### **Preview-first asset policy**
+
+- Preview assets are the portable default asset class for hub, sync, backup, and cross-device rendering.
+- Preview assets should be sufficient for hub v1.
+- Original assets are optional and archival.
+- Hub v1 should not require originals to exist, sync, or restore normal browsing behavior.
+- The hub should prefer sync-safe preview assets over archival completeness requirements.
+
+### **Stable identity rules**
+
+- `itemUuid` is the long-term stable identity across apps, backups, sync, relinking, and migrations.
+- `id` remains app-local and legacy-active during transition.
+- Existing local ids should not be invalidated abruptly.
+- Relationship systems may add UUID sidecars before switching canonical resolution logic.
+- Stable identity must survive rename operations, app refactors, storage changes, and backup round-trips.
+
+### **App ownership rules**
+
+- OA owns outfit workflows and outfit records.
+- MBA owns board and reference workflows and records.
+- The hub should resolve and route shared entities between apps, not own outfit-editing or board-editing workflows itself.
+- Shared contracts should support cross-app linking without erasing domain boundaries.
+
+### **Compatibility rules**
+
+- Unknown fields should be preserved where possible.
+- App-specific metadata must not be silently collapsed or dropped.
+- Shared schemas should be additive first.
+- Import/export should remain backward-compatible where feasible.
+- New portable fields should coexist with old local fields during migration.
+- Provenance/import/source metadata should move toward convergence instead of diverging between OA and MBA.
+
 # **Metadata & lifecycle**
 
 - Add richer metadata beyond existing style/climate tags.

@@ -50,6 +50,7 @@ The system could reveal:
     - optional `roadmap.md`
 - Stable architecture belongs in `core.md`.
 - Temporary ideas, fixes, and implementation notes belong in `working-notes.md`.
+- Document the future portable shared schema before hub/sync/cloud implementation expands.
 
 ## App work
 - Stabilize repository-boundary refactors in OA and MBA.
@@ -66,6 +67,7 @@ Before implementing accounts/sync/cloud:
 - extract reusable modules from App.jsx
 - standardize storage shapes
 - standardize backup/export structure
+- standardize portable hub item/link/backup contract
 - remove duplicated OA/MBA infrastructure
 - keep feature work moving while gradually modularizing shared systems
 
@@ -75,4 +77,3 @@ Before implementing accounts/sync/cloud:
 - clean obsolete copied root files
 - separate app identity from shared infrastructure
 - improve repo structure before public sharing
-

@@ -33,10 +33,15 @@ export function createItemUuid() {
 }
 
 export function normalizeRelinkStatus(value, fallback = "pending") {
-  const normalizedValue = normalizeIdentityText(value).toLowerCase();
+  const trimmedValue = normalizeIdentityText(value);
+  const normalizedValue = trimmedValue.toLowerCase();
 
   if (relinkStatusValues.includes(normalizedValue)) {
     return normalizedValue;
+  }
+
+  if (trimmedValue) {
+    return trimmedValue;
   }
 
   return relinkStatusValues.includes(fallback) ? fallback : "pending";
@@ -51,6 +56,7 @@ export function normalizeItemSourceIdentity(item, options = {}) {
 
   return {
     itemUuid: normalizeIdentityText(item?.itemUuid) || createItemUuid(),
+    importSource: normalizeIdentityText(item?.importSource),
     sourceNamespace: normalizeIdentityText(item?.sourceNamespace),
     sourceRelativePath: normalizeIdentityText(item?.sourceRelativePath),
     sourceOriginalFilename: normalizeIdentityText(item?.sourceOriginalFilename) || fallbackSourceOriginalFilename,

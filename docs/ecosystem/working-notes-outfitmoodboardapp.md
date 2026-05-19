@@ -53,6 +53,7 @@ npm run dev -- --host 0.0.0.0
 - canonical shared `images.original / preview / thumbnail` contract direction
 - additive provenance/import metadata direction
 - prepared/normalized backup import direction
+- portable hub item/link/backup contract direction
 - explicit select/manage UX direction
 - bulk editing foundations
 - stable-link preparation direction
@@ -77,6 +78,20 @@ npm run dev -- --host 0.0.0.0
 - freeform nested tagging
 - board canvas interactions
 - browse-oriented interaction model
+
+## Portable hub contract notes
+
+- `itemUuid` is the stable cross-app item identity.
+- `id` remains app-local and legacy-active during transition.
+- Relationships may carry additive UUID sidecars while old ids remain active.
+- Preview assets are the portable default.
+- Originals remain optional and archival for hub v1.
+- OA owns outfits.
+- MBA owns boards and references.
+- The hub should route and resolve shared entities, not own domain workflows.
+- Unknown fields should be preserved where possible.
+- App-specific metadata must not be silently collapsed.
+- Long-term provenance/import/source metadata should converge between OA and MBA.
 
 ---
 

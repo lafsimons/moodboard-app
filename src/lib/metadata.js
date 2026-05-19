@@ -120,6 +120,22 @@ function isEmbeddedImageDataUrl(value) {
   return typeof value === "string" && value.startsWith("data:image/");
 }
 
+function stripEmbeddedImageAssetSrc(asset = {}) {
+  const normalizedAsset = createPortableBackupAsset(asset);
+  return isEmbeddedImageDataUrl(normalizedAsset.src)
+    ? {
+        ...normalizedAsset,
+        src: ""
+      }
+    : normalizedAsset;
+}
+
+function createPortableBackupAsset(asset = {}) {
+  return {
+    ...asset
+  };
+}
+
 export function sanitizeBackupReference(reference) {
   const exported = sanitizeExportedReference(reference);
 
@@ -148,32 +164,11 @@ export function sanitizeBackupReference(reference) {
     imageHeight: backupPreviewAsset.height ?? 0,
     fileSize: backupPreviewAsset.fileSize ?? 0,
     originalFilename: backupPreviewAsset.originalFilename ?? exported.originalFilename ?? "",
-    originalPreserved: false,
+    originalPreserved: isEmbeddedImageDataUrl(originalAsset.src) ? false : exported.originalPreserved,
     images: {
-      original: {
-        src: "",
-        mimeType: "",
-        width: 0,
-        height: 0,
-        fileSize: 0,
-        originalFilename: ""
-      },
-      preview: {
-        src: "",
-        mimeType: "",
-        width: 0,
-        height: 0,
-        fileSize: 0,
-        originalFilename: ""
-      },
-      thumbnail: {
-        src: "",
-        mimeType: "",
-        width: 0,
-        height: 0,
-        fileSize: 0,
-        originalFilename: ""
-      }
+      original: stripEmbeddedImageAssetSrc(originalAsset),
+      preview: createPortableBackupAsset(previewAsset),
+      thumbnail: createPortableBackupAsset(thumbnailAsset)
     }
   };
 }

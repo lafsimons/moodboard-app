@@ -61,6 +61,69 @@ test("normalizeItemImages migrates legacy single-image items without wiping meta
   assert.equal(item.imageCropWidth, 75);
 });
 
+test("normalizeItemImages preserves unknown nested image asset fields during normalization", () => {
+  const normalized = normalizeItemImages({
+    images: {
+      original: {
+        src: "data:image/png;base64,original",
+        mimeType: "image/png",
+        width: 2400,
+        height: 1800,
+        originalFilename: "original.png",
+        assetKey: "orig-1",
+        checksum: "abc123"
+      },
+      preview: {
+        src: "data:image/webp;base64,preview",
+        mimeType: "image/webp",
+        width: 1200,
+        height: 900,
+        originalFilename: "preview.png",
+        cdnPath: "/portable/preview.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,thumb",
+        mimeType: "image/webp",
+        width: 480,
+        height: 360,
+        originalFilename: "thumb.png",
+        dominantColor: "#111111"
+      }
+    }
+  });
+
+  assert.equal(normalized.original.assetKey, "orig-1");
+  assert.equal(normalized.original.checksum, "abc123");
+  assert.equal(normalized.preview.cdnPath, "/portable/preview.webp");
+  assert.equal(normalized.thumbnail.dominantColor, "#111111");
+});
+
+test("normalizeItemImages defaults originalPreserved to false when missing even if original src exists", () => {
+  const normalized = normalizeItemImages({
+    images: {
+      original: {
+        src: "data:image/png;base64,original"
+      }
+    }
+  });
+
+  assert.equal(normalized.original.src, "data:image/png;base64,original");
+  assert.equal(normalized.originalPreserved, false);
+});
+
+test("normalizeItemImages preserves explicit originalPreserved true", () => {
+  const normalized = normalizeItemImages({
+    images: {
+      original: {
+        src: "data:image/png;base64,original"
+      }
+    },
+    originalPreserved: true
+  });
+
+  assert.equal(normalized.originalPreserved, true);
+});
+
 test("image src helpers fall back across original preview and thumbnail without duplicating runtime state", () => {
   const item = {
     imageUrl: "data:image/webp;base64,preview",
