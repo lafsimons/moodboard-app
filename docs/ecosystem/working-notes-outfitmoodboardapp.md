@@ -17,20 +17,20 @@ Avoid introducing isolated app-specific systems when reusable/shared concepts al
 
 ```bash
 npm run dev -- --host 0.0.0.0
-````
+```
 
-## **OA**
+## OA
 
 - https://layerfit.vercel.app/ — current primary mobile dataset
 - http://localhost:5173/
 
-## **MBA**
+## MBA
 
 - http://localhost:5174/ — current primary Mac dataset
 
 ---
 
-# **Current development philosophy**
+# Current development philosophy
 
 - Continue feature work normally.
 - Avoid large-scale rewrites during active feature development.
@@ -45,16 +45,66 @@ npm run dev -- --host 0.0.0.0
 
 ---
 
-# **Active priorities**
+# Current ecosystem convergence state
 
-## **OA**
+## Shared/aligned so far
+
+- additive `itemUuid` identity direction
+- canonical shared `images.original / preview / thumbnail` contract direction
+- additive provenance/import metadata direction
+- prepared/normalized backup import direction
+- explicit select/manage UX direction
+- bulk editing foundations
+- stable-link preparation direction
+- additive migration philosophy
+- local-first IndexedDB persistence direction
+- compatibility-first import/export philosophy
+
+## Still intentionally different
+
+### OA
+
+- structured garment/outfit-slot system
+- guided outfit generation
+- structured style/climate metadata
+- action-oriented interaction model
+- outfit/equip-first UX
+
+### MBA
+
+- board/reference workflows
+- exploratory visual browsing
+- freeform nested tagging
+- board canvas interactions
+- browse-oriented interaction model
+
+---
+
+# Active priorities
+
+## OA
 
 - improve cropping
 - mobile wardrobe controls below cards
 - bottom-sheet behavior
 - separate sort from filter
 
-### **OA selection & bulk-management direction**
+### OA currently implemented
+
+- explicit select/manage mode
+- bulk metadata editing
+- bulk wardrobe/wishlist operations
+- preview overlay system
+- additive import provenance metadata
+- stable `itemUuid`
+- canonical `images.*` normalization
+- normalized backup import preparation
+- lifecycle states:
+  - wishlist
+  - incoming
+  - wardrobe
+
+### OA current interaction direction
 
 OA now uses an explicit manage/select mode instead of always-on selection behavior.
 
@@ -63,38 +113,65 @@ Normal mode preserves outfit/equip interaction.
 Manage/select mode is intended for:
 
 - bulk metadata editing
-- batch wardrobe/wishlist operations
+- batch operations
 - future lifecycle operations
 - future relationship editing
-- future sync-safe batch actions
+- future sync-safe actions
 
-OA is action-oriented and state-oriented.
+OA is intentionally:
+- action-oriented
+- state-oriented
+- outfit-oriented
 
-This is intentionally different from MBA’s current always-selection-first library behavior.
+This is intentionally different from MBA’s browsing-oriented interaction model.
 
-MBA is exploration-oriented and browsing-oriented.
+### OA current lifecycle direction
 
-MBA may later adopt a related browse/select distinction for library interactions while preserving board interactions.
+`incoming` represents items that are acquired/purchased but not yet physically available.
 
-OA future UX question:
+The current `list` field is gradually evolving toward a broader garment lifecycle/acquisition pipeline.
 
-- Reconsider wardrobe card click behavior now that preview and select mode exist.
-- Current behavior: normal click equips, double-click previews.
-- Possible future behavior: click opens preview, explicit Equip button equips.
-- Do not change until mobile/desktop workflow is tested.
+Current lightweight lifecycle states:
 
-### **OA current sync/cloud preparation progress**
+- wishlist
+- incoming
+- wardrobe
+
+Deferred future lifecycle states:
+
+- archive
+- sold
+- retired
+
+Do not prematurely redesign the lifecycle model yet.
+
+Current list behavior should remain lightweight and backward-compatible during active feature development.
+
+### OA current sync/cloud preparation state
+
+#### Stable identity
 
 Implemented:
 
-- stable `itemUuid` identity field
-- additive import provenance metadata
-- canonical shared `images.original / preview / thumbnail` normalization
-- explicit preview overlay system
-- explicit select/manage mode
-- bulk metadata editing and batch operations
+- additive `itemUuid`
+- migration-safe `itemUuid` backfill
+- preserved compatibility with existing `id` references
 
-Current additive provenance fields:
+Current compatibility behavior:
+
+- `id` remains the active relationship key
+- outfit references remain `id`-based
+- saved outfit references remain `id`-based
+
+Future direction:
+
+- gradually move toward stable identity relationships
+- preserve compatibility during migration
+- avoid abrupt canonical-key switches
+
+#### Import provenance
+
+Implemented additive provenance fields:
 
 - `importedAt`
 - `sourceOriginalFilename`
@@ -104,51 +181,67 @@ Current additive provenance fields:
 - `sourceLastModified`
 - `importSource`
 
-Current shared image contract direction:
+Current behavior:
 
-- `images.preview` should become the canonical shared render contract
+- provenance captured during upload
+- provenance preserved through normalization/import/export
+- provenance does not overwrite historical timestamps
+
+#### Shared image contract direction
+
+Current contract:
+
+- `images.preview` is the future canonical render contract
 - `imageUrl` remains a compatibility mirror of `images.preview.src`
-- `images.original` remains optional and archival-oriented
+- `images.original` is optional and archival-oriented
 - `originalPreserved` must never be inferred automatically
-- original storage strategy is still deferred
 
-Current stable identity direction:
+Current compatibility behavior:
 
-- `itemUuid` is the future canonical relationship/sync identity
-- current `id` behavior remains active during compatibility transition
-- outfit references and saved outfit references are still `id`-based for now
+- legacy `imageUrl` items continue working
+- unknown `images.*` fields are preserved
+- runtime still primarily renders through `imageUrl`
 
-Known future sync blockers:
+Deferred:
 
-- relationship systems still point at mutable `id`
-- OA backup import/export remains simpler than MBA
-- OA runtime rendering still primarily uses `imageUrl`
-- originals are not preserved yet
-- shared asset repository architecture is not finalized
+- original-image preservation strategy
+- object/blob storage strategy
+- canonical asset repository architecture
+
+### OA future UX question
+
+Current behavior:
+- click equips
+- double-click previews
+
+Possible future direction:
+- click previews
+- explicit Equip button equips
+
+Do not change until desktop/mobile workflow behavior is validated.
 
 ---
 
-## **MBA**
+## MBA
 
-### **Tags**
+### MBA currently implemented
 
-- infinite nesting support
-- keyboard selection improvements
-- rename hierarchy issues
+- freeform nested tagging
+- multi-select library interactions
+- board canvas interactions
+- reference preview overlay
+- additive `itemUuid`
+- additive `referenceItemUuid`
+- richer import metadata pipeline
+- preview/original/thumbnail image contract
+- backup normalization/import preparation
 
-### **Crop**
+### MBA current interaction direction
 
-- incorrect crop boundaries
-- oversized crop UI on tall images
-
-### **Canvas**
-
-- occasional distortion
-- preview/render mismatch
-
-### **MBA interaction direction**
-
-MBA currently remains exploration-oriented and browsing-oriented.
+MBA remains:
+- exploration-oriented
+- browsing-oriented
+- reference-oriented
 
 Current library behavior:
 
@@ -160,19 +253,70 @@ Current library behavior:
 Possible future direction:
 
 - explicit browse/select distinction for library interactions
-- preserve current board interaction behavior
+- preserve board interaction behavior
 - preserve double-click preview behavior
 - preserve existing bulk/tag workflows
 
 Do not casually merge OA interaction assumptions into MBA board interactions.
 
+### MBA stable-link preparation direction
+
+MBA board images now carry additive `referenceItemUuid` metadata alongside the existing `referenceId`.
+
+Current behavior remains intentionally unchanged:
+
+- `referenceId` is still the active runtime/render relationship key
+- board rendering still resolves through `referenceId`
+- saved-board dedupe and board keys still use `referenceId`
+- delete/repair behavior still operates through `referenceId`
+
+`referenceItemUuid` currently acts as additive stable-link metadata only.
+
+Purpose:
+
+- prepare future sync/cloud support
+- prepare stable cross-app relationships
+- reduce future dependence on mutable `id`
+- support future relinking/recovery flows
+
+Current compatibility strategy:
+
+- old boards with only `referenceId` must continue working unchanged
+- new boards may contain both `referenceId` and `referenceItemUuid`
+- backup/import behavior must remain backward-compatible
+- no runtime fallback to UUID-based lookup yet
+
+Future direction:
+
+- gradually move relationship systems toward stable identity
+- preserve compatibility during the migration window
+- avoid abrupt canonical-key switches
+
+### MBA active issues
+
+#### Tags
+
+- infinite nesting support
+- keyboard selection improvements
+- rename hierarchy edge cases
+
+#### Crop
+
+- incorrect crop boundaries
+- oversized crop UI on tall images
+
+#### Canvas
+
+- occasional distortion
+- preview/render mismatch
+
 ---
 
-# **Active refactor state**
+# Active refactor state
 
-## **OA**
+## OA
 
-### **Current extraction progress**
+### Current extraction progress
 
 Extracted from `App.jsx`:
 
@@ -182,8 +326,9 @@ Extracted from `App.jsx`:
 - `src/lib/selectionModel.js`
 - `src/lib/bulkEdit.js`
 - `src/lib/importMetadata.js`
+- `src/lib/backupImport.js`
 
-Added:
+Added tests:
 
 - `src/lib/itemModel.test.js`
 - `src/lib/imagePresentation.test.js`
@@ -191,6 +336,7 @@ Added:
 - `src/lib/selectionModel.test.js`
 - `src/lib/bulkEdit.test.js`
 - `src/lib/importMetadata.test.js`
+- `src/lib/backupImport.test.js`
 
 Current extracted components:
 
@@ -198,11 +344,11 @@ Current extracted components:
 - `PreviewOverlay`
 - `WardrobeSelectionBar`
 
-### **Current refactor goal**
+### Current refactor goal
 
 Reduce `App.jsx` responsibilities incrementally without changing behavior.
 
-### **Current intentional boundaries**
+### Current intentional boundaries
 
 The following remain intentionally inside `App.jsx` for now:
 
@@ -218,7 +364,7 @@ The following remain intentionally inside `App.jsx` for now:
 
 These systems remain tightly coupled and behavior-sensitive.
 
-### **Current extraction guidance**
+### Current extraction guidance
 
 - Prefer extracting pure utility logic first.
 - Keep extraction targets dependency-light.
@@ -226,9 +372,7 @@ These systems remain tightly coupled and behavior-sensitive.
 - Avoid prematurely building shared UI systems.
 - Shared utilities are preferred before shared component layers.
 
-Build/tests passed after current extraction steps.
-
-### **Known OA architectural concerns**
+### Known OA architectural concerns
 
 - Dresses/Jumpsuits slot integration
 - TopInner accepting Outerwear
@@ -236,24 +380,15 @@ Build/tests passed after current extraction steps.
 - config-table refactor for defaults
 - tiny wardrobe fixture datasets for testing
 
-### **Deferred OA lifecycle systems**
-
-Define garment lifecycle/acquisition pipeline before implementing:
-
-- wishlist
-- archive
-- sold states
-- acquisition tracking
-
 ---
 
-# **Sensitive systems**
+# Sensitive systems
 
-## **Image system**
+## Image system
 
 Crop, scale, frame scale, offset, preview rendering, rendered bounds, and export alignment are tightly connected.
 
-Do not casually “clean up”:
+Do not casually modify:
 
 - crop math
 - export math
@@ -270,22 +405,23 @@ Future crop fixes should ideally happen only after:
 
 Avoid changing persisted image fields unless migration/backward compatibility is explicitly handled.
 
----
+## Metadata & persistence
 
-## **Metadata & persistence**
+Preserve:
 
-- preserve import metadata
-- preserve timestamps
-- preserve `itemUuid`
-- update `updatedAt` only on actual edits
-- preserve backward compatibility for imports/exports where feasible
-- avoid unnecessary metadata rewrites during migrations
+- import metadata
+- timestamps
+- `itemUuid`
+- backward compatibility where feasible
+- unknown metadata fields during normalization
+
+Update `updatedAt` only on actual edits.
+
+Avoid unnecessary metadata rewrites during migrations.
 
 Historical continuity matters.
 
----
-
-## **Generation systems**
+## Generation systems
 
 Generation behavior should remain stable during refactors.
 
@@ -297,32 +433,31 @@ Avoid unintentionally changing:
 - slot logic
 - guided generation outcomes
 
-Add small regression fixtures/tests where useful.
+Add regression fixtures/tests where useful.
 
 ---
 
-# **Shared-system extraction opportunities**
+# Shared-system extraction opportunities
 
 The ecosystem should gradually move toward shared reusable infrastructure instead of duplicated app-specific implementations.
 
 Prefer shared pure utility logic before shared UI abstractions.
 
-Potential shared systems:
+## Potential future shared systems
 
 - bulk editing
 - multi-select
-- tag editing
 - metadata normalization
 - metadata filters
 - image import/compression
 - image storage handling
-- library virtualization
-- selection systems
-- persistence abstractions
-- export/import backups
+- asset normalization
 - provenance normalization
 - stable identity helpers
-- asset normalization helpers
+- persistence abstractions
+- export/import backups
+- library virtualization
+- selection systems
 
 Prefer reusable abstractions when already touching:
 
@@ -338,7 +473,7 @@ Prefer reusable abstractions when already touching:
 
 ---
 
-# **MBA cleanup direction**
+# MBA cleanup direction
 
 - rename remaining Outfit-App identifiers
 - remove obsolete copied root files
@@ -347,7 +482,7 @@ Prefer reusable abstractions when already touching:
 
 ---
 
-# **Deferred systems**
+# Deferred systems
 
 Do not prioritize yet:
 
@@ -360,7 +495,7 @@ Do not prioritize yet:
 
 Sync readiness should still influence current architectural decisions.
 
-Before sync/cloud work:
+Before major sync/cloud work:
 
 - extract reusable modules from `App.jsx`
 - standardize storage shapes
@@ -374,37 +509,32 @@ IndexedDB should continue functioning as the active local-first layer until shar
 
 ---
 
-# **Known architectural risks**
+# Known architectural risks
 
-- `App.jsx` still contains tightly coupled image/export behavior.
-- Crop/export alignment remains fragile.
-- Existing import/export datasets may contain inconsistent historical shapes.
-- OA and MBA still duplicate some infrastructure concepts.
-- Current local-first assumptions may complicate future sync architecture.
-- Image handling and metadata migrations remain high-risk areas for regressions.
-- Relationship systems still rely on mutable `id`.
-- OA runtime still primarily renders from `imageUrl`.
+- `App.jsx` still contains tightly coupled image/export behavior
+- crop/export alignment remains fragile
+- existing import/export datasets may contain inconsistent historical shapes
+- OA and MBA still duplicate some infrastructure concepts
+- local-first assumptions may complicate future sync architecture
+- image handling and metadata migrations remain high-risk regression areas
+- relationship systems still largely rely on mutable `id`
+- OA runtime still primarily renders from `imageUrl`
 
 ---
 
-# **Temporary ideas / backlog**
+# Temporary ideas / backlog
 
-## **OA**
+## OA
 
 - linked references
-- lifecycle tracking
 - wardrobe-role metadata
 - multi-outfit generation
 - canvas-style outfit comparison
-- stable relationship migration toward `itemUuid`
-- original-image preservation strategy
-- shared asset repository abstraction
 
-## **MBA**
+## MBA
 
 - bulk rename
 - ordered board generation
 - higher image counts
 - auto backup updates
 - remove default images
-- move board/reference links toward stable identity
