@@ -275,6 +275,38 @@ Meaning of each image asset:
 - linked references
 - multi-outfit generation
 - canvas-style outfit comparison
+
+## OA Garment Lifecycle / Acquisition Pipeline
+
+OA should eventually support garment lifecycle states instead of treating every item as simply owned.
+
+Possible lifecycle states:
+- inspiration
+- under evaluation
+- wishlist
+- active target
+- grail
+- owned
+- maybe sell
+- archived
+- retired
+- sold
+
+The goal is not to create separate databases for wishlist, archive, sold, and owned items. The goal is one garment/item model with a lifecycle/status field.
+
+These states have different behavior:
+- owned items can be used in normal outfit generation
+- wishlist or active-target items may be used for planning outfits
+- inspiration items may inform style direction but should not appear as owned wardrobe items
+- sold/retired items should remain linked to historical outfits, fitpics, and notes
+- maybe-sell items remain owned but may need filtering or review views
+- grail/investment/collector pieces may need different priority or acquisition tracking
+
+This supports a future acquisition pipeline:
+inspiration → under evaluation → wishlist/active target → owned → archived/retired/sold
+
+Lifecycle state should be treated separately from tags. Tags describe what an item is or evokes; lifecycle state describes where the item sits in the wardrobe/acquisition process.
+
 ## **Climate system**
 - > 24°C → Hot
 - 16–24°C → Warm
