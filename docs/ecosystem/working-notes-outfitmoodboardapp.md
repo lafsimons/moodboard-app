@@ -75,17 +75,104 @@ Ownership:
 - MBA owns boards/references
 - Hub routes/resolves entities, not workflows
 
+
+# Shared helper extraction strategy
+
+## Slowly extracting reusable helpers
+
+Continue feature work normally, but extract reusable helpers whenever the same concept appears in both OA and MBA.
+
+Prioritize shared helper extraction where:
+- the concept is already stable
+- the same problem has been solved in both apps
+- duplication would create maintenance drift
+- the helper can stay mostly UI-agnostic
+- extraction does not require a large rewrite
+
+Good candidates:
+- image/media import helpers
+- import metadata normalization
+- EXIF/dimension/aspect-ratio helpers
+- image variant/preview/original metadata shapes
+- tag normalization helpers
+- filter state helpers
+- search-text generation helpers
+- list/group/sort helpers
+- overlay behavior helpers
+- selection/bulk-action helpers
+
+Avoid extracting too early:
+- full editors
+- full toolbars
+- full card components
+- app shells
+- large shared UI frameworks
+
+Goal:
+- reduce duplicated logic gradually
+- keep OA/MBA conceptually aligned
+- avoid blocking active feature development
+- avoid premature over-abstraction
+
+---
+
+## Shared infrastructure extraction
+
+Longer-term, move stable cross-app systems into shared infrastructure.
+
+Strong candidates:
+
+### Shared media/image infrastructure
+- drag-and-drop import
+- multi-file import
+- file picker import
+- image dimensions/aspect ratio/orientation
+- import metadata
+- preview/original image variants
+- future originals support
+- future cloud storage compatibility
+
+### Shared metadata infrastructure
+- importedAt/originalFilename/fileSize/mimeType
+- capturedAt/camera/lens fields where available
+- no GPS/location metadata by default
+- safe additive normalization
+- backup/import/export compatibility
+
+### Shared filter infrastructure
+- collapsible filter groups
+- searchable options
+- selected counts
+- active filter chips
+- any/all matching helpers
+- reusable filter-state model
+
+### Shared overlay/action infrastructure
+- modals
+- popovers
+- drawers
+- action menus
+- Esc/outside-click/focus handling
+- z-index/viewport behavior
+
+### Shared selection/bulk infrastructure
+- selected-count pills
+- multi-select behavior
+- contextual actions
+- operation-based bulk editing patterns
+
+Important:
+- shared architecture matters more than shared UI right now
+- keep app-specific workflows where they still differ
+- extract stable primitives first, not entire screens
+
 ---
 
 # **OA**
 
 ## **Current priorities**
 
-- in multi select, actions should open dropdown: favorite, move, exclude, delete. then clicking them, opens the controls. remove style and climate from here. edit should open bulk editor 
-- Refactor Fitpics into broader Outfits section
-- when clicking a button in the main toolbar (e.g. wardrobe) and then clicking esc, there is a blue outline visible after
-- Fix OA filter popover positioning and clipping
-- Normalize wardrobe card image rendering so garments use a consistent visual safe area.
+- the preview in OA has favorite, exclude, edit, delete buttons, which I like. MBA only has edit. But maybe this could also be an action dropdown like in library
 
 ## **Current implemented foundations**
 
@@ -262,6 +349,8 @@ Compatibility rules:
 - preserve backward-compatible backups/imports
 
 ## **Current MBA issues**
+
+
 
 ### **Tags**
 

@@ -32,6 +32,20 @@ const defaultAppState = {
     tags: [],
     favorite: ""
   },
+  wardrobeFilters: {
+    tags: [],
+    excludedTags: [],
+    tagMatchMode: "any",
+    laundry: "",
+    favorite: ""
+  },
+  librarySearch: "",
+  wardrobeSort: "newest",
+  libraryUiState: {
+    libraryOpen: false,
+    wardrobeFiltersOpen: false,
+    wardrobeSavedOpen: false
+  },
   outfitFilters: {
     style: [],
     climate: [],

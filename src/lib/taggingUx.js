@@ -80,9 +80,31 @@ export function getNextLibrarySelection({
   isRangeSelection = false
 }) {
   const normalizedVisibleIds = Array.isArray(visibleItemIds) ? visibleItemIds.filter(Boolean) : [];
+  const visibleIdSet = new Set(normalizedVisibleIds);
+  const currentSelectedIds = Object.entries(currentSelection)
+    .filter(([, isSelected]) => Boolean(isSelected))
+    .map(([selectedItemId]) => selectedItemId);
+  const currentSelectionSet = new Set(currentSelectedIds);
   const hasAnchor = Boolean(anchorId) && normalizedVisibleIds.includes(anchorId);
   const itemIndex = normalizedVisibleIds.indexOf(itemId);
-  let nextSelection;
+  let nextSelection = {};
+  let nextAnchorId = itemId;
+
+  function buildOrderedSelection(selectedIdSet) {
+    const orderedSelectedIds = [
+      ...normalizedVisibleIds.filter((referenceId) => selectedIdSet.has(referenceId)),
+      ...currentSelectedIds.filter((referenceId) => !visibleIdSet.has(referenceId) && selectedIdSet.has(referenceId))
+    ];
+
+    return Object.fromEntries(orderedSelectedIds.map((referenceId) => [referenceId, true]));
+  }
+
+  if (!itemId) {
+    return {
+      nextSelection: currentSelection,
+      nextAnchorId: anchorId ?? null
+    };
+  }
 
   if (isRangeSelection && hasAnchor && itemIndex !== -1) {
     const anchorIndex = normalizedVisibleIds.indexOf(anchorId);
@@ -90,22 +112,39 @@ export function getNextLibrarySelection({
       ? [anchorIndex, itemIndex]
       : [itemIndex, anchorIndex];
     const rangeIds = normalizedVisibleIds.slice(startIndex, endIndex + 1);
-    nextSelection = isToggleSelection ? { ...currentSelection } : {};
-    rangeIds.forEach((referenceId) => {
-      nextSelection[referenceId] = true;
-    });
+
+    if (isToggleSelection) {
+      rangeIds.forEach((referenceId) => {
+        currentSelectionSet.add(referenceId);
+      });
+      nextSelection = buildOrderedSelection(currentSelectionSet);
+      nextAnchorId = anchorId;
+    } else {
+      nextSelection = Object.fromEntries(rangeIds.map((referenceId) => [referenceId, true]));
+      nextAnchorId = anchorId;
+    }
   } else if (isToggleSelection) {
-    nextSelection = {
-      ...currentSelection,
-      [itemId]: !currentSelection[itemId]
-    };
+    const isCurrentlySelected = currentSelectionSet.has(itemId);
+
+    if (isCurrentlySelected) {
+      currentSelectionSet.delete(itemId);
+    } else {
+      currentSelectionSet.add(itemId);
+    }
+
+    nextSelection = buildOrderedSelection(currentSelectionSet);
+    nextAnchorId = currentSelectionSet.size === 0 ? null : (isCurrentlySelected ? anchorId ?? itemId : itemId);
+  } else if (currentSelectedIds.length === 1 && currentSelectionSet.has(itemId)) {
+    nextSelection = {};
+    nextAnchorId = null;
   } else {
     nextSelection = { [itemId]: true };
+    nextAnchorId = itemId;
   }
 
   return {
     nextSelection,
-    nextAnchorId: itemId
+    nextAnchorId
   };
 }
 

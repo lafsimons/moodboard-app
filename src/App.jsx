@@ -106,6 +106,17 @@ import {
   getBoardItemRenderedBounds
 } from "./lib/boardBounds.js";
 import {
+  normalizeLibrarySearch,
+  normalizeLibraryUiState,
+  normalizeMetadataFilterState,
+  normalizeWardrobeFilterState,
+  normalizeWardrobeSort
+} from "./lib/appStateModel.js";
+import {
+  replaceBoardImagePreservingLayout,
+  replaceBoardImageReferencePreservingLayout
+} from "./lib/boardLayoutState.js";
+import {
   normalizeBoard,
   normalizeSavedOutfit,
   hydrateSavedBoards,
@@ -149,9 +160,9 @@ const BOARD_ZOOM_MIN = 0.1;
 const BOARD_ZOOM_MAX = 6;
 const GENERATE_PERF_DEBUG_FLAG = "debug:generate-perf";
 const LIBRARY_PERF_DEBUG_FLAG = "debug:library-perf";
-const LIBRARY_GRID_MIN_COLUMN_WIDTH = 150;
+const LIBRARY_GRID_MIN_COLUMN_WIDTH = 164;
 const LIBRARY_GRID_GAP = 12;
-const LIBRARY_GRID_ESTIMATED_ROW_HEIGHT = 196;
+const LIBRARY_GRID_ESTIMATED_ROW_HEIGHT = 210;
 const LIBRARY_GRID_OVERSCAN_ROWS = 2;
 const LIBRARY_VIRTUALIZATION_THRESHOLD = 120;
 const BOARD_PICKER_GRID_COLUMNS = 3;
@@ -1291,6 +1302,7 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
       <button
         type="button"
         className="board-image-hit-area"
+        onMouseDown={preventMouseButtonFocus}
         onPointerDown={(event) => onImagePointerDown(event, image)}
         onDoubleClick={() => onImageDoubleClick(image, item)}
         aria-label={`${buildDisplayName(item)} preview`}
@@ -1341,6 +1353,12 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   prevProps.isActive === nextProps.isActive
 );
 
+function preventMouseButtonFocus(event) {
+  if (event?.detail !== 0) {
+    event.preventDefault();
+  }
+}
+
 const LibraryGridCard = memo(function LibraryGridCard({
   item,
   isSelected,
@@ -1368,15 +1386,27 @@ const LibraryGridCard = memo(function LibraryGridCard({
       <button
         type="button"
         className="wardrobe-preview"
+        onMouseDown={preventMouseButtonFocus}
         onClick={(event) => onSelectReference(item.id, event)}
-        onDoubleClick={() => onOpenReferencePreview(item)}
+        onDoubleClick={(event) => {
+          if (event.currentTarget instanceof HTMLElement) {
+            event.currentTarget.blur();
+          }
+
+          onOpenReferencePreview(item);
+        }}
         aria-pressed={isSelected}
       >
         <ManagedItemImage
           item={item}
           alt={item.name}
+          className="wardrobe-preview-image"
           dataItemId={item.id}
           variant="thumbnail"
+          useFrameScale
+          normalizeToFrameScale
+          useCrop
+          usePresentation
           loadingStrategy="eager"
           decodingStrategy="sync"
         />
@@ -1642,25 +1672,6 @@ function getUniqueValues(items, key) {
   return [...new Set(items.map((item) => item[key]).filter(Boolean))].sort((a, b) =>
     a.localeCompare(b)
   );
-}
-
-function normalizeMetadataFilterState(filters) {
-  return {
-    tags: uniqueTags(filters?.tags),
-    excludedTags: uniqueTags(filters?.excludedTags),
-    tagMatchMode: filters?.tagMatchMode === "all" ? "all" : "any",
-    favorite: filters?.favorite === "yes" || filters?.favorite === "no" ? filters.favorite : ""
-  };
-}
-
-function normalizeWardrobeFilterState(filters) {
-  return {
-    tags: uniqueTags(filters?.tags),
-    excludedTags: uniqueTags(filters?.excludedTags),
-    tagMatchMode: filters?.tagMatchMode === "all" ? "all" : "any",
-    laundry: filters?.laundry === "show" || filters?.laundry === "hide" ? filters.laundry : "",
-    favorite: filters?.favorite === "yes" || filters?.favorite === "no" ? filters.favorite : ""
-  };
 }
 
 function splitGroupedTag(tag, nestedParentGroups = new Set()) {
@@ -2991,11 +3002,16 @@ export default function App() {
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
+  const wardrobeManagePopoverRef = useRef(null);
+  const wardrobeAddPopoverRef = useRef(null);
   const bulkMetadataFeedbackTimeoutRef = useRef(null);
   const backupExportFeedbackTimeoutRef = useRef(null);
   const paletteCacheRef = useRef(new Map());
   const boardRenderLayoutSignatureRef = useRef("");
+  const suppressNextBoardRelayoutRef = useRef(false);
   const pendingRestoredBoardFitRef = useRef(false);
+  const lastInteractionWasPointerRef = useRef(false);
+  const pointerActivatedControlRef = useRef(null);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [layering, setLayering] = useState(false);
@@ -3052,8 +3068,10 @@ export default function App() {
   const [replaceOriginalShouldRegenerate, setReplaceOriginalShouldRegenerate] = useState(false);
   const [itemImageDragActive, setItemImageDragActive] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
-  const [selectedReferenceIds, setSelectedReferenceIds] = useState({});
-  const [selectedReferenceAnchorId, setSelectedReferenceAnchorId] = useState(null);
+  const [selectedReferenceSelection, setSelectedReferenceSelection] = useState({
+    ids: {},
+    anchorId: null
+  });
   const [bulkMetadataDraft, setBulkMetadataDraft] = useState({
     addTags: [],
     removeTags: [],
@@ -3062,11 +3080,13 @@ export default function App() {
   const [bulkMetadataFeedback, setBulkMetadataFeedback] = useState("");
   const [wardrobeFilters, setWardrobeFilters] = useState(emptyWardrobeFilters);
   const [librarySearch, setLibrarySearch] = useState("");
+  const [librarySelectionActionsOpen, setLibrarySelectionActionsOpen] = useState(false);
   const [wardrobeSort, setWardrobeSort] = useState("newest");
   const [libraryTagActionMode, setLibraryTagActionMode] = useState(null);
   const [outfitPalette, setOutfitPalette] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardView, setBoardView] = useState({ x: 0, y: 0, zoom: 1 });
+  const selectedReferenceIds = selectedReferenceSelection.ids;
   const [isBoardGenerating, setIsBoardGenerating] = useState(false);
   const [showBoardGenerationBusy, setShowBoardGenerationBusy] = useState(false);
   const [runtimeImageMetricsByItemId, setRuntimeImageMetricsByItemId] = useState({});
@@ -3097,6 +3117,74 @@ export default function App() {
   const [, startBoardTransition] = useTransition();
   const isGeneratePerfDebug = useMemo(() => isGeneratePerfDebugEnabled(), []);
   const isLibraryPerfDebug = useMemo(() => isLibraryPerfDebugEnabled(), []);
+
+  function noteInteractionModality(event) {
+    if (event.type === "pointerdown") {
+      lastInteractionWasPointerRef.current = true;
+      document.documentElement.dataset.inputModality = "pointer";
+      const pointerTarget = event.target instanceof Element
+        ? event.target.closest("button, summary, input, select, textarea, [role='button'], [tabindex]:not([tabindex='-1'])")
+        : null;
+      pointerActivatedControlRef.current = pointerTarget instanceof HTMLElement ? pointerTarget : null;
+      return;
+    }
+
+    if (event.type !== "keydown") {
+      return;
+    }
+
+    if (event.key === "Tab" || event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) {
+      lastInteractionWasPointerRef.current = false;
+      pointerActivatedControlRef.current = null;
+      document.documentElement.dataset.inputModality = "keyboard";
+    }
+  }
+
+  function registerPointerActivatedControl(event) {
+    if (event?.detail === 0 || !(event?.currentTarget instanceof HTMLElement)) {
+      return;
+    }
+
+    pointerActivatedControlRef.current = event.currentTarget;
+    lastInteractionWasPointerRef.current = true;
+  }
+
+  function blurPointerActivatedControl(event) {
+    registerPointerActivatedControl(event);
+
+    if (!(event?.currentTarget instanceof HTMLElement) || event.detail === 0) {
+      return;
+    }
+
+    const target = event.currentTarget;
+
+    window.setTimeout(() => {
+      if (document.activeElement === target) {
+        target.blur();
+      }
+
+      if (pointerActivatedControlRef.current === target) {
+        pointerActivatedControlRef.current = null;
+      }
+    }, 0);
+  }
+
+  function blurRetainedPointerFocus() {
+    const activeElement = document.activeElement;
+    const pointerActivatedControl = pointerActivatedControlRef.current;
+
+    if (
+      !lastInteractionWasPointerRef.current
+      || !(activeElement instanceof HTMLElement)
+      || !(pointerActivatedControl instanceof HTMLElement)
+      || activeElement !== pointerActivatedControl
+    ) {
+      return;
+    }
+
+    activeElement.blur();
+    pointerActivatedControlRef.current = null;
+  }
 
   const itemsById = useMemo(
     () => Object.fromEntries(items.map((item) => [item.id, item])),
@@ -3509,7 +3597,6 @@ export default function App() {
   const selectedReferenceSelectionKey = selectedReferenceIdList.join("|");
   const selectedReferenceCount = Object.values(selectedReferenceIds).filter(Boolean).length;
   const hasSelectedReferences = selectedReferenceCount > 0;
-  const canEditSelectedReference = selectedReferenceCount === 1;
   const isBulkSelectionEditing = selectionEditorActive && selectedReferenceCount > 1;
   const isSingleSelectionEditing = selectionEditorActive && selectedReferenceCount === 1;
   const includedWardrobeFilterChips = [
@@ -3626,24 +3713,61 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedReferenceCount) {
+      setLibrarySelectionActionsOpen(false);
       setLibraryTagActionMode(null);
     }
   }, [selectedReferenceCount]);
 
   useEffect(() => {
     function handlePointerDown(event) {
-      if (!libraryTagActionMode) {
+      if (!librarySelectionActionsOpen && !libraryTagActionMode) {
         return;
       }
 
       if (!librarySelectionActionsRef.current?.contains(event.target)) {
+        setLibrarySelectionActionsOpen(false);
         setLibraryTagActionMode(null);
       }
     }
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [libraryTagActionMode]);
+  }, [librarySelectionActionsOpen, libraryTagActionMode]);
+
+  useEffect(() => {
+    if (!wardrobeManageOpen && !wardrobeAddOpen) {
+      return undefined;
+    }
+
+    function handlePointerDown(event) {
+      const target = event.target;
+
+      if (
+        wardrobeManageOpen &&
+        wardrobeManagePopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      if (
+        wardrobeAddOpen &&
+        wardrobeAddPopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      if (wardrobeManageOpen) {
+        setWardrobeManageOpen(false);
+      }
+
+      if (wardrobeAddOpen) {
+        closeWardrobeAdd();
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [wardrobeAddOpen, wardrobeManageOpen]);
 
   useEffect(() => {
     return () => {
@@ -4355,6 +4479,13 @@ export default function App() {
       setGenerationLists(normalizeGenerationLists(defaultState.generationLists));
       setGenerationMode(normalizeGenerationMode(defaultState.generationMode));
       setGenerationMetadataFilters(normalizeMetadataFilterState(defaultState.generationMetadataFilters));
+      setWardrobeFilters(normalizeWardrobeFilterState(defaultState.wardrobeFilters));
+      setLibrarySearch(normalizeLibrarySearch(defaultState.librarySearch));
+      setWardrobeSort(normalizeWardrobeSort(defaultState.wardrobeSort));
+      const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
+      setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
+      setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
+      setWardrobeSavedOpen(normalizedLibraryUiState.wardrobeSavedOpen);
       setOutfitFilters(normalizeOutfitFilters(defaultState.outfitFilters));
       setWeatherSettings(normalizeWeatherSettings(defaultState.weatherSettings));
       setWeatherLocationDraft(defaultState.weatherSettings?.locationName ?? "");
@@ -4390,6 +4521,9 @@ export default function App() {
           const normalizedGenerationLists = normalizeGenerationLists(storedAppState.generationLists);
           const normalizedGenerationMode = normalizeGenerationMode(storedAppState.generationMode);
           const normalizedMetadataFilters = normalizeMetadataFilterState(storedAppState.generationMetadataFilters);
+          const normalizedWardrobeFilters = normalizeWardrobeFilterState(storedAppState.wardrobeFilters);
+          const normalizedWardrobeSort = normalizeWardrobeSort(storedAppState.wardrobeSort);
+          const normalizedLibraryUiState = normalizeLibraryUiState(storedAppState.libraryUiState);
           const normalizedOutfitFilters = normalizeOutfitFilters(storedAppState.outfitFilters);
           const normalizedOutfitAffinity = normalizeOutfitAffinity(storedAppState.outfitAffinity);
           const normalizedRecentOutfits = normalizeRecentOutfits(storedAppState.recentOutfits);
@@ -4435,6 +4569,12 @@ export default function App() {
           setGenerationLists(normalizedGenerationLists);
           setGenerationMode(normalizedGenerationMode);
           setGenerationMetadataFilters(normalizedMetadataFilters);
+          setWardrobeFilters(normalizedWardrobeFilters);
+          setLibrarySearch(normalizeLibrarySearch(storedAppState.librarySearch));
+          setWardrobeSort(normalizedWardrobeSort);
+          setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
+          setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
+          setWardrobeSavedOpen(normalizedLibraryUiState.wardrobeSavedOpen);
           setOutfitFilters(normalizedOutfitFilters);
           setWeatherSettings(normalizeWeatherSettings(storedAppState.weatherSettings));
           setWeatherLocationDraft(storedAppState.weatherSettings?.locationName ?? "");
@@ -4530,6 +4670,14 @@ export default function App() {
       generationLists,
       generationMode,
       generationMetadataFilters,
+      wardrobeFilters,
+      librarySearch,
+      wardrobeSort,
+      libraryUiState: {
+        libraryOpen: activePanel === "wardrobe",
+        wardrobeFiltersOpen,
+        wardrobeSavedOpen
+      },
       outfitFilters,
       weatherSettings,
       weatherData,
@@ -4566,7 +4714,7 @@ export default function App() {
         runSave();
       }, 120);
     }
-  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading]);
+  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading]);
 
   useEffect(() => () => {
     if (saveAppStateTimeoutRef.current) {
@@ -4600,6 +4748,14 @@ export default function App() {
       generationLists,
       generationMode,
       generationMetadataFilters,
+      wardrobeFilters,
+      librarySearch,
+      wardrobeSort,
+      libraryUiState: {
+        libraryOpen: activePanel === "wardrobe",
+        wardrobeFiltersOpen,
+        wardrobeSavedOpen
+      },
       outfitFilters,
       weatherSettings,
       weatherData,
@@ -4622,6 +4778,12 @@ export default function App() {
       generationLists,
       generationMode,
       generationMetadataFilters,
+      wardrobeFilters,
+      librarySearch,
+      wardrobeSort,
+      activePanel,
+      wardrobeFiltersOpen,
+      wardrobeSavedOpen,
       outfitFilters,
       weatherSettings,
       weatherData,
@@ -4747,6 +4909,10 @@ export default function App() {
     }
 
     boardRenderLayoutSignatureRef.current = boardRenderLayoutSignature;
+    if (suppressNextBoardRelayoutRef.current) {
+      suppressNextBoardRelayoutRef.current = false;
+      return;
+    }
     if (boardRelayoutFrameRef.current) {
       cancelAnimationFrame(boardRelayoutFrameRef.current);
     }
@@ -4791,6 +4957,17 @@ export default function App() {
   }, [outfitDebugOpen]);
 
   useEffect(() => {
+    document.documentElement.dataset.inputModality = "pointer";
+    document.addEventListener("pointerdown", noteInteractionModality, true);
+    document.addEventListener("keydown", noteInteractionModality, true);
+    return () => {
+      delete document.documentElement.dataset.inputModality;
+      document.removeEventListener("pointerdown", noteInteractionModality, true);
+      document.removeEventListener("keydown", noteInteractionModality, true);
+    };
+  }, []);
+
+  useEffect(() => {
     function handleDocumentKeyDown(event) {
       if (event.defaultPrevented) {
         return;
@@ -4819,54 +4996,63 @@ export default function App() {
 
       if (cropEditorState) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         closeCropEditor();
         return;
       }
 
       if (confirmation) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         confirmation.onCancel();
         return;
       }
 
       if (fitpicPreview) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         setFitpicPreview(null);
         return;
       }
 
       if (referencePreview) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         setReferencePreview(null);
         return;
       }
 
       if (editingId) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         cancelEdit();
         return;
       }
 
       if (pickerBoardImageId) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         closePickerOverlay();
         return;
       }
 
       if (wardrobeFiltersOpen) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         setWardrobeFiltersOpen(false);
         return;
       }
 
       if (wardrobeWorthOpen) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         setWardrobeWorthOpen(false);
         return;
       }
 
       if (wardrobeSavedOpen) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         cancelEditSavedOutfit();
         setWardrobeSavedOpen(false);
         return;
@@ -4874,12 +5060,29 @@ export default function App() {
 
       if (wardrobeManageOpen) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         setWardrobeManageOpen(false);
+        return;
+      }
+
+      if (wardrobeAddOpen) {
+        event.preventDefault();
+        blurRetainedPointerFocus();
+        closeWardrobeAdd();
+        return;
+      }
+
+      if (librarySelectionActionsOpen || libraryTagActionMode) {
+        event.preventDefault();
+        blurRetainedPointerFocus();
+        setLibrarySelectionActionsOpen(false);
+        setLibraryTagActionMode(null);
         return;
       }
 
       if (activePanel) {
         event.preventDefault();
+        blurRetainedPointerFocus();
         closeWorkspacePanel();
       }
     }
@@ -4894,7 +5097,10 @@ export default function App() {
     fitpicPreview,
     referencePreview,
     cropEditorState,
+    librarySelectionActionsOpen,
+    libraryTagActionMode,
     wardrobeFiltersOpen,
+    wardrobeAddOpen,
     wardrobeWorthOpen,
     wardrobeSavedOpen,
     wardrobeManageOpen
@@ -5110,6 +5316,9 @@ export default function App() {
     const normalizedGenerationLists = normalizeGenerationLists(nextAppState?.generationLists);
     const normalizedGenerationMode = normalizeGenerationMode(nextAppState?.generationMode);
     const normalizedMetadataFilters = normalizeMetadataFilterState(nextAppState?.generationMetadataFilters);
+    const normalizedWardrobeFilters = normalizeWardrobeFilterState(nextAppState?.wardrobeFilters);
+    const normalizedWardrobeSort = normalizeWardrobeSort(nextAppState?.wardrobeSort);
+    const normalizedLibraryUiState = normalizeLibraryUiState(nextAppState?.libraryUiState);
     const normalizedOutfitFilters = normalizeOutfitFilters(nextAppState?.outfitFilters);
     const normalizedOutfitAffinity = normalizeOutfitAffinity(nextAppState?.outfitAffinity);
     const normalizedRecentOutfits = normalizeRecentOutfits(nextAppState?.recentOutfits);
@@ -5141,17 +5350,20 @@ export default function App() {
     setGenerationLists(normalizedGenerationLists);
     setGenerationMode(normalizedGenerationMode);
     setGenerationMetadataFilters(normalizedMetadataFilters);
+    setWardrobeFilters(normalizedWardrobeFilters);
+    setLibrarySearch(normalizeLibrarySearch(nextAppState?.librarySearch));
+    setWardrobeSort(normalizedWardrobeSort);
     setOutfitFilters(normalizedOutfitFilters);
     setWeatherSettings(normalizeWeatherSettings(nextAppState?.weatherSettings));
     setWeatherLocationDraft(nextAppState?.weatherSettings?.locationName ?? "");
     setWeatherData(nextAppState?.weatherData ?? null);
     setFitpics(nextAppState?.fitpics ?? []);
-    setWardrobeFilters(emptyWardrobeFilters);
-    setWardrobeSort("newest");
     setEditingId(null);
     setEditorReturnTarget(null);
     setDraft(emptyForm);
-    setActivePanel(null);
+    setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
+    setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
+    setWardrobeSavedOpen(normalizedLibraryUiState.wardrobeSavedOpen);
     setControlsOpen(true);
     setActiveBoardImageId(null);
     setPickerBoardImageId(null);
@@ -5534,7 +5746,7 @@ export default function App() {
     return "TopInner";
   }
 
-  function startCreate() {
+  function startCreate(event = null) {
     closeUtilityWindows();
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
@@ -5551,6 +5763,10 @@ export default function App() {
     setEditingId(null);
     setEditorReturnTarget(null);
     setEditorAdvancedOpen(false);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function startEdit(item, options = {}) {
@@ -5622,7 +5838,10 @@ export default function App() {
   function cancelEdit() {
     if (selectionEditorActive) {
       setSelectionEditorActive(false);
-      setSelectedReferenceIds({});
+      setSelectedReferenceSelection({
+        ids: {},
+        anchorId: null
+      });
     }
 
     resetEditorState();
@@ -5746,6 +5965,7 @@ export default function App() {
       return;
     }
 
+    setLibrarySelectionActionsOpen(false);
     setLibraryTagActionMode(null);
     setSelectionEditorActive(true);
 
@@ -5769,28 +5989,36 @@ export default function App() {
     const isToggleSelection = Boolean(event?.metaKey || event?.ctrlKey);
     const isRangeSelection = Boolean(event?.shiftKey);
 
-    setSelectedReferenceIds((current) => {
-      const { nextSelection } = getNextLibrarySelection({
-        currentSelection: current,
+    setSelectedReferenceSelection((current) => {
+      const { nextSelection, nextAnchorId } = getNextLibrarySelection({
+        currentSelection: current.ids,
         itemId,
         visibleItemIds: visibleWardrobeItemIds,
-        anchorId: selectedReferenceAnchorId,
+        anchorId: current.anchorId,
         isToggleSelection,
         isRangeSelection
       });
 
       syncSelectionEditor(nextSelection);
-      return nextSelection;
+      return {
+        ids: nextSelection,
+        anchorId: nextAnchorId
+      };
     });
 
-    setSelectedReferenceAnchorId(itemId);
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function clearSelectedReferences() {
+    setLibrarySelectionActionsOpen(false);
     setLibraryTagActionMode(null);
     setSelectionEditorActive(false);
-    setSelectedReferenceIds({});
-    setSelectedReferenceAnchorId(null);
+    setSelectedReferenceSelection({
+      ids: {},
+      anchorId: null
+    });
     resetEditorState();
   }
 
@@ -5800,18 +6028,24 @@ export default function App() {
     }
 
     const nextSelected = Object.fromEntries(visibleWardrobeItemIds.map((itemId) => [itemId, true]));
+    setLibrarySelectionActionsOpen(false);
     setLibraryTagActionMode(null);
-    setSelectedReferenceIds(nextSelected);
-    setSelectedReferenceAnchorId(visibleWardrobeItemIds[0] ?? null);
+    setSelectedReferenceSelection({
+      ids: nextSelected,
+      anchorId: visibleWardrobeItemIds[0] ?? null
+    });
     syncSelectionEditor(nextSelected);
   }
 
   function excludeSelectedReferences() {
+    setLibrarySelectionActionsOpen(false);
     setLibraryTagActionMode(null);
     excludeReferenceIds(selectedReferenceIdList);
     setSelectionEditorActive(false);
-    setSelectedReferenceIds({});
-    setSelectedReferenceAnchorId(null);
+    setSelectedReferenceSelection({
+      ids: {},
+      anchorId: null
+    });
     resetEditorState();
   }
 
@@ -5823,9 +6057,13 @@ export default function App() {
     });
 
     if (deleted) {
+      setLibrarySelectionActionsOpen(false);
       setLibraryTagActionMode(null);
       setSelectionEditorActive(false);
-      setSelectedReferenceIds({});
+      setSelectedReferenceSelection({
+        ids: {},
+        anchorId: null
+      });
       resetEditorState();
     }
   }
@@ -6125,8 +6363,12 @@ export default function App() {
     setWardrobeFilters(emptyWardrobeFilters);
   }
 
-  function clearLibrarySearch() {
+  function clearLibrarySearch(event = null) {
     setLibrarySearch("");
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function toggleOutfitFilter(group, value) {
@@ -6965,10 +7207,12 @@ export default function App() {
 
     await deleteItems(uniqueReferenceIds);
     setItems((current) => current.filter((item) => !deletedReferenceIdSet.has(item.id)));
-    setSelectedReferenceIds((current) =>
-      Object.fromEntries(Object.entries(current).filter(([itemId, isSelected]) => !deletedReferenceIdSet.has(itemId) && isSelected))
-    );
-    setSelectedReferenceAnchorId((current) => (current && deletedReferenceIdSet.has(current) ? null : current));
+    setSelectedReferenceSelection((current) => ({
+      ids: Object.fromEntries(
+        Object.entries(current.ids).filter(([itemId, isSelected]) => !deletedReferenceIdSet.has(itemId) && isSelected)
+      ),
+      anchorId: current.anchorId && deletedReferenceIdSet.has(current.anchorId) ? null : current.anchorId
+    }));
     setOutfit((current) =>
       Object.fromEntries(
         Object.entries(current ?? {}).map(([slot, equippedId]) => [
@@ -7032,19 +7276,18 @@ export default function App() {
 
   function replaceBoardImageReference(imageId, referenceId) {
     setGuidedDebugPayload([]);
+    suppressNextBoardRelayoutRef.current = true;
     setBoard((current) => {
       if (!current) {
         return current;
       }
 
       const nextItemUuid = itemsById[referenceId]?.itemUuid ?? "";
-
-      return relayoutBoardStateImages(
-        current.images.map((image) =>
-          image.id === imageId
-            ? { ...image, referenceId, referenceItemUuid: nextItemUuid || image.referenceItemUuid || "" }
-            : image
-        )
+      return replaceBoardImageReferencePreservingLayout(
+        current,
+        imageId,
+        referenceId,
+        nextItemUuid || current.images.find((image) => image.id === imageId)?.referenceItemUuid || ""
       );
     });
   }
@@ -7094,14 +7337,13 @@ export default function App() {
       return;
     }
 
+    suppressNextBoardRelayoutRef.current = true;
     setBoard((current) => {
       if (!current) {
         return current;
       }
 
-      return relayoutBoardStateImages(
-        current.images.map((image) => image.id === result.boardImage.id ? result.boardImage : image)
-      );
+      return replaceBoardImagePreservingLayout(current, result.boardImage);
     });
     setOutfit(boardToSyntheticOutfit({
       ...board,
@@ -7564,14 +7806,19 @@ export default function App() {
 
   function closeUtilityWindows() {
     setWeatherOpen(false);
+    setLibrarySelectionActionsOpen(false);
     setLibraryTagActionMode(null);
   }
 
-  function closeWardrobeAdd() {
+  function closeWardrobeAdd(event = null) {
     setWardrobeAddOpen(false);
     setImageUploadError("");
     setItemImageDragActive(false);
     setItemImporting(false);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function setBackupExportStatus(message) {
@@ -7592,7 +7839,7 @@ export default function App() {
     }, 6000);
   }
 
-  function toggleWorkspacePanel(panel) {
+  function toggleWorkspacePanel(panel, event = null) {
     setActivePanel((current) => {
       const nextPanel = current === panel ? null : panel;
       if (nextPanel) {
@@ -7612,6 +7859,7 @@ export default function App() {
       setWardrobeSavedOpen(false);
       setWardrobeManageOpen(false);
       setWardrobeAddOpen(false);
+      setLibrarySelectionActionsOpen(false);
       setLibraryTagActionMode(null);
       setFitpicPreview(null);
       cancelEditSavedOutfit();
@@ -7619,6 +7867,49 @@ export default function App() {
       setEditorReturnTarget(null);
       return nextPanel;
     });
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function toggleSavedBoardsPanel(event = null) {
+    const shouldClosePanel = activePanel === "wardrobe" && wardrobeSavedOpen;
+
+    if (shouldClosePanel) {
+      closeWorkspacePanel();
+
+      if (event) {
+        blurPointerActivatedControl(event);
+      }
+
+      return;
+    }
+
+    closeUtilityWindows();
+    setControlsOpen(false);
+    setDockExpanded(isMobileViewport);
+    setActivePanel("wardrobe");
+    setActiveBoardImageId(null);
+    setPickerBoardImageId(null);
+    setActiveOutfitSlot(null);
+    setActiveAccessorySlot(null);
+    setPickerAnchorSlot(null);
+    setWardrobeFiltersOpen(false);
+    setWardrobeWorthOpen(false);
+    setWardrobeManageOpen(false);
+    setWardrobeAddOpen(false);
+    setWardrobeSavedOpen(true);
+    setLibrarySelectionActionsOpen(false);
+    setLibraryTagActionMode(null);
+    setFitpicPreview(null);
+    cancelEditSavedOutfit();
+    setEditingId(null);
+    setEditorReturnTarget(null);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function closeWorkspacePanel() {
@@ -7633,13 +7924,14 @@ export default function App() {
     setWardrobeSavedOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
+    setLibrarySelectionActionsOpen(false);
     setLibraryTagActionMode(null);
     setFitpicPreview(null);
     cancelEditSavedOutfit();
     cancelEdit();
   }
 
-  function toggleControlsWindow() {
+  function toggleControlsWindow(event = null) {
     if (activePanel) {
       setActivePanel(null);
     }
@@ -7654,6 +7946,7 @@ export default function App() {
     setWardrobeSavedOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
+    setLibrarySelectionActionsOpen(false);
     setLibraryTagActionMode(null);
     setFitpicPreview(null);
     cancelEditSavedOutfit();
@@ -7664,15 +7957,23 @@ export default function App() {
       setDockExpanded(isMobileViewport ? nextOpen || activePanel === "wardrobe" : true);
       return nextOpen;
     });
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
-  function openWardrobeFilters() {
+  function openWardrobeFilters(event = null) {
     closeUtilityWindows();
     setWardrobeSavedOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     cancelEditSavedOutfit();
     setWardrobeFiltersOpen((current) => !current);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function toggleWardrobeSaved() {
@@ -7690,12 +7991,16 @@ export default function App() {
     });
   }
 
-  function toggleWardrobeManage() {
+  function toggleWardrobeManage(event = null) {
     closeUtilityWindows();
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen(false);
     cancelEditSavedOutfit();
     setWardrobeManageOpen((current) => !current);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function toggleTagManagerExpanded(tag) {
@@ -7707,23 +8012,51 @@ export default function App() {
 
   function toggleLibraryTagAction(mode) {
     if (!selectedReferenceCount) {
+      setLibrarySelectionActionsOpen(false);
       setLibraryTagActionMode(null);
       return;
     }
 
+    setLibrarySelectionActionsOpen(true);
     setLibraryTagActionMode((current) => (current === mode ? null : mode));
   }
 
-  function loadAndCloseSavedOutfit(savedOutfit) {
+  function toggleLibrarySelectionActions() {
+    if (!selectedReferenceCount) {
+      setLibrarySelectionActionsOpen(false);
+      setLibraryTagActionMode(null);
+      return;
+    }
+
+    setLibrarySelectionActionsOpen((current) => {
+      const nextOpen = !current;
+
+      if (!nextOpen) {
+        setLibraryTagActionMode(null);
+      }
+
+      return nextOpen;
+    });
+  }
+
+  function loadAndCloseSavedOutfit(savedOutfit, event = null) {
     loadSavedOutfit(savedOutfit);
     cancelEditSavedOutfit();
     setWardrobeSavedOpen(false);
     setActivePanel(null);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
-  function closeSavedOutfitsView() {
+  function closeSavedOutfitsView(event = null) {
     cancelEditSavedOutfit();
     setWardrobeSavedOpen(false);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
   }
 
   function renderOutfitSlotPicker() {
@@ -7936,7 +8269,7 @@ export default function App() {
                       <button
                         type="button"
                         className="saved-outfit-load"
-                        onClick={() => loadAndCloseSavedOutfit(savedOutfit)}
+                        onClick={(event) => loadAndCloseSavedOutfit(savedOutfit, event)}
                       >
                         {renderSavedOutfitPreview(savedOutfit)}
                         <strong>{savedOutfit.name}</strong>
@@ -8333,6 +8666,30 @@ export default function App() {
     setReferencePreview(normalizeItem(item));
   }
 
+  async function toggleReferencePreviewFavorite() {
+    if (!referencePreview?.id) {
+      return;
+    }
+
+    const nextReferencePreview = normalizeItem({
+      ...referencePreview,
+      favorite: !referencePreview.favorite,
+      updatedAt: new Date().toISOString()
+    });
+
+    await saveItem(nextReferencePreview);
+    setItems((current) => current.map((item) => item.id === nextReferencePreview.id ? nextReferencePreview : item));
+    setReferencePreview(nextReferencePreview);
+  }
+
+  async function deleteReferencePreviewItem() {
+    if (!referencePreview?.id) {
+      return;
+    }
+
+    await handleDelete(referencePreview.id);
+  }
+
   const cropEditorBody = cropEditorState && draft.imageUrl.trim() ? (
     <div className="crop-editor-modal" role="dialog" aria-modal="true" aria-label="Crop reference image">
       <div className="crop-editor-header">
@@ -8514,6 +8871,7 @@ export default function App() {
       </div>
 
       <div className="form-actions bulk-editor-actions">
+        <button type="button" className="ghost-button danger" onClick={deleteSelectedReferences}>Delete selected</button>
         <button type="button" className="secondary-button" onClick={clearSelectedReferences}>Clear selection</button>
       </div>
     </div>
@@ -8756,31 +9114,40 @@ export default function App() {
             <button
               type="button"
               className={`workspace-tab ${controlsOpen && !activePanel ? "is-active" : ""}`}
-              onClick={toggleControlsWindow}
+              onClick={(event) => toggleControlsWindow(event)}
               aria-pressed={controlsOpen && !activePanel}
             >
               CONTROLS
             </button>
             <div className={`workspace-tab-group ${isDockExpanded ? "is-expanded" : ""}`}>
-              {[["wardrobe", "Library"]].map(([panel, label]) => (
-                <button
-                  key={panel}
-                  type="button"
-                  className={`workspace-tab ${activePanel === panel ? "is-active" : ""}`}
-                  onClick={() => toggleWorkspacePanel(panel)}
-                  aria-pressed={activePanel === panel}
-                  tabIndex={isDockExpanded ? 0 : -1}
-                >
-                  {label}
-                </button>
-              ))}
+              <button
+                type="button"
+                className={`workspace-tab ${activePanel === "wardrobe" && !wardrobeSavedOpen ? "is-active" : ""}`}
+                onClick={(event) => toggleWorkspacePanel("wardrobe", event)}
+                aria-pressed={activePanel === "wardrobe" && !wardrobeSavedOpen}
+                tabIndex={isDockExpanded ? 0 : -1}
+              >
+                Library
+              </button>
+              <button
+                type="button"
+                className={`workspace-tab ${activePanel === "wardrobe" && wardrobeSavedOpen ? "is-active" : ""}`}
+                onClick={(event) => toggleSavedBoardsPanel(event)}
+                aria-pressed={activePanel === "wardrobe" && wardrobeSavedOpen}
+                tabIndex={isDockExpanded ? 0 : -1}
+              >
+                Saved Boards
+              </button>
             </div>
             {outfitPalette.length ? (
               paletteOpen ? (
                 <button
                   type="button"
                   className="outfit-palette-inline"
-                  onClick={() => setPaletteOpen(false)}
+                  onClick={(event) => {
+                    setPaletteOpen(false);
+                    blurPointerActivatedControl(event);
+                  }}
                   aria-label="Hide moodboard color palette"
                   title="Hide color palette"
                 >
@@ -8797,7 +9164,10 @@ export default function App() {
                 <button
                   type="button"
                   className="palette-tab"
-                  onClick={() => setPaletteOpen(true)}
+                  onClick={(event) => {
+                    setPaletteOpen(true);
+                    blurPointerActivatedControl(event);
+                  }}
                   aria-label="Toggle moodboard color palette"
                   aria-expanded={paletteOpen}
                   title="Color palette"
@@ -8816,7 +9186,10 @@ export default function App() {
               <button
                 type="button"
                 className="controls-hide-button"
-                onClick={() => setControlsOpen(false)}
+                onClick={(event) => {
+                  setControlsOpen(false);
+                  blurPointerActivatedControl(event);
+                }}
                 aria-label="Hide controls"
               >
                 ×
@@ -9018,59 +9391,232 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <>
-                <div className="library-command-bar">
-                  <div className="library-command-bar-search">
-                    <label className="wardrobe-search-control">
-                      <input
-                        type="search"
-                        aria-label="Search"
-                        value={librarySearch}
-                        onChange={(event) => setLibrarySearch(event.target.value)}
-                        placeholder="Search references"
-                      />
-                      {librarySearch.trim() ? (
+              <div className="library-command-bar">
+                  <div className="library-command-bar-leading">
+                    <div className="library-command-bar-search">
+                      <label className="wardrobe-search-control">
+                        <input
+                          type="search"
+                          aria-label="Search"
+                          value={librarySearch}
+                          onChange={(event) => setLibrarySearch(event.target.value)}
+                          placeholder="Search references"
+                        />
+                        {librarySearch.trim() ? (
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-search-clear"
+                            onClick={clearLibrarySearch}
+                            aria-label="Clear library search"
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </label>
+                    </div>
+
+                    <div className="library-command-bar-main-actions">
+                      <button
+                        type="button"
+                        className={`secondary-button filter-button ${wardrobeFiltersOpen || hasActiveWardrobeFilters ? "is-active" : ""}`}
+                        onClick={openWardrobeFilters}
+                        aria-pressed={wardrobeFiltersOpen}
+                        aria-expanded={wardrobeFiltersOpen}
+                      >
+                        Filter
+                      </button>
+                      <label className="wardrobe-sort-control">
+                        <select value={wardrobeSort} onChange={(event) => setWardrobeSort(event.target.value)}>
+                          <option value="favorites">Favorites first</option>
+                          <option value="name">Name A-Z</option>
+                          <option value="newest">Newest</option>
+                          <option value="oldest">Oldest</option>
+                        </select>
+                      </label>
+                      <div ref={wardrobeManagePopoverRef} className="library-popover-anchor">
                         <button
                           type="button"
-                          className="ghost-button wardrobe-search-clear"
-                          onClick={clearLibrarySearch}
-                          aria-label="Clear library search"
+                          className={`ghost-button library-context-button ${wardrobeManageOpen ? "is-active" : ""}`}
+                          onClick={(event) => toggleWardrobeManage(event)}
+                          aria-expanded={wardrobeManageOpen}
+                          aria-haspopup="dialog"
+                          aria-controls="library-manage-popover"
                         >
-                          ×
+                          Manage
                         </button>
-                      ) : null}
-                    </label>
-                  </div>
+                        <div
+                          id="library-manage-popover"
+                          className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`}
+                          aria-label="Library management"
+                        >
+                          <div className={`tag-manager-panel wardrobe-manage-stats ${manageStatsOpen ? "is-open" : ""}`}>
+                            <button
+                              type="button"
+                              className={`ghost-button tag-manager-toggle ${manageStatsOpen ? "is-active" : ""}`}
+                              onClick={() => setManageStatsOpen((current) => !current)}
+                              aria-expanded={manageStatsOpen}
+                            >
+                              Library stats
+                            </button>
 
-                  <div className="library-command-bar-main-actions">
-                    <button
-                      type="button"
-                      className={`secondary-button filter-button ${wardrobeFiltersOpen || hasActiveWardrobeFilters ? "is-active" : ""}`}
-                      onClick={openWardrobeFilters}
-                      aria-pressed={wardrobeFiltersOpen}
-                      aria-expanded={wardrobeFiltersOpen}
-                    >
-                      Filter
-                    </button>
-                    <label className="wardrobe-sort-control">
-                      <select value={wardrobeSort} onChange={(event) => setWardrobeSort(event.target.value)}>
-                        <option value="favorites">Favorites first</option>
-                        <option value="name">Name A-Z</option>
-                        <option value="newest">Newest</option>
-                        <option value="oldest">Oldest</option>
-                      </select>
-                    </label>
-                    <button type="button" className="primary-button" onClick={startCreate}>
-                      Add
-                    </button>
+                            {manageStatsOpen ? (
+                              <section className="wardrobe-manage-section" aria-label="Library stats">
+                                <div className="wardrobe-worth-summary">
+                                  <h2>{libraryStats.totalImages} images</h2>
+                                  <span>
+                                    {libraryStats.visibleImages} visible · {libraryStats.selectedImages} selected · {libraryStats.favoriteImages} favorites
+                                  </span>
+                                </div>
 
-                    <div
-                      ref={wardrobeFiltersPanelRef}
-                      className={`wardrobe-controls ${wardrobeFiltersOpen ? "is-open" : ""}`}
-                      aria-label="Library filters"
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={(event) => event.stopPropagation()}
-                    >
+                                <div className="worth-chart worth-chart-stats">
+                                  <div className="worth-row">
+                                    <div className="worth-row-header">
+                                      <strong>Visible tags</strong>
+                                      <span>{libraryStats.totalTags}</span>
+                                    </div>
+                                  </div>
+                                  {libraryStats.topTags.length ? (
+                                    <div className="worth-row">
+                                      <div className="worth-row-header">
+                                        <strong>Top tags</strong>
+                                        <span>Most used in current view</span>
+                                      </div>
+                                      <div className="active-filter-chips">
+                                        {libraryStats.topTags.map(({ tag, count }) => (
+                                          <button
+                                            key={tag}
+                                            type="button"
+                                            className={`tag-filter-option ${wardrobeFilters.tags.includes(tag) ? "is-active" : ""}`}
+                                            onClick={() => toggleLibraryTagFilter(tag)}
+                                            aria-pressed={wardrobeFilters.tags.includes(tag)}
+                                          >
+                                            <span>{tag}</span>
+                                            <small>{count}</small>
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </section>
+                            ) : null}
+                          </div>
+                          <button type="button" className="ghost-button" onClick={handleExportWardrobeImage}>
+                            Export library image
+                          </button>
+                          <button type="button" className="ghost-button" onClick={handleExportBackup}>
+                            Export backup
+                          </button>
+                          <button type="button" className="ghost-button" onClick={() => importBackupRef.current?.click()}>
+                            Import backup
+                          </button>
+                          {backupExportFeedback ? <p className="form-success tag-manager-feedback">{backupExportFeedback}</p> : null}
+                          <div className={`tag-manager-panel ${manageTagsOpen ? "is-open" : ""}`}>
+                            <button
+                              type="button"
+                              className={`ghost-button tag-manager-toggle ${manageTagsOpen ? "is-active" : ""}`}
+                              onClick={() => setManageTagsOpen((current) => !current)}
+                              aria-expanded={manageTagsOpen}
+                            >
+                              Manage tags
+                            </button>
+
+                            {manageTagsOpen ? (
+                              <div className="tag-manager-body">
+                                <div className="tag-manager-toolbar">
+                                  <label className="tag-manager-search">
+                                    <span className="sr-only">Search tags</span>
+                                    <input
+                                      type="search"
+                                      value={tagManagerSearch}
+                                      onChange={(event) => setTagManagerSearch(event.target.value)}
+                                      placeholder="Search tags"
+                                      aria-label="Search tags"
+                                    />
+                                  </label>
+                                  <span className="tag-manager-count">
+                                    {tagManagerEntries.length} {tagManagerEntries.length === 1 ? "tag" : "tags"}
+                                  </span>
+                                </div>
+
+                                {tagManagerFeedback ? <p className="form-success tag-manager-feedback">{tagManagerFeedback}</p> : null}
+
+                                {tagManagerEntries.length ? (
+                                  <div className="tag-manager-list">
+                                    {tagManagerTree.childNodes.map((node) => renderTagManagerNode(node))}
+                                  </div>
+                                ) : (
+                                  <p className="tag-manager-empty">No tags match this search.</p>
+                                )}
+                                <datalist id="tag-manager-targets">
+                                  {allLibraryTagEntries.map(({ tag }) => (
+                                    <option key={tag} value={tag} />
+                                  ))}
+                                </datalist>
+                              </div>
+                            ) : null}
+                          </div>
+                          <button type="button" className="ghost-button danger" onClick={handleResetToDefault}>
+                            Reset to default
+                          </button>
+                        </div>
+                      </div>
+                      <div ref={wardrobeAddPopoverRef} className="library-popover-anchor">
+                        <button
+                          type="button"
+                          className={`primary-button library-context-button ${wardrobeAddOpen ? "is-active" : ""}`}
+                          onClick={(event) => (wardrobeAddOpen ? closeWardrobeAdd(event) : startCreate(event))}
+                          aria-expanded={wardrobeAddOpen}
+                          aria-haspopup="dialog"
+                          aria-controls="library-add-popover"
+                        >
+                          Add
+                        </button>
+                        <div id="library-add-popover" className={`wardrobe-add-window ${wardrobeAddOpen ? "is-open" : ""}`} aria-label="Add references">
+                          <div className="wardrobe-modal-header">
+                            <p className="eyebrow">Library</p>
+                            <h2>Add</h2>
+                            <p>Import one or more images directly into the library.</p>
+                          </div>
+                          <div
+                            className={`item-image-upload wardrobe-add-upload ${itemImageDragActive ? "is-drag-active" : ""}`}
+                            onDragEnter={handleItemImageDragEnter}
+                            onDragOver={handleItemImageDragOver}
+                            onDragLeave={handleItemImageDragLeave}
+                            onDrop={handleItemImageDrop}
+                          >
+                            <div className="item-image-preview wardrobe-add-preview">
+                              <span>Drop images here</span>
+                            </div>
+                            <div className="wardrobe-add-upload-main">
+                              <div className="item-image-actions wardrobe-add-actions">
+                                <label className="upload-button">
+                                  {itemImporting ? "Importing..." : "Import image"}
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    multiple
+                                    onChange={handleItemImageUpload}
+                                    disabled={imageProcessing || itemImporting}
+                                  />
+                                </label>
+                              </div>
+                              <p className="item-image-note">
+                                Drag and drop images here or use Import image. Imported references are saved in this browser and included in backup JSON.
+                              </p>
+                              {imageUploadError ? <p className="form-success wardrobe-add-feedback">{imageUploadError}</p> : null}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div
+                        ref={wardrobeFiltersPanelRef}
+                        className={`wardrobe-controls ${wardrobeFiltersOpen ? "is-open" : ""}`}
+                        aria-label="Library filters"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                      >
                       <div className="wardrobe-controls-inline-row">
                         <label className="wardrobe-inline-filter">
                           <span>Favorite</span>
@@ -9164,292 +9710,131 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  <div ref={librarySelectionActionsRef} className="library-command-bar-context">
+                  <div className="library-command-bar-context">
                     {hasSelectedReferences ? (
-                      <>
+                      <div className="library-command-bar-context-selection">
                         <span className="wardrobe-selection-chip">
                           {selectedReferenceCount} selected
                           <button
                             type="button"
                             className="wardrobe-selection-chip-clear"
+                            onMouseDown={preventMouseButtonFocus}
                             onClick={clearSelectedReferences}
                             aria-label="Clear selection"
                           >
                             ×
                           </button>
                         </span>
-                        <button
-                          type="button"
-                          className="primary-button library-context-button"
-                          onClick={openSelectionEditor}
-                          disabled={!canEditSelectedReference}
-                        >
-                          Edit
-                        </button>
-                        <div className="library-tag-action-anchor">
+                        <div className="library-command-bar-context-actions">
                           <button
                             type="button"
-                            className={`ghost-button library-context-button ${libraryTagActionMode === "add" ? "is-active" : ""}`}
-                            onClick={() => toggleLibraryTagAction("add")}
+                            className="secondary-button library-context-button library-selection-edit-button"
+                            onMouseDown={preventMouseButtonFocus}
+                            onClick={openSelectionEditor}
                           >
-                            +Tag
+                            Edit
                           </button>
-                          {libraryTagActionMode === "add" ? (
-                            <div className="library-tag-action-popover" aria-label="Add tags to selection">
-                              <TagInput
-                                selectedTags={libraryTagActionSelectedTags}
-                                allTags={libraryTagActionSuggestions}
-                                onChange={(nextTags) => {
-                                  void handleImmediateBulkTagDraftChange("add", nextTags);
-                                }}
-                                placeholder="Add tag"
-                                autoFocus
-                                showAllSuggestionsOnFocus
-                              />
-                            </div>
-                          ) : null}
+                          <div ref={librarySelectionActionsRef} className="library-tag-action-anchor">
+                            <button
+                              type="button"
+                              className={`ghost-button library-context-button ${librarySelectionActionsOpen || libraryTagActionMode ? "is-active" : ""}`}
+                              onMouseDown={preventMouseButtonFocus}
+                              onClick={toggleLibrarySelectionActions}
+                              aria-expanded={librarySelectionActionsOpen || Boolean(libraryTagActionMode)}
+                              aria-haspopup="menu"
+                              aria-controls="library-selection-actions-popover"
+                            >
+                              Actions
+                            </button>
+                            {(librarySelectionActionsOpen || libraryTagActionMode) ? (
+                              <div id="library-selection-actions-popover" className="selection-actions-popover" aria-label="Selection actions">
+                                {libraryTagActionMode ? (
+                                  <div className="selection-action-editor">
+                                    <button
+                                      type="button"
+                                      className="ghost-button selection-action-back"
+                                      onClick={() => setLibraryTagActionMode(null)}
+                                    >
+                                      Back
+                                    </button>
+                                    <p className="selection-action-title">
+                                      {libraryTagActionMode === "add" ? "Add tags" : "Remove tags"}
+                                    </p>
+                                    <TagInput
+                                      selectedTags={libraryTagActionSelectedTags}
+                                      allTags={libraryTagActionSuggestions}
+                                      onChange={(nextTags) => {
+                                        void handleImmediateBulkTagDraftChange(libraryTagActionMode, nextTags);
+                                      }}
+                                      placeholder={libraryTagActionMode === "add" ? "Add tag" : "Remove tag"}
+                                      autoFocus
+                                      showAllSuggestionsOnFocus
+                                    />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="selection-actions-popover-item"
+                                      onClick={() => toggleLibraryTagAction("add")}
+                                    >
+                                      Add tags
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="selection-actions-popover-item"
+                                      onClick={() => toggleLibraryTagAction("remove")}
+                                    >
+                                      Remove tags
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="selection-actions-popover-item"
+                                      onClick={async () => {
+                                        setLibrarySelectionActionsOpen(false);
+                                        await applyImmediateBulkFavoriteEdit("yes");
+                                      }}
+                                    >
+                                      Favorite selected
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="selection-actions-popover-item"
+                                      onClick={async () => {
+                                        setLibrarySelectionActionsOpen(false);
+                                        await applyImmediateBulkFavoriteEdit("no");
+                                      }}
+                                    >
+                                      Unfavorite selected
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="selection-actions-popover-item is-danger"
+                                      onClick={async () => {
+                                        setLibrarySelectionActionsOpen(false);
+                                        await deleteSelectedReferences();
+                                      }}
+                                    >
+                                      Delete selected
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="library-tag-action-anchor">
-                          <button
-                            type="button"
-                            className={`ghost-button library-context-button ${libraryTagActionMode === "remove" ? "is-active" : ""}`}
-                            onClick={() => toggleLibraryTagAction("remove")}
-                          >
-                            -Tag
-                          </button>
-                          {libraryTagActionMode === "remove" ? (
-                            <div className="library-tag-action-popover" aria-label="Remove tags from selection">
-                              <TagInput
-                                selectedTags={libraryTagActionSelectedTags}
-                                allTags={libraryTagActionSuggestions}
-                                onChange={(nextTags) => {
-                                  void handleImmediateBulkTagDraftChange("remove", nextTags);
-                                }}
-                                placeholder="Remove tag"
-                                autoFocus
-                                showAllSuggestionsOnFocus
-                              />
-                            </div>
-                          ) : null}
-                        </div>
-                        <label className="library-context-favorite">
-                          <select
-                            aria-label="Favorite"
-                            value={bulkMetadataDraft.favorite}
-                            onChange={async (event) => {
-                              const nextValue = event.target.value;
-                              setBulkMetadataDraft((current) => ({ ...current, favorite: nextValue }));
-                              await applyImmediateBulkFavoriteEdit(nextValue);
-                              setBulkMetadataDraft((current) => ({ ...current, favorite: "" }));
-                            }}
-                          >
-                            <option value="">♥</option>
-                            <option value="yes">♥+</option>
-                            <option value="no">♥−</option>
-                          </select>
-                        </label>
-                        <button
-                          type="button"
-                          className="primary-button wardrobe-bulk-button wardrobe-bulk-button-danger library-context-button"
-                          onClick={deleteSelectedReferences}
-                        >
-                          Delete
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className={`ghost-button library-context-button ${wardrobeSavedOpen ? "is-active" : ""}`}
-                          onClick={toggleWardrobeSaved}
-                          aria-expanded={wardrobeSavedOpen}
-                        >
-                          Saved Boards
-                        </button>
-                        <button
-                          type="button"
-                          className={`ghost-button library-context-button ${wardrobeManageOpen ? "is-active" : ""}`}
-                          onClick={toggleWardrobeManage}
-                          aria-expanded={wardrobeManageOpen}
-                        >
-                          Manage
-                        </button>
-                      </>
-                    )}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-              </>
             )}
             </div>
 
             {wardrobeFiltersOpen ? (
               <div className="floating-backdrop filter-backdrop" onClick={() => setWardrobeFiltersOpen(false)} />
             ) : null}
-
-            {wardrobeAddOpen ? (
-              <div className="floating-backdrop filter-backdrop" onClick={closeWardrobeAdd} />
-            ) : null}
-
-            <div className={`wardrobe-add-window ${wardrobeAddOpen ? "is-open" : ""}`} aria-label="Add references">
-              <button type="button" className="ghost-button filter-close-button" onClick={closeWardrobeAdd}>
-                Close
-              </button>
-              <div className="wardrobe-modal-header">
-                <p className="eyebrow">Library</p>
-                <h2>Add</h2>
-                <p>Import one or more images directly into the library.</p>
-              </div>
-              <div
-                className={`item-image-upload wardrobe-add-upload ${itemImageDragActive ? "is-drag-active" : ""}`}
-                onDragEnter={handleItemImageDragEnter}
-                onDragOver={handleItemImageDragOver}
-                onDragLeave={handleItemImageDragLeave}
-                onDrop={handleItemImageDrop}
-              >
-                <div className="item-image-preview wardrobe-add-preview">
-                  <span>Drop images here</span>
-                </div>
-                <div className="wardrobe-add-upload-main">
-                  <div className="item-image-actions wardrobe-add-actions">
-                    <label className="upload-button">
-                      {itemImporting ? "Importing..." : "Import image"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        onChange={handleItemImageUpload}
-                        disabled={imageProcessing || itemImporting}
-                      />
-                    </label>
-                  </div>
-                  <p className="item-image-note">
-                    Drag and drop images here or use Import image. Imported references are saved in this browser and included in backup JSON.
-                  </p>
-                  {imageUploadError ? <p className="form-success wardrobe-add-feedback">{imageUploadError}</p> : null}
-                </div>
-              </div>
-            </div>
-
-            {wardrobeManageOpen ? (
-              <div className="floating-backdrop filter-backdrop" onClick={() => setWardrobeManageOpen(false)} />
-            ) : null}
-
-            <div className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`} aria-label="Library management">
-              <button type="button" className="ghost-button filter-close-button" onClick={() => setWardrobeManageOpen(false)}>
-                Close
-              </button>
-              <div className={`tag-manager-panel wardrobe-manage-stats ${manageStatsOpen ? "is-open" : ""}`}>
-                <button
-                  type="button"
-                  className={`ghost-button tag-manager-toggle ${manageStatsOpen ? "is-active" : ""}`}
-                  onClick={() => setManageStatsOpen((current) => !current)}
-                  aria-expanded={manageStatsOpen}
-                >
-                  Library stats
-                </button>
-
-                {manageStatsOpen ? (
-                  <section className="wardrobe-manage-section" aria-label="Library stats">
-                    <div className="wardrobe-worth-summary">
-                      <h2>{libraryStats.totalImages} images</h2>
-                      <span>
-                        {libraryStats.visibleImages} visible · {libraryStats.selectedImages} selected · {libraryStats.favoriteImages} favorites
-                      </span>
-                    </div>
-
-                    <div className="worth-chart worth-chart-stats">
-                      <div className="worth-row">
-                        <div className="worth-row-header">
-                          <strong>Visible tags</strong>
-                          <span>{libraryStats.totalTags}</span>
-                        </div>
-                      </div>
-                      {libraryStats.topTags.length ? (
-                        <div className="worth-row">
-                          <div className="worth-row-header">
-                            <strong>Top tags</strong>
-                            <span>Most used in current view</span>
-                          </div>
-                          <div className="active-filter-chips">
-                            {libraryStats.topTags.map(({ tag, count }) => (
-                              <button
-                                key={tag}
-                                type="button"
-                                className={`tag-filter-option ${wardrobeFilters.tags.includes(tag) ? "is-active" : ""}`}
-                                onClick={() => toggleLibraryTagFilter(tag)}
-                                aria-pressed={wardrobeFilters.tags.includes(tag)}
-                              >
-                                <span>{tag}</span>
-                                <small>{count}</small>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </section>
-                ) : null}
-              </div>
-              <button type="button" className="ghost-button" onClick={handleExportWardrobeImage}>
-                Export library image
-              </button>
-              <button type="button" className="ghost-button" onClick={handleExportBackup}>
-                Export backup
-              </button>
-              <button type="button" className="ghost-button" onClick={() => importBackupRef.current?.click()}>
-                Import backup
-              </button>
-              {backupExportFeedback ? <p className="form-success tag-manager-feedback">{backupExportFeedback}</p> : null}
-              <div className={`tag-manager-panel ${manageTagsOpen ? "is-open" : ""}`}>
-                <button
-                  type="button"
-                  className={`ghost-button tag-manager-toggle ${manageTagsOpen ? "is-active" : ""}`}
-                  onClick={() => setManageTagsOpen((current) => !current)}
-                  aria-expanded={manageTagsOpen}
-                >
-                  Manage tags
-                </button>
-
-                {manageTagsOpen ? (
-                  <div className="tag-manager-body">
-                    <div className="tag-manager-toolbar">
-                      <label className="tag-manager-search">
-                        <span className="sr-only">Search tags</span>
-                        <input
-                          type="search"
-                          value={tagManagerSearch}
-                          onChange={(event) => setTagManagerSearch(event.target.value)}
-                          placeholder="Search tags"
-                          aria-label="Search tags"
-                        />
-                      </label>
-                      <span className="tag-manager-count">
-                        {tagManagerEntries.length} {tagManagerEntries.length === 1 ? "tag" : "tags"}
-                      </span>
-                    </div>
-
-                    {tagManagerFeedback ? <p className="form-success tag-manager-feedback">{tagManagerFeedback}</p> : null}
-
-                    {tagManagerEntries.length ? (
-                      <div className="tag-manager-list">
-                        {tagManagerTree.childNodes.map((node) => renderTagManagerNode(node))}
-                      </div>
-                    ) : (
-                      <p className="tag-manager-empty">No tags match this search.</p>
-                    )}
-                    <datalist id="tag-manager-targets">
-                      {allLibraryTagEntries.map(({ tag }) => (
-                        <option key={tag} value={tag} />
-                      ))}
-                    </datalist>
-                  </div>
-                ) : null}
-              </div>
-              <button type="button" className="ghost-button danger" onClick={handleResetToDefault}>
-                Reset to default
-              </button>
-            </div>
 
             <input
               ref={importBackupRef}
@@ -9571,11 +9956,23 @@ export default function App() {
                 <div className="reference-preview-actions">
                   <button
                     type="button"
+                    className={`ghost-button ${referencePreview.favorite ? "is-active" : ""}`}
+                    onClick={toggleReferencePreviewFavorite}
+                    aria-pressed={Boolean(referencePreview.favorite)}
+                    aria-label={referencePreview.favorite ? "Remove from favorites" : "Add to favorites"}
+                  >
+                    {referencePreview.favorite ? "Unfavorite" : "Favorite"}
+                  </button>
+                  <button
+                    type="button"
                     className="ghost-button"
                     onClick={() => startFloatingEditFromPreview(referencePreview)}
                     aria-label={`Edit ${buildDisplayName(referencePreview)}`}
                   >
                     Edit
+                  </button>
+                  <button type="button" className="ghost-button danger" onClick={deleteReferencePreviewItem}>
+                    Delete
                   </button>
                   <button type="button" className="ghost-button" onClick={() => setReferencePreview(null)}>
                     Close

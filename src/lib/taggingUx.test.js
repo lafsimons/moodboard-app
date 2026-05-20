@@ -173,7 +173,7 @@ test("getNextLibrarySelection supports plain click, toggle, and shift range", ()
     }),
     {
       nextSelection: { b: true, c: true, d: true },
-      nextAnchorId: "d"
+      nextAnchorId: "b"
     }
   );
 
@@ -188,7 +188,73 @@ test("getNextLibrarySelection supports plain click, toggle, and shift range", ()
     }),
     {
       nextSelection: { a: true, b: true, c: true, d: true },
-      nextAnchorId: "d"
+      nextAnchorId: "b"
+    }
+  );
+});
+
+test("getNextLibrarySelection toggles a single selected item off on plain click", () => {
+  assert.deepEqual(
+    getNextLibrarySelection({
+      currentSelection: { b: true },
+      itemId: "b",
+      visibleItemIds: ["a", "b", "c"],
+      anchorId: "b",
+      isToggleSelection: false,
+      isRangeSelection: false
+    }),
+    {
+      nextSelection: {},
+      nextAnchorId: null
+    }
+  );
+});
+
+test("getNextLibrarySelection adds a shift range predictably when modifier keys are combined", () => {
+  assert.deepEqual(
+    getNextLibrarySelection({
+      currentSelection: { a: true, b: true, c: true, e: true },
+      itemId: "d",
+      visibleItemIds: ["a", "b", "c", "d", "e"],
+      anchorId: "b",
+      isToggleSelection: true,
+      isRangeSelection: true
+    }),
+    {
+      nextSelection: { a: true, b: true, c: true, d: true, e: true },
+      nextAnchorId: "b"
+    }
+  );
+});
+
+test("getNextLibrarySelection keeps the same anchor across repeated shift clicks", () => {
+  const visibleItemIds = ["a", "b", "c", "d", "e"];
+  const firstRange = getNextLibrarySelection({
+    currentSelection: { b: true },
+    itemId: "e",
+    visibleItemIds,
+    anchorId: "b",
+    isToggleSelection: false,
+    isRangeSelection: true
+  });
+
+  assert.deepEqual(firstRange, {
+    nextSelection: { b: true, c: true, d: true, e: true },
+    nextAnchorId: "b"
+  });
+
+  assert.deepEqual(
+    getNextLibrarySelection({
+      currentSelection: firstRange.nextSelection,
+      itemId: "c",
+      visibleItemIds,
+      anchorId: firstRange.nextAnchorId,
+      isToggleSelection: false,
+      isRangeSelection: true
+    }),
+    {
+      nextSelection: { b: true, c: true },
+      nextAnchorId: "b"
     }
   );
 });
