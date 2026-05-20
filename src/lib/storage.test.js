@@ -1,5 +1,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 import {
   __setIndexedDbFactoryForTests,
@@ -24,6 +26,7 @@ import {
   deleteItem,
   upsertSyncMetadata
 } from "./storage.js";
+import defaultWardrobe from "../data/defaultWardrobe.js";
 
 class FakeIDBRequest {
   constructor(result, error = null) {
@@ -259,6 +262,26 @@ test("createLightweightBackupData preserves preview as the portable render asset
   });
   assert.equal("syncState" in backup, false);
   assert.equal("syncMetadata" in backup, false);
+});
+
+test("default wardrobe demo references point at bundled working image assets", () => {
+  assert.equal(defaultWardrobe.length, 34);
+  assert.equal(new Set(defaultWardrobe.map((item) => item.orientation)).size >= 3, true);
+  assert.equal(new Set(defaultWardrobe.map((item) => item.fileExtension)).size >= 2, true);
+
+  defaultWardrobe.forEach((item) => {
+    assert.match(item.imageUrl, /^\/images\/tt-1-aw21-image/);
+    assert.equal(item.imageUrl, item.images.preview.src);
+    assert.equal(item.imageUrl, item.images.original.src);
+    assert.equal(item.imageUrl, item.images.thumbnail.src);
+    assert.equal(item.originalPreserved, true);
+    assert.equal(item.imageWidth > 0, true);
+    assert.equal(item.imageHeight > 0, true);
+    assert.equal(item.tags.includes("demo"), true);
+
+    const absoluteImagePath = path.resolve(process.cwd(), item.imageUrl.slice(1));
+    assert.equal(existsSync(absoluteImagePath), true, `${item.id} is missing ${item.imageUrl}`);
+  });
 });
 
 test("db upgrade creates sync stores", async () => {

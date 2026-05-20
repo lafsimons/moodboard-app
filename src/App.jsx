@@ -162,7 +162,7 @@ const GENERATE_PERF_DEBUG_FLAG = "debug:generate-perf";
 const LIBRARY_PERF_DEBUG_FLAG = "debug:library-perf";
 const LIBRARY_GRID_MIN_COLUMN_WIDTH = 164;
 const LIBRARY_GRID_GAP = 12;
-const LIBRARY_GRID_ESTIMATED_ROW_HEIGHT = 210;
+const LIBRARY_GRID_ESTIMATED_ROW_HEIGHT = 222;
 const LIBRARY_GRID_OVERSCAN_ROWS = 2;
 const LIBRARY_VIRTUALIZATION_THRESHOLD = 120;
 const BOARD_PICKER_GRID_COLUMNS = 3;
@@ -1359,6 +1359,64 @@ function preventMouseButtonFocus(event) {
   }
 }
 
+function getLibraryCardPresentation(item) {
+  const fallbackAspectRatio =
+    Number(item?.imageWidth) > 0 && Number(item?.imageHeight) > 0
+      ? Number(item.imageWidth) / Number(item.imageHeight)
+      : 1;
+  const aspectRatio = Math.max(0.45, Math.min(2.2, Number(item?.aspectRatio) || fallbackAspectRatio || 1));
+  const normalizedOrientation =
+    item?.orientation === "landscape" || aspectRatio > 1.08
+      ? "landscape"
+      : item?.orientation === "square" || Math.abs(aspectRatio - 1) < 0.08
+        ? "square"
+        : "portrait";
+
+  if (normalizedOrientation === "landscape") {
+    const isWideLandscape = aspectRatio > 1.45;
+
+    return {
+      orientationClass: isWideLandscape ? "is-landscape is-wide" : "is-landscape",
+      style: {
+        "--library-card-min-height": isWideLandscape ? "196px" : "202px",
+        "--library-preview-height": isWideLandscape ? "116px" : "126px",
+        "--library-preview-padding": isWideLandscape ? "4px 6px" : "5px 7px 6px",
+        "--library-preview-align": "center",
+        "--library-image-width-base": isWideLandscape ? "182px" : "166px",
+        "--library-image-max-height": isWideLandscape ? "112px" : "122px"
+      }
+    };
+  }
+
+  if (normalizedOrientation === "square") {
+    return {
+      orientationClass: "is-square",
+      style: {
+        "--library-card-min-height": "206px",
+        "--library-preview-height": "142px",
+        "--library-preview-padding": "5px",
+        "--library-preview-align": "center",
+        "--library-image-width-base": "150px",
+        "--library-image-max-height": "136px"
+      }
+    };
+  }
+
+  const isTallPortrait = aspectRatio < 0.72;
+
+  return {
+    orientationClass: isTallPortrait ? "is-portrait is-tall" : "is-portrait",
+    style: {
+      "--library-card-min-height": isTallPortrait ? "220px" : "212px",
+      "--library-preview-height": isTallPortrait ? "160px" : "152px",
+      "--library-preview-padding": isTallPortrait ? "6px" : "6px",
+      "--library-preview-align": "end",
+      "--library-image-width-base": isTallPortrait ? "138px" : "142px",
+      "--library-image-max-height": isTallPortrait ? "148px" : "140px"
+    }
+  };
+}
+
 const LibraryGridCard = memo(function LibraryGridCard({
   item,
   isSelected,
@@ -1371,8 +1429,21 @@ const LibraryGridCard = memo(function LibraryGridCard({
   const itemName = useMemo(() => buildDisplayName(item), [item]);
   const itemTagsLabel = useMemo(() => {
     const normalizedTags = uniqueTags(item.tags);
-    return normalizedTags.length ? normalizedTags.map((tag) => getLeafTagLabel(tag)).join(", ") : "No tags";
+    if (!normalizedTags.length) {
+      return "No tags";
+    }
+
+    const displayTags = normalizedTags.slice(0, 4).map((tag) => getLeafTagLabel(tag));
+    return normalizedTags.length > 4 ? `${displayTags.join(" · ")} · …` : displayTags.join(" · ");
   }, [item]);
+  const presentation = useMemo(() => getLibraryCardPresentation(item), [item]);
+  const mergedCardStyle = useMemo(
+    () => ({
+      ...(cardStyle ?? {}),
+      ...(presentation.style ?? {})
+    }),
+    [cardStyle, presentation.style]
+  );
 
   useEffect(() => {
     onVisibleImageMount?.();
@@ -1380,8 +1451,8 @@ const LibraryGridCard = memo(function LibraryGridCard({
 
   return (
     <article
-      className={`wardrobe-card ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""}`}
-      style={cardStyle ?? undefined}
+      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""}`}
+      style={mergedCardStyle}
     >
       <button
         type="button"
