@@ -192,6 +192,25 @@ Not priority yet:
 - large storage migrations
 - object-storage relinking
 
+## **Taxonomy & Navigation**
+
+- keyboard navigation
+- saved filter presets
+- recent tags
+- pinned branches
+- taxonomy scaling improvements
+- semantic browsing systems
+- relationship-based navigation
+
+## **MBA UX / Interface Evolution**
+
+- sticky search bar
+- filter density refinements
+- compact mode ideas
+- selection visibility improvements
+- chip UX refinements
+- mobile filter adaptations
+
 ### Experimental taxonomy ideas
 
 Potential long-term nested taxonomy direction:
