@@ -123,7 +123,7 @@ test("sanitizeExportedReference emits simplified metadata shape", () => {
   assert.equal(exported.originalFilename, "photo.jpg");
   assert.equal(exported.fileExtension, "jpg");
   assert.equal(exported.fileSize, 1234);
-  assert.equal(exported.mimeType, "image/jpeg");
+  assert.equal(exported.mimeType, "image/webp");
   assert.equal(exported.imageWidth, 1000);
   assert.equal(exported.imageHeight, 800);
   assert.equal(exported.originalPreserved, true);
@@ -192,18 +192,45 @@ test("sanitizeBackupReference preserves portable preview assets and strips only 
   });
 
   assert.equal(exported.originalPreserved, false);
-  assert.equal(exported.imageUrl, "data:image/webp;base64,preview");
-  assert.equal(exported.mimeType, "image/webp");
-  assert.equal(exported.imageWidth, 1200);
-  assert.equal(exported.imageHeight, 960);
-  assert.equal(exported.fileSize, 1200);
-  assert.equal(exported.originalFilename, "photo.jpg");
+  assert.equal("imageUrl" in exported, false);
+  assert.equal("mimeType" in exported, false);
+  assert.equal("imageWidth" in exported, false);
+  assert.equal("imageHeight" in exported, false);
+  assert.equal("fileSize" in exported, false);
+  assert.equal("originalFilename" in exported, false);
   assert.equal(exported.images.original.src, "");
   assert.equal(exported.images.original.checksum, "orig-checksum");
   assert.equal(exported.images.preview.src, "data:image/webp;base64,preview");
   assert.equal(exported.images.preview.cdnPath, "/portable/preview.webp");
-  assert.equal(exported.images.thumbnail.src, "data:image/webp;base64,thumb");
+  assert.equal(exported.images.thumbnail.src, "");
   assert.equal(exported.images.thumbnail.blurHash, "LEHV6nWB2yk8pyo0adR*.7kCMdnj");
+});
+
+test("migrateReferenceMetadataToTags rebuilds preview-facing convenience fields from nested preview assets", () => {
+  const migrated = migrateReferenceMetadataToTags({
+    id: "1",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview",
+        mimeType: "image/webp",
+        width: 1200,
+        height: 900,
+        fileSize: 1234,
+        originalFilename: "photo.jpg"
+      }
+    },
+    aspectRatio: 1.3333,
+    orientation: "landscape"
+  });
+
+  assert.equal(migrated.imageUrl, "data:image/webp;base64,preview");
+  assert.equal(migrated.mimeType, "image/webp");
+  assert.equal(migrated.imageWidth, 1200);
+  assert.equal(migrated.imageHeight, 900);
+  assert.equal(migrated.fileSize, 1234);
+  assert.equal(migrated.originalFilename, "photo.jpg");
+  assert.equal(migrated.aspectRatio, 1.3333);
+  assert.equal(migrated.orientation, "landscape");
 });
 
 test("getAllTags returns sorted unique library tags", () => {

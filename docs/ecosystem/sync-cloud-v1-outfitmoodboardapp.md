@@ -7,6 +7,43 @@ This document defines the first practical sync/cloud implementation for OA and M
 
 The goal is to move from browser-only persistence toward a sync-ready architecture without breaking current local-first behavior.
 
+## **Sync/cloud v1 direction**
+
+Implemented locally in both OA and MBA:
+
+- dedicated `syncState` + `syncMetadata` IndexedDB stores
+- stable local `deviceId`
+- sync metadata backfill for existing records
+- dirty marking for syncable entities
+- tombstone delete handling
+- stable UUID-based sync keys
+- aligned local sync metadata contract across OA and MBA
+- sync metadata excluded from backup export
+- sync metadata rebuilt on backup import/reset
+
+Current behavior:
+
+- IndexedDB remains runtime source of truth
+- no cloud sync yet
+- no auth yet
+- no Supabase integration yet
+- no collaboration/public sharing
+- MBA current working board remains local-only
+- preview-first asset sync direction remains planned
+
+Documented implementation direction:
+
+- IndexedDB remains runtime source/cache
+- cloud becomes durable sync target/source
+- preview assets sync first
+- originals remain optional/deferred
+- `itemUuid` is canonical cloud identity
+- `id` remains legacy/local-active
+- OA and MBA remain separate apps
+- hub remains resolver/router, not workflow owner
+- no collaboration/public sharing in v1
+- v1 conflicts use last-write-wins with timestamps/device metadata
+
 ---
 
 # **Core v1 decisions**
@@ -97,7 +134,7 @@ Both OA and MBA use a normalized local singleton sync state:
   lastPushCursor: "",
   lastPullCursor: ""
 }
-````
+```
 
 ### **syncMetadata**
 

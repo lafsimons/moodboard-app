@@ -1,4 +1,4 @@
-import { materializeItemImagesForExport, normalizeItemImages } from "./itemImages.js";
+import { applyPreviewImageFields, materializeItemImagesForExport, normalizeItemImages } from "./itemImages.js";
 import { normalizeItemSourceIdentity } from "./itemIdentity.js";
 
 const LEGACY_METADATA_FIELDS = ["category", "collection", "productType", "sourceTags", "brand"];
@@ -88,7 +88,7 @@ export function migrateReferenceMetadataToTags(reference) {
       normalizedImages.preview.originalFilename
   });
 
-  return {
+  const normalizedReference = {
     ...rest,
     images: {
       original: normalizedImages.original,
@@ -100,6 +100,9 @@ export function migrateReferenceMetadataToTags(reference) {
     tags,
     favorite: Boolean(reference.favorite)
   };
+
+  const exportablePreview = materializeItemImagesForExport(normalizedReference).preview;
+  return applyPreviewImageFields(normalizedReference, exportablePreview);
 }
 
 export function sanitizeExportedReference(reference) {
@@ -130,10 +133,48 @@ function stripEmbeddedImageAssetSrc(asset = {}) {
     : normalizedAsset;
 }
 
+function stripImageAssetSrc(asset = {}) {
+  const normalizedAsset = createPortableBackupAsset(asset);
+  return {
+    ...normalizedAsset,
+    src: ""
+  };
+}
+
 function createPortableBackupAsset(asset = {}) {
   return {
     ...asset
   };
+}
+
+function omitPreviewMirrorFields(reference, previewAsset) {
+  const nextReference = { ...reference };
+
+  if (nextReference.imageUrl === previewAsset.src) {
+    delete nextReference.imageUrl;
+  }
+
+  if (nextReference.mimeType === previewAsset.mimeType) {
+    delete nextReference.mimeType;
+  }
+
+  if (nextReference.imageWidth === previewAsset.width) {
+    delete nextReference.imageWidth;
+  }
+
+  if (nextReference.imageHeight === previewAsset.height) {
+    delete nextReference.imageHeight;
+  }
+
+  if (nextReference.fileSize === previewAsset.fileSize) {
+    delete nextReference.fileSize;
+  }
+
+  if (nextReference.originalFilename === previewAsset.originalFilename) {
+    delete nextReference.originalFilename;
+  }
+
+  return nextReference;
 }
 
 export function sanitizeBackupReference(reference) {
@@ -146,31 +187,33 @@ export function sanitizeBackupReference(reference) {
   const originalAsset = exported.images?.original ?? {};
   const previewAsset = exported.images?.preview ?? {};
   const thumbnailAsset = exported.images?.thumbnail ?? previewAsset;
-  const backupPreviewAsset = previewAsset.src ? previewAsset : thumbnailAsset.src ? thumbnailAsset : originalAsset;
+  const hasEmbeddedOriginal = isEmbeddedImageDataUrl(originalAsset.src);
+  const hasEmbeddedPreview = isEmbeddedImageDataUrl(previewAsset.src);
+  const hasEmbeddedThumbnail = isEmbeddedImageDataUrl(thumbnailAsset.src);
 
   if (
-    !isEmbeddedImageDataUrl(originalAsset.src) &&
-    !isEmbeddedImageDataUrl(previewAsset.src) &&
-    !isEmbeddedImageDataUrl(thumbnailAsset.src)
+    !hasEmbeddedOriginal &&
+    !hasEmbeddedPreview &&
+    !hasEmbeddedThumbnail
   ) {
-    return exported;
+    return omitPreviewMirrorFields({
+      ...exported,
+      images: {
+        ...exported.images,
+        thumbnail: previewAsset.src ? stripImageAssetSrc(thumbnailAsset) : createPortableBackupAsset(thumbnailAsset)
+      }
+    }, previewAsset);
   }
 
-  return {
+  return omitPreviewMirrorFields({
     ...exported,
-    imageUrl: backupPreviewAsset.src ?? "",
-    mimeType: backupPreviewAsset.mimeType ?? "",
-    imageWidth: backupPreviewAsset.width ?? 0,
-    imageHeight: backupPreviewAsset.height ?? 0,
-    fileSize: backupPreviewAsset.fileSize ?? 0,
-    originalFilename: backupPreviewAsset.originalFilename ?? exported.originalFilename ?? "",
-    originalPreserved: isEmbeddedImageDataUrl(originalAsset.src) ? false : exported.originalPreserved,
+    originalPreserved: hasEmbeddedOriginal ? false : exported.originalPreserved,
     images: {
       original: stripEmbeddedImageAssetSrc(originalAsset),
       preview: createPortableBackupAsset(previewAsset),
-      thumbnail: createPortableBackupAsset(thumbnailAsset)
+      thumbnail: previewAsset.src ? stripImageAssetSrc(thumbnailAsset) : createPortableBackupAsset(thumbnailAsset)
     }
-  };
+  }, previewAsset);
 }
 
 export function getAllTags(references) {

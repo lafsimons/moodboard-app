@@ -3945,6 +3945,13 @@ export default function App() {
     totalTags: visibleLibraryTagEntries.length,
     topTags: visibleLibraryTagEntries.slice(0, 5)
   }), [items.length, selectedReferenceCount, visibleLibraryTagEntries, visibleWardrobeItems]);
+  const libraryImageCountLabel = useMemo(() => {
+    if (libraryStats.visibleImages !== libraryStats.totalImages) {
+      return `${libraryStats.visibleImages} of ${libraryStats.totalImages} images`;
+    }
+
+    return `${libraryStats.totalImages} images`;
+  }, [libraryStats.totalImages, libraryStats.visibleImages]);
   const selectedReferenceIdSet = useMemo(
     () => new Set(selectedReferenceIdList),
     [selectedReferenceIdList]
@@ -9512,6 +9519,9 @@ export default function App() {
                         ) : null}
                       </label>
                     </div>
+                    <span className="library-image-count" aria-label={libraryImageCountLabel}>
+                      {libraryImageCountLabel}
+                    </span>
 
                     <div className="library-command-bar-main-actions">
                       <button

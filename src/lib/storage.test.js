@@ -244,14 +244,18 @@ test("createLightweightBackupData preserves preview as the portable render asset
   });
 
   assert.equal(backup.source, "moodboard-app");
-  assert.equal(backup.items[0].imageUrl, "data:image/webp;base64,preview");
-  assert.equal(backup.items[0].imageWidth, 1400);
+  assert.equal("imageUrl" in backup.items[0], false);
+  assert.equal("imageWidth" in backup.items[0], false);
+  assert.equal("imageHeight" in backup.items[0], false);
+  assert.equal("mimeType" in backup.items[0], false);
+  assert.equal("fileSize" in backup.items[0], false);
+  assert.equal("originalFilename" in backup.items[0], false);
   assert.equal(backup.items[0].originalPreserved, false);
   assert.equal(backup.items[0].images.original.src, "");
   assert.equal(backup.items[0].images.original.checksum, "orig-checksum");
   assert.equal(backup.items[0].images.preview.src, "data:image/webp;base64,preview");
   assert.equal(backup.items[0].images.preview.cdnPath, "/portable/preview.webp");
-  assert.equal(backup.items[0].images.thumbnail.src, "data:image/webp;base64,thumb");
+  assert.equal(backup.items[0].images.thumbnail.src, "");
   assert.equal(backup.items[0].images.thumbnail.blurHash, "LEHV6nWB2yk8pyo0adR*.7kCMdnj");
   assert.equal(backup.items[0].importSource, "oa-backup");
   assert.equal(backup.items[0].relinkStatus, "hub-awaiting-rebind");
@@ -814,6 +818,7 @@ test("prepareBackupImport normalizes legacy backups and fills source identity de
   });
 
   assert.equal(prepared.items[0].images.preview.src, "data:image/webp;base64,preview-only");
+  assert.equal(prepared.items[0].imageUrl, "data:image/webp;base64,preview-only");
   assert.equal(prepared.items[0].sourceOriginalFilename, "legacy.png");
   assert.equal(prepared.items[0].relinkStatus, "pending");
   assert.ok(prepared.items[0].itemUuid);
@@ -1014,9 +1019,13 @@ test("backup import export round-trip preserves OA-shaped portable fields except
   assert.equal(prepared.items[0].images.original.checksum, "orig-checksum");
   assert.equal(prepared.items[0].images.preview.src, "data:image/webp;base64,preview");
   assert.equal(prepared.items[0].images.preview.cdnPath, "/portable/preview.webp");
-  assert.equal(prepared.items[0].images.thumbnail.src, "data:image/webp;base64,thumb");
+  assert.equal(prepared.items[0].images.thumbnail.src, "");
   assert.equal(prepared.items[0].images.thumbnail.blurHash, "thumb-hash");
   assert.equal(prepared.items[0].originalPreserved, false);
+  assert.equal(prepared.items[0].imageUrl, "data:image/webp;base64,preview");
+  assert.equal(prepared.items[0].mimeType, "image/webp");
+  assert.equal(prepared.items[0].imageWidth, 1200);
+  assert.equal(prepared.items[0].imageHeight, 800);
 
   assert.equal(reExported.items[0].importSource, "oa-backup");
   assert.equal(reExported.items[0].relinkStatus, "hub-awaiting-rebind");
@@ -1026,7 +1035,88 @@ test("backup import export round-trip preserves OA-shaped portable fields except
   assert.equal(reExported.items[0].images.original.src, "");
   assert.equal(reExported.items[0].images.original.checksum, "orig-checksum");
   assert.equal(reExported.items[0].images.preview.src, "data:image/webp;base64,preview");
-  assert.equal(reExported.items[0].images.thumbnail.src, "data:image/webp;base64,thumb");
+  assert.equal(reExported.items[0].images.thumbnail.src, "");
+  assert.equal("imageUrl" in reExported.items[0], false);
+  assert.equal("mimeType" in reExported.items[0], false);
+  assert.equal("imageWidth" in reExported.items[0], false);
+  assert.equal("imageHeight" in reExported.items[0], false);
+  assert.equal("fileSize" in reExported.items[0], false);
+});
+
+test("slim backup exports keep saved boards free of embedded image blobs", () => {
+  const backup = createLightweightBackupData(
+    [
+      {
+        id: "item-1",
+        imageUrl: "data:image/webp;base64,preview",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "backup.png",
+        images: {
+          preview: {
+            src: "data:image/webp;base64,preview",
+            mimeType: "image/webp",
+            width: 1200,
+            height: 800,
+            fileSize: 1111,
+            originalFilename: "backup.png"
+          },
+          thumbnail: {
+            src: "data:image/webp;base64,thumb",
+            mimeType: "image/webp",
+            width: 480,
+            height: 320,
+            fileSize: 222,
+            originalFilename: "backup.png"
+          }
+        }
+      }
+    ],
+    {
+      savedOutfits: [
+        {
+          id: "saved-1",
+          board: {
+            id: "board-1",
+            boardUuid: "board-uuid-1",
+            images: [{ id: "board-image-1", referenceId: "item-1", x: 0, y: 0, width: 200, height: 300 }]
+          }
+        }
+      ],
+      recentOutfits: []
+    }
+  );
+
+  const serialized = JSON.stringify(backup.appState.savedOutfits);
+  assert.equal(serialized.includes("data:image/"), false);
+});
+
+test("demo backup round-trip rebuilds imageUrl and keeps saved boards importable", () => {
+  const backup = createLightweightBackupData(defaultWardrobe, {
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Board 1",
+        board: {
+          id: "board-1",
+          boardUuid: "board-uuid-1",
+          images: [
+            { id: "image-1", referenceId: defaultWardrobe[0].id, x: 10, y: 20, width: 220, height: 300 }
+          ]
+        }
+      }
+    ],
+    recentOutfits: []
+  });
+
+  const prepared = prepareBackupImport(backup);
+
+  assert.equal("imageUrl" in backup.items[0], false);
+  assert.equal(prepared.items[0].imageUrl, defaultWardrobe[0].imageUrl);
+  assert.equal(prepared.items[0].images.preview.src, defaultWardrobe[0].images.preview.src);
+  assert.equal(prepared.appState.savedOutfits[0].board.images[0].referenceId, defaultWardrobe[0].id);
 });
 
 test("prepareBackupImport rejects invalid payloads before replacement", () => {

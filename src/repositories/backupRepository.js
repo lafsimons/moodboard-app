@@ -1,4 +1,7 @@
 import {
+  analyzeBackupData
+} from "../lib/backupAnalysis.js";
+import {
   createLightweightBackupData,
   exportBackup,
   getDefaultData,
@@ -9,6 +12,7 @@ import {
 } from "../lib/storage.js";
 
 export {
+  analyzeBackupData,
   createLightweightBackupData,
   exportBackup,
   getDefaultData,

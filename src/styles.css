@@ -2723,6 +2723,20 @@ button:disabled {
   min-width: 0;
 }
 
+.library-image-count {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 4px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .library-command-bar-main-actions,
 .library-command-bar-context {
   display: inline-flex;
@@ -3003,6 +3017,10 @@ button:disabled {
     margin-left: 0;
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .library-image-count {
+    order: 3;
   }
 
   .library-command-bar-context-selection {

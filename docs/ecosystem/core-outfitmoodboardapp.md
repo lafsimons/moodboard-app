@@ -1,16 +1,20 @@
 # Core
 
-OA = Outfit-App
-MBA = Moodboard-App
+---
 
-# **Vision**
+# Philosophy
 
+## Vision
+
+- OA = Outfit-App
+- MBA = Moodboard-App
 - OA + MBA as a connected aesthetic ecosystem, not two isolated apps.
 - Goal: coherent understanding and development of taste/style over time.
 - Move beyond inventory-only wardrobe tracking toward aesthetic exploration, relational styling, and reflective documentation.
 - Garments become meaningful through repeated use, outfits, references, seasons, moods, and personal context.
 
-# **System philosophy**
+## System philosophy
+
 - The system should function partly as:
     - wardrobe tool
     - aesthetic archive
@@ -20,7 +24,38 @@ MBA = Moodboard-App
 - The system should help reveal recurring patterns rather than merely store objects.
 - Human interpretation and reflection are more important than algorithmic optimization.
 
-# **Core principles**
+## Interaction direction
+
+### OA interaction direction
+
+OA is:
+- outfit-oriented
+- action-oriented
+- state-oriented
+
+Current behavior:
+- click selects
+- cmd/ctrl toggles
+- shift range-selects
+- double-click previews
+- double-click + equip action equips item
+
+Do not change interaction assumptions casually until mobile/desktop workflow validation is complete.
+
+### MBA interaction direction
+
+MBA is:
+- exploration-oriented
+- browsing-oriented
+- reference-oriented
+Current behavior:
+- click selects
+- cmd/ctrl toggles
+- shift range-selects
+- double-click previews
+Do not casually merge OA interaction assumptions into MBA.
+
+## Core principles
 
 - Relationships are more valuable long-term than isolated entries.
 - Documentation should capture stable decisions, recurring patterns, and useful reflections — not every temporary detail.
@@ -32,7 +67,21 @@ MBA = Moodboard-App
 - The goal is not maximal data collection, but meaningful pattern recognition and reflective utility.
 - Over-automation should be avoided where it weakens intentionality or interpretation.
 
-# **Shared architecture**
+## Development philosophy
+
+- Prefer extraction over rewrites.
+- Preserve behavior during refactors.
+- Additive migrations over destructive migrations.
+- Compatibility-first import/export handling.
+- Shared utility logic before shared UI abstractions.
+- Avoid simultaneous architectural + UI redesigns.
+- Add regression tests around sensitive logic.
+
+---
+
+# Architecture
+
+## Shared architecture
 
 - Keep OA and MBA standalone for now.
 - Avoid merging unless there is a clear need.
@@ -53,18 +102,169 @@ MBA = Moodboard-App
     - asset/original handling
 - IndexedDB, Supabase, or future storage providers should eventually become swappable implementation details.
 - Structured metadata, image storage, and offline cache layers should remain conceptually and architecturally separate.
-## **Migration philosophy**
+
+## Shared/aligned foundations
+
+Implemented/aligned:
+- additive `itemUuid`
+- additive relationship UUID sidecars
+- shared `images.original / preview / thumbnail` direction
+- additive provenance/import metadata
+- normalized backup import preparation
+- portable hub item/link/backup direction
+- compatibility-first migrations
+- local-first IndexedDB persistence
+
+## Portable ecosystem rules
+
+- `itemUuid` is the stable cross-app identity
+- `id` remains legacy/runtime-active
+- preview assets are the portable default
+- originals remain optional
+- unknown fields should survive normalization
+- app-specific metadata must not be silently collapsed
+
+## Ownership:
+
+- OA owns outfits
+- MBA owns boards/references
+- Hub routes/resolves entities, not workflows
+
+## Migration philosophy
+
 - Data migrations should be additive where possible.
 - Behavioral stability is more important than architectural purity.
 - Storage providers should remain replaceable implementation details.
 - IndexedDB should eventually function primarily as:
     - offline cache
     - local-first layer
-
   rather than the permanent source of truth.
 - Export/import formats should remain durable and backward-compatible where feasible.
 
-# **Shared entity system**
+## Shared reusable systems
+
+The ecosystem should gradually move toward shared reusable infrastructure rather than duplicating app-specific implementations.
+
+Prefer reusable abstractions when already touching:
+- image systems
+- metadata
+- filters
+- selection
+- persistence
+- identity normalization
+
+The goal is:
+- reduce duplicated logic gradually
+- keep OA/MBA conceptually aligned
+- avoid blocking active feature development
+- avoid premature over-abstraction
+
+### Extraction philosophy
+
+Continue feature work normally, but extract reusable helpers whenever the same concept appears in both OA and MBA.
+
+Prioritize extraction where:
+- the concept is already stable
+- the same problem has been solved in both apps
+- duplication would create maintenance drift
+- the helper can stay mostly UI-agnostic
+- extraction does not require a large rewrite
+
+Avoid extracting too early:
+- full editors
+- full toolbars
+- full card components
+- app shells
+- large shared UI frameworks
+
+Shared architecture matters more than shared UI right now.
+Keep app-specific workflows where they still differ.
+Extract stable primitives first, not entire screens.
+
+### Shared reusable infrastructure
+
+Strong candidates:
+
+#### Shared media/image infrastructure
+- drag-and-drop import
+- multi-file import
+- file picker import
+- image dimensions/aspect ratio/orientation
+- image import/compression
+- import metadata
+- preview/original image variants
+- asset normalization
+- future originals support
+- future cloud storage compatibility
+
+#### Shared metadata/provenance infrastructure
+- metadata normalization
+- provenance normalization
+- importedAt/originalFilename/fileSize/mimeType
+- capturedAt/camera/lens fields where available
+- no GPS/location metadata by default
+- safe additive normalization
+- stable identity helpers
+- backup/import/export compatibility
+
+#### Shared persistence infrastructure
+- persistence abstractions
+- export/import backups
+- local persistence
+- sync-ready storage abstractions
+
+#### Shared filter/search infrastructure
+- collapsible filter groups
+- searchable options
+- selected counts
+- active filter chips
+- any/all matching helpers
+- reusable filter-state model
+- search-text generation helpers
+- list/group/sort helpers
+
+#### Shared overlay/action infrastructure
+- modals
+- popovers
+- drawers
+- action menus
+- Esc/outside-click/focus handling
+- z-index/viewport behavior
+
+#### Shared selection/bulk infrastructure
+- selected-count pills
+- multi-select behavior
+- contextual actions
+- operation-based bulk editing patterns
+
+#### Shared rendering/performance infrastructure
+- library virtualization
+
+## Shared vs app-specific logic
+
+Reusable systems:
+- Library grid
+- Tag editor
+- Metadata filters
+- Image handling
+- Bulk editing
+- Persistence/backups
+
+OA-specific:
+- outfit slot logic
+- climate/style scoring
+- outfit generation
+
+MBA-specific:
+- board layout
+- spatial canvas logic
+- moodboard generation scoring
+
+---
+
+# Identity & Sync
+
+## Shared entity system
 
 - Canonical garment entity with stable ID and metadata.
 - Garment owns its main information:
@@ -80,11 +280,31 @@ MBA = Moodboard-App
 - Stable immutable IDs are foundational for relationships, sync, relinking, migrations, and long-term data integrity.
 - Relationships should survive renames, lifecycle changes, and storage migrations.
 
-## **Portable hub schema direction**
+## Identity & sync preparation
+
+Implemented:
+- additive `itemUuid`
+- additive `outfitItemUuids`
+- migration-safe UUID backfill
+- source identity metadata:
+    - `sourceNamespace`
+    - `sourceRelativePath`
+    - `sourceOriginalFilename`
+    - `relinkStatus`
+    - `importSource`
+- additive `outfitUuid`
+- additive `boardUuid`
+
+Current behavior:
+- `id` still drives runtime outfit relationships
+- UUID sidecars are additive only
+- no UUID-based runtime lookup yet
+
+## Portable hub schema direction
 
 The future shared ecosystem contract should stay portable, additive, and app-owned. The hub should route, resolve, index, and link cross-app data, but should not become the place where domain workflows are owned.
 
-### **HubItem**
+### HubItem
 
 - `HubItem` should represent the portable cross-app view of an entity.
 - `itemUuid` is the stable cross-app item identity.
@@ -110,7 +330,7 @@ Minimal direction:
 }
 ```
 
-### **HubLink**
+### HubLink
 
 - `HubLink` should represent portable relationships between items across OA and MBA.
 - Relationships may carry additive UUID sidecars while legacy/local ids remain active.
@@ -131,7 +351,7 @@ Minimal direction:
 }
 ```
 
-### **HubBackup**
+### HubBackup
 
 - `HubBackup` should package portable items, portable links, and app-owned payloads in one durable export/import shape.
 - The backup layer should preserve unknown fields where possible.
@@ -153,7 +373,7 @@ Minimal direction:
 }
 ```
 
-### **Preview-first asset policy**
+### Preview-first asset policy
 
 - Preview assets are the portable default asset class for hub, sync, backup, and cross-device rendering.
 - Preview assets should be sufficient for hub v1.
@@ -161,7 +381,7 @@ Minimal direction:
 - Hub v1 should not require originals to exist, sync, or restore normal browsing behavior.
 - The hub should prefer sync-safe preview assets over archival completeness requirements.
 
-### **Stable identity rules**
+### Stable identity rules
 
 - `itemUuid` is the long-term stable identity across apps, backups, sync, relinking, and migrations.
 - `id` remains app-local and legacy-active during transition.
@@ -169,14 +389,37 @@ Minimal direction:
 - Relationship systems may add UUID sidecars before switching canonical resolution logic.
 - Stable identity must survive rename operations, app refactors, storage changes, and backup round-trips.
 
-### **App ownership rules**
+## Stable-link preparation
+
+MBA board images now carry:
+- `referenceId`
+- additive `referenceItemUuid`
+
+Current runtime still uses:
+- `referenceId`
+- existing board keys/dedupe
+- existing delete/repair flows
+
+`referenceItemUuid` is currently additive metadata only.
+
+Purpose:
+- future sync/cloud support
+- stable cross-app relationships
+- future relinking/recovery flows
+
+Compatibility rules:
+- old boards must still work unchanged
+- no UUID runtime fallback yet
+- preserve backward-compatible backups/imports
+
+### App ownership rules
 
 - OA owns outfit workflows and outfit records.
 - MBA owns board and reference workflows and records.
 - The hub should resolve and route shared entities between apps, not own outfit-editing or board-editing workflows itself.
 - Shared contracts should support cross-app linking without erasing domain boundaries.
 
-### **Compatibility rules**
+### Compatibility rules
 
 - Unknown fields should be preserved where possible.
 - App-specific metadata must not be silently collapsed or dropped.
@@ -185,58 +428,205 @@ Minimal direction:
 - New portable fields should coexist with old local fields during migration.
 - Provenance/import/source metadata should move toward convergence instead of diverging between OA and MBA.
 
-# **Metadata & lifecycle**
+---
 
-- Add richer metadata beyond existing style/climate tags.
-- Distinguish system metadata from personal/subjective metadata.
-- Useful additions:
-    - freeform tags
-    - notes/comments
-    - wardrobe role
-    - lifecycle state
-    - linked references
-- Possible lifecycle:
-    - Reference → Wishlist → Owned → Core / Experimental / Maybe Sell → Sold / Archived
-- Sold items should remain in the system as historical data.
-- Transition notes can capture why something was bought, kept, sold, replaced, or became core.
-- Historical context matters:
-    - when something entered the wardrobe
-    - what replaced what
-    - how taste evolved over time
-    - where inspiration came from
-## **Metadata persistence & provenance**
-- Imported items should preserve provenance metadata where possible:
-    - original filename
-    - import timestamp
-    - dimensions
-    - source path/namespace
-    - file metadata
+# Metadata & Lifecycle
+
+## Metadata system
+
+### Philosophy
+
+Metadata should support:
+- long-term continuity
+- meaningful relationships
+- reflective understanding
+- durable archival context
+
+The goal is not maximal data collection, but useful long-term pattern recognition and historical continuity.
+
+Metadata should help reveal:
+- recurring usage
+- evolving taste
+- acquisition patterns
+- emotional attachment
+- practical utility
+- aesthetic relationships
+
+Human interpretation is more important than rigid categorization or over-automation.
+
+### Metadata categories
+
+The system should distinguish between:
+
+#### Stable/system metadata
+Examples:
+- `itemUuid`
+- timestamps
+- dimensions
+- file metadata
+- provenance/import metadata
+- lifecycle state
+- sync metadata
+
+#### Personal/reflective metadata
+Examples:
+- notes
+- fit observations
+- wardrobe role
+- emotional attachment
+- reasons for keeping/selling
+- inspiration links
+- freeform tags
+
+### Metadata persistence principles
+
 - Stable timestamps should not be overwritten unnecessarily.
-- Historical continuity is important for long-term wardrobe and taste tracking.
-## **Stable metadata fields**
-- itemUuid
-- createdAt
-- updatedAt
-- importedAt
-- originalFilename
-- sourceOriginalFilename
-- sourceFileSize
-- sourceImageWidth
-- sourceImageHeight
-- sourceLastModified
-- mimeType
-- fileExtension
-- importBatchId
-- importSource
-## **Metadata migration principles**
-- Existing items should migrate safely with sensible defaults.
+- Unknown fields should survive normalization/import/export where feasible.
 - Editing an item should update `updatedAt` while preserving:
     - `createdAt`
     - `importedAt`
-- Backup/import/export should preserve metadata integrity.
-- Stable immutable IDs should survive migrations and storage changes.
+- Metadata migrations should remain additive where possible.
+- Historical continuity matters more than perfect normalization purity.
 
-# **Image system**
+### Provenance & import metadata
+
+Imported items should preserve provenance metadata where possible:
+- original filename
+- import timestamp
+- dimensions
+- source path/namespace
+- file metadata
+- import source
+
+Useful stable fields:
+
+- `itemUuid`
+- `createdAt`
+- `updatedAt`
+- `importedAt`
+- `originalFilename`
+- `sourceOriginalFilename`
+- `sourceFileSize`
+- `sourceImageWidth`
+- `sourceImageHeight`
+- `sourceLastModified`
+- `mimeType`
+- `fileExtension`
+- `importBatchId`
+- `importSource`
+
+### Metadata migration principles
+
+- Existing items should migrate safely with sensible defaults.
+- Stable immutable IDs should survive migrations and storage changes.
+- Import/export should preserve metadata integrity where feasible.
+- App-specific metadata should not be silently discarded during normalization.
+
+## Lifecycle system
+
+### Philosophy
+
+Lifecycle state should describe:
+- where an item exists in the ownership/acquisition journey
+- how the item behaves operationally
+- how the item participates in generation/filtering/history
+
+Lifecycle state is separate from tags.
+
+Tags describe:
+- what something is
+- what it evokes
+- how it relates aesthetically
+
+Lifecycle describes:
+- ownership state
+- acquisition stage
+- practical status
+
+### Long-term lifecycle direction
+
+Possible long-term lifecycle states:
+
+```txt
+Inspiration
+→ Under Evaluation
+→ Wishlist
+→ Active Target
+→ Grail
+→ Owned
+→ Maybe Sell
+→ Archived
+→ Retired
+→ Sold 
+```
+
+The goal is not separate databases for:
+
+- wishlist
+- archive
+- sold items
+- owned items
+
+Instead:
+
+- one shared item model
+- lifecycle/status determines behavior
+
+### Current implemented lifecycle direction
+
+Current lightweight lifecycle ladder:
+
+```txt
+Interested → Wishlist → Incoming → Wardrobe → Selling → Sold
+```
+
+Rules:
+
+- only `Wardrobe` is generation-enabled by default
+- all other lists default excluded
+- unknown future non-empty values are preserved
+- lifecycle remains intentionally lightweight for now
+
+`Incoming` means:
+
+- acquired/purchased but not physically available yet
+
+No deeper marketplace/history system yet.
+
+### Lifecycle behavior examples
+
+Different lifecycle states may eventually behave differently:
+
+- owned items participate normally in generation
+- wishlist items may participate in planning
+- inspiration items may influence direction without appearing as owned
+- sold items should remain linked historically
+- maybe-sell items may require review/filtering
+- grail/collector items may need special tracking behavior
+
+### Historical continuity
+
+Historical context matters:
+
+- when something entered the wardrobe
+- what replaced what
+- why something became core
+- why something was sold
+- where inspiration came from
+- how taste evolved over time
+
+Transition notes may eventually capture:
+
+- acquisition reasoning
+- replacement reasoning
+- emotional/contextual significance
+- wardrobe evolution
+
+---
+
+# Image system
+
+## Image Philosophy
 
 - Primary image: clean isolated flat lay for browsing/system use.
 - Secondary image: worn/context image for drape, proportions, styling, and real-life use.
@@ -294,7 +684,7 @@ Meaning of each image asset:
 - `images.thumbnail`
   optional smaller render asset for dense library/grid views; may fall back to preview when no separate thumbnail exists
 
-## **Meaning of `originalPreserved`**
+## Meaning of `originalPreserved`
 
 - `originalPreserved = true`
   means the system intentionally considers an original archival asset to exist or be preserved for this item
@@ -302,14 +692,14 @@ Meaning of each image asset:
   means the item should be treated as preview-only for archival purposes, even if preview browsing still works normally
 - `originalPreserved` should describe archival intent/state, not crop state, not presentation state, and not whether preview rendering is available
 
-## **Continued `imageUrl` compatibility role**
+## Continued `imageUrl` compatibility role
 
 - `imageUrl` must remain supported for backward compatibility
 - `imageUrl` should continue functioning as a preview-facing compatibility mirror of `images.preview.src`
 - Existing code and backups may continue reading `imageUrl` until both apps are fully migrated
 - `imageUrl` should not remain the long-term canonical image container once both apps are fully normalized around `images.*`
 
-## **Local-first behavior now**
+## Local-first behavior now
 
 - Local-first behavior should continue working without backend or sync changes
 - `images.preview` should be treated as the canonical local render asset
@@ -318,7 +708,7 @@ Meaning of each image asset:
 - Normal browsing, outfit generation, board generation, and exports should not require original archival assets
 - Backup/import/export behavior must remain backward-compatible during this phase
 
-## **Future cloud behavior**
+## Future cloud behavior
 
 - `images.preview` should remain the canonical sync-safe render asset across devices
 - `images.thumbnail` should remain optional but preferred for large grids and low-bandwidth views
@@ -326,7 +716,7 @@ Meaning of each image asset:
 - Cloud sync should allow items to remain valid even when only preview/thumbnail assets are available locally
 - Original archival assets and preview render assets should remain conceptually separate so that storage policy can evolve without changing the item contract
 
-## **Migration rule for legacy `imageUrl` items**
+## Migration rule for legacy `imageUrl` items
 
 - Legacy items with only `imageUrl` should migrate additively, not destructively
 - During normalization/import, legacy items should gain `images.preview` derived from `imageUrl`
@@ -334,7 +724,20 @@ Meaning of each image asset:
 - Migration should not assume that a legacy `imageUrl` implies a true preserved original archival asset
 - Legacy items should receive safe defaults for missing `images.original`, `images.thumbnail`, and `originalPreserved`
 
-## **What must not change yet**
+## Current image contract direction
+
+Current direction:
+- `images.preview` becomes canonical render asset
+- `imageUrl` remains compatibility mirror
+- `images.original` remains optional/archival
+- `originalPreserved` must never be inferred
+
+Still deferred:
+- original preservation
+- blob/object storage
+- shared asset repository architecture
+
+## What must not change yet
 
 - Do not remove `imageUrl` compatibility yet
 - Do not change backup payload behavior yet
@@ -343,7 +746,11 @@ Meaning of each image asset:
 - Do not change the current meaning of persisted crop/presentation fields without explicit migration handling
 - Do not require originals for normal browsing, generation, or export yet
 
-# **Relationship model**
+---
+
+# Relationships
+
+## Relationship model
 
 - Garment → many outfits.
 - Garment → many moodboards.
@@ -361,7 +768,7 @@ Meaning of each image asset:
     - part of
 - Relationships should likely be stored separately from the items themselves.
 
-# **OA responsibilities**
+## OA responsibilities
 
 - Structured outfit composition.
 - Outfit generation.
@@ -373,7 +780,9 @@ Meaning of each image asset:
     - what works together
     - what becomes core
     - what becomes redundant
-## **Future OA direction**
+
+### Future OA direction
+
 - notes
 - wardrobe roles
 - lifecycle tracking
@@ -381,43 +790,14 @@ Meaning of each image asset:
 - multi-outfit generation
 - canvas-style outfit comparison
 
-## OA Garment Lifecycle / Acquisition Pipeline
+### Climate system
 
-OA should eventually support garment lifecycle states instead of treating every item as simply owned.
-
-Possible lifecycle states:
-- inspiration
-- under evaluation
-- wishlist
-- active target
-- grail
-- owned
-- maybe sell
-- archived
-- retired
-- sold
-
-The goal is not to create separate databases for wishlist, archive, sold, and owned items. The goal is one garment/item model with a lifecycle/status field.
-
-These states have different behavior:
-- owned items can be used in normal outfit generation
-- wishlist or active-target items may be used for planning outfits
-- inspiration items may inform style direction but should not appear as owned wardrobe items
-- sold/retired items should remain linked to historical outfits, fitpics, and notes
-- maybe-sell items remain owned but may need filtering or review views
-- grail/investment/collector pieces may need different priority or acquisition tracking
-
-This supports a future acquisition pipeline:
-inspiration → under evaluation → wishlist/active target → owned → archived/retired/sold
-
-Lifecycle state should be treated separately from tags. Tags describe what an item is or evokes; lifecycle state describes where the item sits in the wardrobe/acquisition process.
-
-## **Climate system**
 - > 24°C → Hot
 - 16–24°C → Warm
 - 8–16°C → Transitional
 - < 8°C → Cold
-# **MBA responsibilities**
+
+## MBA responsibilities
 
 - Exploratory visual association.
 - Moodboards and reference boards.
@@ -426,39 +806,3 @@ Lifecycle state should be treated separately from tags. Tags describe what an it
 - Helps make sense of visual attraction and recurring aesthetic patterns.
 - Can function like an Obsidian-style visual thinking space for taste development.
 
-# Shared reusable systems
-
-The ecosystem should gradually move toward shared reusable infrastructure rather than duplicating app-specific implementations.
-
-Examples of reusable/shared systems:
-- image import
-- image compression
-- image storage
-- metadata/tagging
-- library grid virtualization
-- selection + bulk editing
-- export/import backup
-- local persistence
-- sync-ready storage abstractions
-
-OA and MBA may remain separate apps, but should increasingly share foundational modules and data concepts.
-
-# Shared vs app-specific logic
-
-Reusable systems:
-- Library grid
-- Tag editor
-- Metadata filters
-- Image handling
-- Bulk editing
-- Persistence/backups
-
-OA-specific:
-- outfit slot logic
-- climate/style scoring
-- outfit generation
-
-MBA-specific:
-- board layout
-- spatial canvas logic
-- moodboard generation scoring
