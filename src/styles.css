@@ -1615,17 +1615,15 @@ button:disabled {
   top: 5px;
   right: 5px;
   z-index: 2;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  padding: 0;
+  min-height: 22px;
+  padding: 0 7px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.94);
   color: var(--text);
-  font-size: 0.68rem;
-  line-height: 1;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.1;
 }
 
 .picker-exclude-toggle.is-active {
@@ -2441,15 +2439,16 @@ button:disabled {
   top: calc(100% + 6px);
   left: 0;
   grid-template-columns: 1fr;
-  gap: 8px;
-  width: min(100%, clamp(320px, 42vw, 480px));
-  max-width: calc(100vw - 32px);
-  max-height: min(620px, calc(100vh - 170px - env(safe-area-inset-bottom)));
+  gap: 12px;
+  width: min(460px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  max-height: min(76vh, 720px);
   justify-content: start;
   justify-items: start;
-  overflow: hidden;
-  padding: 10px 10px 8px;
+  overflow: auto;
+  padding: 16px;
   z-index: 60;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.14);
 }
 
 .wardrobe-controls.is-open,
@@ -2480,6 +2479,20 @@ button:disabled {
   border: 1px solid var(--border-soft);
   border-radius: calc(var(--radius-panel) - 6px);
   background: var(--surface-soft);
+}
+
+.wardrobe-manage-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.wardrobe-manage-section-header strong {
+  color: var(--text);
+  font-size: 0.76rem;
 }
 
 .wardrobe-manage-stats .wardrobe-worth-summary h2 {
@@ -2726,15 +2739,17 @@ button:disabled {
 .library-image-count {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
-  padding: 4px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--muted);
-  font-size: 0.62rem;
-  letter-spacing: 0.02em;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-strong);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0;
   white-space: nowrap;
+  align-self: center;
 }
 
 .library-command-bar-main-actions,
@@ -2790,14 +2805,16 @@ button:disabled {
 
 .wardrobe-search-control input {
   width: 100%;
+  height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: rgba(255, 255, 255, 0.24);
   color: var(--text);
-  padding: 4px 28px 4px 10px;
+  padding: 2px 26px 2px 9px;
   font: inherit;
-  min-height: 34px;
+  min-height: 30px;
   font-size: 0.68rem;
+  line-height: 1;
   box-shadow: none;
   outline: none;
   appearance: none;
@@ -2819,13 +2836,14 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  height: 30px;
   min-height: 30px;
   padding: 2px 9px;
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.58);
   color: color-mix(in srgb, var(--muted) 92%, var(--text) 8%);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 600;
   line-height: 1.2;
   text-transform: none;
@@ -2872,17 +2890,17 @@ button:disabled {
 
 .wardrobe-sort-control select {
   min-width: 126px;
-  height: 100%;
+  height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface-solid);
   color: var(--text);
-  padding: 4px 28px 4px 9px;
-  font-size: 0.62rem;
+  padding: 2px 26px 2px 9px;
+  font-size: 0.68rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  min-height: 34px;
+  text-transform: none;
+  letter-spacing: 0;
+  min-height: 30px;
   box-shadow: none;
   outline: none;
   appearance: none;
@@ -2893,29 +2911,42 @@ button:disabled {
 .library-command-bar-main-actions > .secondary-button,
 .library-command-bar-main-actions > .primary-button,
 .library-command-bar-main-actions > .ghost-button,
+.library-command-bar-main-actions .library-popover-anchor > .primary-button,
+.library-command-bar-main-actions .library-popover-anchor > .ghost-button,
+.library-command-bar-context > .secondary-button,
 .library-command-bar-context > .ghost-button,
 .library-command-bar-context > .primary-button,
+.library-command-bar-context-actions > .secondary-button,
+.library-command-bar-context-actions > .ghost-button,
+.library-command-bar-context-actions > .primary-button,
+.library-command-bar-context-actions .library-tag-action-anchor > .ghost-button,
 .library-context-favorite select {
-  min-height: 34px;
-  padding: 4px 10px;
-  font-size: 0.62rem;
+  height: 30px;
+  min-height: 30px;
+  padding: 2px 9px;
+  font-size: 0.68rem;
+  line-height: 1;
 }
 
 .library-context-button {
   min-width: 0;
 }
 
-.library-selection-edit-button {
-  color: var(--muted);
+.library-selection-actions-trigger.is-active {
+  color: var(--text);
   border-color: rgba(0, 0, 0, 0.12);
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--soft);
+}
+
+.library-selection-edit-button {
+  min-width: 0;
 }
 
 .library-selection-edit-button:hover,
 .library-selection-edit-button.is-active {
   color: var(--text);
-  border-color: rgba(0, 0, 0, 0.18);
-  background: rgba(255, 255, 255, 0.92);
+  border-color: var(--border);
+  background: var(--soft);
 }
 
 .wardrobe-bulk-button {
@@ -3139,34 +3170,56 @@ button:disabled {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 50;
+  z-index: 80;
+  width: min(236px, calc(100vw - 48px));
   display: grid;
-  gap: 4px;
-  min-width: 180px;
-  padding: 6px;
-  border: 1px solid var(--border-soft);
-  border-radius: calc(var(--radius-panel) - 4px);
-  background: var(--surface-solid);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
+  gap: 0;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
 }
 
 .selection-action-editor {
   display: grid;
   gap: 8px;
+  padding: 8px;
 }
 
 .selection-action-back {
   justify-self: start;
-  padding: 4px 8px;
-  min-height: 28px;
-  font-size: 0.66rem;
+  padding: 5px 8px;
+  min-height: 30px;
+  font-size: 0.68rem;
 }
 
 .selection-action-title {
   margin: 0;
-  font-size: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
+  letter-spacing: 0.015em;
   color: var(--muted);
+}
+
+.selection-actions-popover-section {
+  display: grid;
+  gap: 0;
+}
+
+.selection-actions-popover-section-divider {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.selection-actions-popover-section-danger {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
 }
 
 .selection-actions-popover .tag-input {
@@ -3188,21 +3241,36 @@ button:disabled {
 }
 
 .selection-actions-popover-item {
-  border: 0;
+  width: 100%;
+  justify-content: flex-start;
   background: transparent;
   color: var(--text);
   text-align: left;
-  padding: 8px 10px;
-  border-radius: 10px;
-  font: inherit;
+  padding: 6px 8px;
+  font-size: 0.68rem;
+  letter-spacing: 0.015em;
+  border-color: transparent;
+  border-radius: 0;
 }
 
 .selection-actions-popover-item:hover {
-  background: var(--surface-soft);
+  background: var(--soft);
+  transform: none;
+}
+
+.selection-actions-popover-item:focus-visible {
+  border-color: var(--border);
+  background: var(--soft);
+  outline: none;
 }
 
 .selection-actions-popover-item.is-danger {
-  color: #9f2e2e;
+  color: var(--muted-strong);
+}
+
+.selection-actions-popover-item.is-danger:hover,
+.selection-actions-popover-item.is-danger:focus-visible {
+  color: var(--text);
 }
 
 .wardrobe-secondary-button {
@@ -3218,7 +3286,7 @@ button:disabled {
 
 .wardrobe-controls label {
   display: grid;
-  gap: 3px;
+  gap: 6px;
   color: var(--text);
   font-size: 0.62rem;
   font-weight: 600;
@@ -3227,14 +3295,14 @@ button:disabled {
 }
 
 .wardrobe-controls select {
-  width: auto;
+  width: 100%;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface-solid);
-  padding: 3px 22px 3px 7px;
-  min-height: 28px;
-  font-size: 0.66rem;
+  padding: 8px 28px 8px 10px;
+  min-height: 38px;
+  font-size: 0.72rem;
   box-shadow: none;
   outline: none;
   appearance: none;
@@ -3242,74 +3310,199 @@ button:disabled {
   cursor: pointer;
 }
 
+.wardrobe-filter-search {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+}
+
+.wardrobe-filter-search input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid);
+  color: var(--text);
+  padding: 6px 8px;
+  min-height: 0;
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0;
+  box-shadow: none;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.wardrobe-filter-search input::placeholder {
+  color: var(--muted);
+}
+
 .wardrobe-controls-inline-row {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: 1fr;
+  gap: 0;
   align-items: start;
   justify-content: stretch;
   width: 100%;
   min-width: 0;
 }
 
-.wardrobe-inline-filter-match {
-  max-width: none;
-}
-
-.wardrobe-inline-filter {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: 3px;
-  min-width: 0;
-}
-
-.wardrobe-inline-filter span {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 0.56rem;
-  line-height: 1.1;
-}
-
-.wardrobe-inline-filter select {
+.wardrobe-filter-row {
   width: 100%;
+  border: 0;
+  border-top: 1px solid #dddddd;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  padding: 0;
+}
+
+.wardrobe-filter-row:last-child {
+  border-bottom: 1px solid #dddddd;
+}
+
+.wardrobe-filter-row summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.wardrobe-filter-row summary::-webkit-details-marker {
+  display: none;
+}
+
+.wardrobe-filter-row summary span {
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.wardrobe-filter-row summary::after {
+  content: "+";
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.wardrobe-filter-row[open] summary::after {
+  content: "\2212";
+}
+
+.wardrobe-filter-row-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 5px;
+  max-width: 100%;
+  max-height: min(26vh, 196px);
   min-width: 0;
-  min-height: 32px;
+  overflow: auto;
+  overflow-x: hidden;
+  padding: 0 2px 12px 0;
+}
+
+.wardrobe-filter-option {
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   box-shadow: none;
+}
+
+.wardrobe-filter-option:hover {
+  border-color: var(--border);
+  background: var(--soft);
+  transform: none;
+}
+
+.wardrobe-filter-option.is-active {
+  border-color: var(--text);
+  background: var(--surface-solid);
+  color: var(--text);
 }
 
 html[data-input-modality="keyboard"] .wardrobe-search-control:has(input:focus-visible),
 html[data-input-modality="keyboard"] .wardrobe-sort-control:has(select:focus-visible),
 html[data-input-modality="keyboard"] .library-context-favorite:has(select:focus-visible),
-html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-visible) {
+html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-visible) {
   border-radius: var(--radius-control);
   box-shadow: 0 0 0 1px var(--focus-ring-offset), 0 0 0 3px var(--focus-ring);
 }
 
 .wardrobe-search-control input:focus-visible,
+.wardrobe-filter-search input:focus-visible,
 .tag-manager-search input:focus-visible,
 .wardrobe-sort-control select:focus-visible,
 .library-context-favorite select:focus-visible,
-.wardrobe-inline-filter select:focus-visible {
+.wardrobe-filter-option:focus-visible {
   box-shadow: none;
 }
 
 .wardrobe-tags-filter {
   grid-column: 1 / -1;
   width: 100%;
-  gap: 0;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
 }
 
-.wardrobe-tags-filter > span {
-  display: none;
+.wardrobe-filter-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.wardrobe-filter-section-header strong {
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.wardrobe-selected-filters .wardrobe-filter-section-header {
+  justify-content: flex-start;
+}
+
+.wardrobe-filter-section-header span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  text-align: right;
+}
+
+.wardrobe-filter-empty {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: calc(var(--radius-panel) - 6px);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .wardrobe-controls .tag-tree {
   width: 100%;
-  gap: 4px;
-  margin-top: 2px;
-  padding: 4px 6px;
+  gap: 8px;
+  margin-top: 0;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: calc(var(--radius-panel) - 6px);
+  background: var(--surface-soft);
   max-height: none;
 }
 
@@ -3329,9 +3522,10 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
 }
 
 .wardrobe-controls .tag-tree-list {
-  max-height: 390px;
-  gap: 1px;
-  padding-right: 0;
+  max-height: none;
+  gap: 2px;
+  padding-right: 2px;
+  overflow: visible;
 }
 
 .wardrobe-controls .tag-tree-group,
@@ -3340,15 +3534,15 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
 }
 
 .wardrobe-controls .tag-tree-row {
-  padding: 3px 4px;
-  font-size: 0.65rem;
-  border-radius: 7px;
+  padding: 3px 5px;
+  font-size: 0.66rem;
+  border-radius: 9px;
 }
 
 .wardrobe-controls .tag-tree-row-prefix,
 .wardrobe-controls .tag-tree-chevron {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   margin-right: 0;
 }
 
@@ -3379,6 +3573,10 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
 .wardrobe-card.is-excluded {
   border-color: rgba(0, 0, 0, 0.12);
   background: rgba(255, 255, 255, 0.82);
+}
+
+.wardrobe-card.is-excluded .wardrobe-meta {
+  color: var(--muted);
 }
 
 .wardrobe-card.is-selected {
@@ -3416,6 +3614,29 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
 
 .wardrobe-card.is-excluded .wardrobe-preview {
   background: transparent;
+}
+
+.wardrobe-card.is-excluded .wardrobe-preview-image,
+.wardrobe-card.is-excluded .managed-image {
+  opacity: 0.68;
+  filter: saturate(0.82);
+}
+
+.wardrobe-card-badges {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.wardrobe-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.16);
 }
 
 .card-actions {
@@ -3510,10 +3731,35 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
   width: 100%;
 }
 
+.wardrobe-selected-filters {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+}
+
+.wardrobe-controls-footer {
+  position: sticky;
+  bottom: -16px;
+  width: calc(100% + 32px);
+  display: grid;
+  gap: 8px;
+  margin: 0 -16px -16px;
+  padding: 10px 16px 16px;
+  background: var(--surface-solid);
+  border-top: 1px solid var(--border-soft);
+  box-shadow: 0 -10px 18px rgba(255, 255, 255, 0.92);
+}
+
+.wardrobe-controls-footer.is-without-selected-filters {
+  padding-top: 0;
+  border-top: 0;
+  box-shadow: none;
+}
+
 .wardrobe-popover-chips .active-filter-chip {
   gap: 3px;
   padding: 2px 5px;
-  font-size: 0.56rem;
+  font-size: 0.58rem;
   font-weight: 500;
   line-height: 1;
   text-transform: none;
@@ -3525,15 +3771,19 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
 
 .wardrobe-popover-actions {
   width: 100%;
-  justify-content: flex-start;
-  flex-wrap: nowrap;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
+  padding-top: 0;
 }
 
 .wardrobe-popover-actions .ghost-button {
-  min-height: 26px;
-  padding: 2px 7px;
-  font-size: 0.6rem;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 0.62rem;
+  width: auto;
+  max-width: 100%;
+  flex: 0 0 auto;
 }
 
 .active-panel-overlay .wardrobe-workspace {
@@ -3956,6 +4206,11 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
   min-height: min(760px, calc(100vh - 120px));
 }
 
+.reference-preview-overlay.is-excluded .managed-image {
+  opacity: 0.74;
+  filter: saturate(0.86);
+}
+
 .reference-preview-stage {
   display: grid;
   flex: 1 1 auto;
@@ -3969,6 +4224,19 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
   max-width: 100%;
   max-height: calc(100vh - 160px);
   margin-inline: auto;
+}
+
+.reference-preview-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--muted-strong);
+  font-size: 0.66rem;
+  font-weight: 600;
 }
 
 .saved-outfit-form {
@@ -5040,7 +5308,7 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
   }
 
   .clear-filters-button,
-  .clear-excluded-button {
+  .clear-search-button {
     grid-column: 1 / -1;
   }
 
@@ -5058,14 +5326,14 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
     gap: 6px;
   }
 
-  .wardrobe-inline-filter,
-  .wardrobe-inline-filter-match {
-    width: 100%;
+  .wardrobe-filter-section-header,
+  .wardrobe-manage-section-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
-  .wardrobe-inline-filter select {
-    flex: 1 1 auto;
-    min-width: 0;
+  .wardrobe-filter-section-header span {
+    text-align: left;
   }
 
   .tag-tree-header {

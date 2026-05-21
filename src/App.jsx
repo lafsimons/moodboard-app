@@ -1456,6 +1456,11 @@ const LibraryGridCard = memo(function LibraryGridCard({
       className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""}`}
       style={mergedCardStyle}
     >
+      {isExcluded ? (
+        <div className="wardrobe-card-badges" aria-label="Reference status">
+          <span className="wardrobe-status-dot" aria-hidden="true" />
+        </div>
+      ) : null}
       <button
         type="button"
         className="wardrobe-preview"
@@ -1897,9 +1902,17 @@ function TagTree({
   storageKey = "default",
   noTagsCount = 0,
   variant = "default",
-  headerActions = null
+  headerActions = null,
+  searchQuery = ""
 }) {
-  const [sortMode, setSortMode] = useState("count");
+  const [sortMode, setSortMode] = useState(() => {
+    if (typeof window === "undefined") {
+      return "count";
+    }
+
+    const storedSortMode = window.localStorage.getItem(`tag-tree-sort:${storageKey}`);
+    return storedSortMode === "alpha" ? "alpha" : "count";
+  });
   const [collapsedGroups, setCollapsedGroups] = useState({});
 
   if (!entries.length && !noTagsCount) {
@@ -1916,6 +1929,52 @@ function TagTree({
       : right.count - left.count || left.tag.localeCompare(right.tag)
   );
   const rootNode = finalizeNestedTagNodes(buildNestedTagNodes(sortedEntries), sortMode);
+  const allGroupKeys = useMemo(() => {
+    const keys = [];
+
+    function collectGroupKeys(nodes) {
+      nodes.forEach((node) => {
+        if (!node.childNodes.length) {
+          return;
+        }
+
+        keys.push(`${storageKey}:${node.key}`);
+        collectGroupKeys(node.childNodes);
+      });
+    }
+
+    collectGroupKeys(rootNode.childNodes);
+    return keys;
+  }, [rootNode.childNodes, storageKey]);
+  const autoExpandedGroups = useMemo(() => {
+    if (!searchQuery) {
+      return new Set();
+    }
+
+    const expanded = new Set();
+
+    sortedEntries.forEach(({ tag }) => {
+      const parts = splitTagPath(tag);
+      let currentPath = "";
+
+      parts.forEach((part, index) => {
+        currentPath = currentPath ? `${currentPath}/${part}` : part;
+        if (index < parts.length - 1) {
+          expanded.add(`${storageKey}:${currentPath}`);
+        }
+      });
+    });
+
+    return expanded;
+  }, [searchQuery, sortedEntries, storageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(`tag-tree-sort:${storageKey}`, sortMode);
+  }, [sortMode, storageKey]);
 
   function toggleCollapsedGroup(groupKey) {
     const collapsedKey = `${storageKey}:${groupKey}`;
@@ -1924,6 +1983,18 @@ function TagTree({
       ...current,
       [collapsedKey]: !(current[collapsedKey] ?? true)
     }));
+  }
+
+  function setAllGroupsExpanded(isExpanded) {
+    setCollapsedGroups((current) => {
+      const next = { ...current };
+
+      allGroupKeys.forEach((groupKey) => {
+        next[groupKey] = !isExpanded;
+      });
+
+      return next;
+    });
   }
 
   function activateTag(event, tag) {
@@ -1956,11 +2027,19 @@ function TagTree({
     };
   }
 
+  const areAllGroupsExpanded = allGroupKeys.length > 0 && allGroupKeys.every((groupKey) => {
+    if (searchQuery) {
+      return autoExpandedGroups.has(groupKey);
+    }
+
+    return !(collapsedGroups[groupKey] ?? true);
+  });
+
   function renderTagNode(node, depth = 0) {
     const isSelected = normalizedSelectedTags.includes(node.path);
     const isExcluded = normalizedExcludedTags.includes(node.path);
     const collapsedKey = `${storageKey}:${node.key}`;
-    const isCollapsed = collapsedGroups[collapsedKey] ?? true;
+    const isCollapsed = searchQuery ? !autoExpandedGroups.has(collapsedKey) : (collapsedGroups[collapsedKey] ?? true);
     const hasChildren = node.childNodes.length > 0;
     const groupState = hasChildren ? getGroupVisualState(node.tagTargets) : null;
     const rowClassName = hasChildren
@@ -2048,23 +2127,37 @@ function TagTree({
                 setSortMode((current) => (current === "count" ? "alpha" : "count"));
               }}
             >
-              {sortMode === "count" ? "COUNT" : "A-Z"}
+              {sortMode === "count" ? "Count" : "A-Z"}
             </button>
             {headerActions}
           </div>
         </div>
       ) : (
         <div className="tag-tree-header tag-tree-header-default">
-          <button
-            type="button"
-            className="tag-tree-sort-button"
-            onClick={(event) => {
-              stopNestedTagTreeEvent(event);
-              setSortMode((current) => (current === "count" ? "alpha" : "count"));
-            }}
-          >
-            {sortMode === "count" ? "COUNT" : "A-Z"}
-          </button>
+          <div className="tag-tree-meta">
+            <button
+              type="button"
+              className="tag-tree-sort-button"
+              onClick={(event) => {
+                stopNestedTagTreeEvent(event);
+                setSortMode((current) => (current === "count" ? "alpha" : "count"));
+              }}
+            >
+              {sortMode === "count" ? "Count" : "A-Z"}
+            </button>
+            {allGroupKeys.length ? (
+              <button
+                type="button"
+                className="tag-tree-sort-button"
+                onClick={(event) => {
+                  stopNestedTagTreeEvent(event);
+                  setAllGroupsExpanded(!areAllGroupsExpanded);
+                }}
+                >
+                {areAllGroupsExpanded ? "Collapse" : "Expand"}
+              </button>
+            ) : null}
+          </div>
         </div>
       )}
 
@@ -3088,6 +3181,8 @@ export default function App() {
   const pendingRestoredBoardFitRef = useRef(false);
   const lastInteractionWasPointerRef = useRef(false);
   const pointerActivatedControlRef = useRef(null);
+  const excludedOutfitReconcileFrameRef = useRef(0);
+  const latestExcludedStateRef = useRef({});
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [layering, setLayering] = useState(false);
@@ -3125,6 +3220,7 @@ export default function App() {
   const [wardrobeSavedOpen, setWardrobeSavedOpen] = useState(false);
   const [wardrobeManageOpen, setWardrobeManageOpen] = useState(false);
   const [wardrobeAddOpen, setWardrobeAddOpen] = useState(false);
+  const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
   const [manageStatsOpen, setManageStatsOpen] = useState(false);
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
@@ -3162,6 +3258,16 @@ export default function App() {
   const [outfitPalette, setOutfitPalette] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardView, setBoardView] = useState({ x: 0, y: 0, zoom: 1 });
+
+  useEffect(() => {
+    latestExcludedStateRef.current = excluded;
+  }, [excluded]);
+
+  useEffect(() => () => {
+    if (excludedOutfitReconcileFrameRef.current) {
+      window.cancelAnimationFrame(excludedOutfitReconcileFrameRef.current);
+    }
+  }, []);
   const selectedReferenceIds = selectedReferenceSelection.ids;
   const [isBoardGenerating, setIsBoardGenerating] = useState(false);
   const [showBoardGenerationBusy, setShowBoardGenerationBusy] = useState(false);
@@ -3728,6 +3834,7 @@ export default function App() {
         }]
       : [])
   ];
+  const wardrobeFilterSearchQuery = normalizeTag(wardrobeFilterSearch);
   const allLibraryTagEntries = useMemo(() => getTagFrequencyEntries(tagDebugSourceItems), [tagDebugSourceItems]);
   const allLibraryNoTagsCount = useMemo(
     () => tagDebugSourceItems.filter((item) => uniqueTags(item.tags).length === 0).length,
@@ -3752,6 +3859,27 @@ export default function App() {
   const libraryNoTagsCount = useMemo(
     () => tagCountItemsWithDebug.filter((item) => uniqueTags(item.tags).length === 0).length,
     [tagCountItemsWithDebug]
+  );
+  const filteredLibraryTagEntries = useMemo(() => {
+    if (!wardrobeFilterSearchQuery) {
+      return libraryTagEntries;
+    }
+
+    return libraryTagEntries.filter(({ tag }) => tag.includes(wardrobeFilterSearchQuery));
+  }, [libraryTagEntries, wardrobeFilterSearchQuery]);
+  const filteredLibraryNoTagsCount = useMemo(() => {
+    if (!wardrobeFilterSearchQuery) {
+      return libraryNoTagsCount;
+    }
+
+    return "untagged".includes(wardrobeFilterSearchQuery) || "no tags".includes(wardrobeFilterSearchQuery)
+      ? libraryNoTagsCount
+      : 0;
+  }, [libraryNoTagsCount, wardrobeFilterSearchQuery]);
+  const hasVisibleWardrobeFilterOptions = filteredLibraryTagEntries.length > 0 || filteredLibraryNoTagsCount > 0;
+  const excludedReferenceCount = useMemo(
+    () => Object.values(excluded).filter(Boolean).length,
+    [excluded]
   );
 
   useEffect(() => {
@@ -3808,6 +3936,24 @@ export default function App() {
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [librarySelectionActionsOpen, libraryTagActionMode]);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (!librarySelectionActionsOpen && !libraryTagActionMode) {
+        return;
+      }
+
+      setLibrarySelectionActionsOpen(false);
+      setLibraryTagActionMode(null);
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
 
   useEffect(() => {
@@ -5948,7 +6094,50 @@ export default function App() {
     setWardrobeManageOpen(false);
   }
 
-  function excludeReferenceIds(referenceIds) {
+  function scheduleExcludedOutfitReconcile(nextExcluded) {
+    latestExcludedStateRef.current = nextExcluded;
+
+    if (excludedOutfitReconcileFrameRef.current) {
+      return;
+    }
+
+    excludedOutfitReconcileFrameRef.current = window.requestAnimationFrame(() => {
+      excludedOutfitReconcileFrameRef.current = 0;
+      const reconcileExcluded = latestExcludedStateRef.current;
+
+      startTransition(() => {
+        setOutfit((previous) => {
+          const sanitized = Object.fromEntries(
+            Object.entries(previous ?? {}).map(([slot, equippedId]) => [
+              slot,
+              Boolean(reconcileExcluded[equippedId]) ? null : equippedId
+            ])
+          );
+          const didChange = Object.keys(sanitized).some((slot) => sanitized[slot] !== previous?.[slot]);
+
+          if (!didChange) {
+            return previous;
+          }
+
+          return buildNextOutfit(
+            items,
+            sanitized,
+            locked,
+            layering,
+            reconcileExcluded,
+            generationLists,
+            outfitFilters,
+            weatherData,
+            generationMode,
+            outfitAffinity,
+            recentOutfits
+          );
+        });
+      });
+    });
+  }
+
+  function setReferencesExcluded(referenceIds, nextExcludedValue) {
     const uniqueReferenceIds = [...new Set((referenceIds ?? []).filter(Boolean))];
 
     if (!uniqueReferenceIds.length) {
@@ -5960,8 +6149,18 @@ export default function App() {
       let changed = false;
 
       uniqueReferenceIds.forEach((itemId) => {
-        if (!nextExcluded[itemId]) {
-          nextExcluded[itemId] = true;
+        const isCurrentlyExcluded = Boolean(current[itemId]);
+
+        if (nextExcludedValue) {
+          if (!isCurrentlyExcluded) {
+            nextExcluded[itemId] = true;
+            changed = true;
+          }
+          return;
+        }
+
+        if (itemId in nextExcluded) {
+          delete nextExcluded[itemId];
           changed = true;
         }
       });
@@ -5970,45 +6169,26 @@ export default function App() {
         return current;
       }
 
-      setOutfit((previous) => {
-        const sanitized = Object.fromEntries(
-          Object.entries(previous).map(([slot, equippedId]) => [
-            slot,
-            uniqueReferenceIds.includes(equippedId) ? null : equippedId
-          ])
-        );
+      latestExcludedStateRef.current = nextExcluded;
 
-        return buildNextOutfit(
-          items,
-          sanitized,
-          locked,
-          layering,
-          nextExcluded,
-          generationLists,
-          outfitFilters,
-          weatherData,
-          generationMode,
-          outfitAffinity,
-          recentOutfits
-        );
-      });
+      if (nextExcludedValue) {
+        scheduleExcludedOutfitReconcile(nextExcluded);
+      }
 
       return nextExcluded;
     });
   }
 
+  function excludeReferenceIds(referenceIds) {
+    setReferencesExcluded(referenceIds, true);
+  }
+
   function toggleExcluded(itemId) {
-    if (excluded[itemId]) {
-      setExcluded((current) => ({
-        ...current,
-        [itemId]: false
-      }));
-    } else {
-      excludeReferenceIds([itemId]);
-    }
+    setReferencesExcluded([itemId], !Boolean(excluded[itemId]));
   }
 
   function clearExcluded() {
+    latestExcludedStateRef.current = {};
     setExcluded({});
   }
 
@@ -6421,6 +6601,29 @@ export default function App() {
     );
   }
 
+  async function applyImmediateBulkExcludedEdit(nextValue) {
+    if (!selectedReferenceIdList.length || !nextValue) {
+      return;
+    }
+
+    const nextExcludedValue = nextValue === "yes";
+    const changedCount = selectedReferenceItems.reduce(
+      (count, item) => count + (Boolean(excluded[item.id]) !== nextExcludedValue ? 1 : 0),
+      0
+    );
+
+    if (!changedCount) {
+      showTemporaryBulkMetadataFeedback("No changes applied");
+      return;
+    }
+
+    setReferencesExcluded(selectedReferenceIdList, nextExcludedValue);
+
+    showTemporaryBulkMetadataFeedback(
+      `${nextExcludedValue ? "Excluded" : "Included"} ${changedCount} ${changedCount === 1 ? "item" : "items"}`
+    );
+  }
+
   async function handleImmediateBulkTagDraftChange(mode, nextTags) {
     const draftKey = mode === "add" ? "addTags" : "removeTags";
     const currentTags = bulkMetadataDraft[draftKey];
@@ -6444,6 +6647,15 @@ export default function App() {
 
   function clearWardrobeFilters() {
     setWardrobeFilters(emptyWardrobeFilters);
+  }
+
+  function clearWardrobeFilterSearch() {
+    setWardrobeFilterSearch("");
+  }
+
+  function clearWardrobeFiltersAndSearch() {
+    setWardrobeFilters(emptyWardrobeFilters);
+    setWardrobeFilterSearch("");
   }
 
   function clearLibrarySearch(event = null) {
@@ -8212,9 +8424,10 @@ export default function App() {
                       event.stopPropagation();
                       toggleExcluded(item.id);
                     }}
+                    aria-pressed={isExcluded}
                     aria-label={isExcluded ? "Include reference in generation" : "Exclude reference from generation"}
                   >
-                    {isExcluded ? "×" : "✓"}
+                    {isExcluded ? "Excluded" : "Exclude"}
                   </button>
                 </article>
               );
@@ -8482,9 +8695,10 @@ export default function App() {
                               event.stopPropagation();
                               toggleExcluded(item.id);
                             }}
+                            aria-pressed={isExcluded}
                             aria-label={isExcluded ? "Include reference in generation" : "Exclude reference from generation"}
                           >
-                            {isExcluded ? "×" : "✓"}
+                            {isExcluded ? "Excluded" : "Exclude"}
                           </button>
                         </article>
                       );
@@ -8516,9 +8730,10 @@ export default function App() {
                         event.stopPropagation();
                         toggleExcluded(item.id);
                       }}
+                      aria-pressed={isExcluded}
                       aria-label={isExcluded ? "Include reference in generation" : "Exclude reference from generation"}
                     >
-                      {isExcluded ? "×" : "✓"}
+                      {isExcluded ? "Excluded" : "Exclude"}
                     </button>
                   </article>
                 );
@@ -8859,6 +9074,11 @@ export default function App() {
   const selectedReferenceCommonTags = getCommonTagsForItems(selectedReferenceItems);
   const selectedReferenceTotalUniqueTagCount = getTotalUniqueTagCount(selectedReferenceItems);
   const bulkFavoriteValues = [...new Set(selectedReferenceItems.map((item) => Boolean(item.favorite)))];
+  const bulkExcludedValues = [...new Set(selectedReferenceItems.map((item) => Boolean(excluded[item.id])))];
+  const showFavoriteSelectedAction = bulkFavoriteValues.length > 1 || !bulkFavoriteValues[0];
+  const showUnfavoriteSelectedAction = bulkFavoriteValues.length > 1 || Boolean(bulkFavoriteValues[0]);
+  const showExcludeSelectedAction = bulkExcludedValues.length > 1 || !bulkExcludedValues[0];
+  const showIncludeSelectedAction = bulkExcludedValues.length > 1 || Boolean(bulkExcludedValues[0]);
   const libraryTagActionSuggestions = libraryTagActionMode === "remove" ? selectedReferenceTags : allLibraryTags;
   const libraryTagActionSelectedTags =
     libraryTagActionMode === "remove" ? bulkMetadataDraft.removeTags : bulkMetadataDraft.addTags;
@@ -8867,6 +9087,8 @@ export default function App() {
     : editingId
       ? "Edit reference"
       : "Reference editor";
+  const editedReferenceExcluded = Boolean(editingId && editingId !== "new" && draft.id && excluded[draft.id]);
+  const referencePreviewExcluded = Boolean(referencePreview?.id && excluded[referencePreview.id]);
   const isSideEditorOpen = Boolean(isBulkSelectionEditing || (editingId && editorReturnTarget !== "outfit"));
   const isMobileFullscreenEditorOpen = Boolean((editingId || isBulkSelectionEditing) && isMobileViewport);
   const draftSystemMetadata = getItemSystemMetadata(draft);
@@ -9137,6 +9359,19 @@ export default function App() {
           }}
         />
       </div>
+
+      {editingId !== "new" ? (
+        <div className="checkbox-field editor-bottom-toggle">
+          <span>Excluded from generation</span>
+          <input
+            type="checkbox"
+            checked={editedReferenceExcluded}
+            onChange={(event) => {
+              setReferencesExcluded([draft.id], event.target.checked);
+            }}
+          />
+        </div>
+      ) : null}
 
       <div className="form-actions">
         <button type="submit" className="primary-button">Save reference</button>
@@ -9519,9 +9754,6 @@ export default function App() {
                         ) : null}
                       </label>
                     </div>
-                    <span className="library-image-count" aria-label={libraryImageCountLabel}>
-                      {libraryImageCountLabel}
-                    </span>
 
                     <div className="library-command-bar-main-actions">
                       <button
@@ -9619,6 +9851,14 @@ export default function App() {
                             Import backup
                           </button>
                           {backupExportFeedback ? <p className="form-success tag-manager-feedback">{backupExportFeedback}</p> : null}
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={clearExcluded}
+                            disabled={!excludedReferenceCount}
+                          >
+                            Clear excluded
+                          </button>
                           <div className={`tag-manager-panel ${manageTagsOpen ? "is-open" : ""}`}>
                             <button
                               type="button"
@@ -9725,102 +9965,179 @@ export default function App() {
                         onPointerDown={(event) => event.stopPropagation()}
                         onClick={(event) => event.stopPropagation()}
                       >
-                      <div className="wardrobe-controls-inline-row">
-                        <label className="wardrobe-inline-filter">
-                          <span>Favorite</span>
-                          <select
-                            value={wardrobeFilters.favorite}
-                            onChange={(event) =>
-                              setWardrobeFilters((current) => ({ ...current, favorite: event.target.value }))
-                            }
-                          >
-                            <option value="">All</option>
-                            <option value="yes">Favorites</option>
-                            <option value="no">Not favorites</option>
-                          </select>
+                        <label className="wardrobe-filter-search">
+                          <span className="sr-only">Search filter tags</span>
+                          <input
+                            type="search"
+                            value={wardrobeFilterSearch}
+                            onChange={(event) => setWardrobeFilterSearch(event.target.value)}
+                            placeholder="Search filter options"
+                            aria-label="Search filter tags"
+                          />
                         </label>
-                        <label className="wardrobe-inline-filter">
-                          <span>Exclude</span>
-                          <select
-                            value={wardrobeFilters.laundry}
-                            onChange={(event) =>
-                              setWardrobeFilters((current) => ({ ...current, laundry: event.target.value }))
-                            }
-                          >
-                            <option value="">All</option>
-                            <option value="show">Show excluded</option>
-                            <option value="hide">Hide excluded</option>
-                          </select>
-                        </label>
-                        <label className="wardrobe-inline-filter wardrobe-inline-filter-match">
-                          <span>Match</span>
-                          <select
-                            value={normalizedWardrobeFilters.tagMatchMode}
-                            onChange={(event) =>
-                              setWardrobeFilters((current) => ({ ...current, tagMatchMode: event.target.value }))
-                            }
-                          >
-                            <option value="all">All tags</option>
-                            <option value="any">Any tag</option>
-                          </select>
-                        </label>
-                      </div>
 
-                      {(includedWardrobeFilterChips.length || excludedWardrobeFilterChips.length) ? (
-                        <div className="wardrobe-popover-chips" aria-label="Active library filters">
-                          {includedWardrobeFilterChips.map((filter) => (
-                            <button
-                              key={filter.key}
-                              type="button"
-                              className="active-filter-chip active-filter-chip-button"
-                              onClick={filter.onClear}
-                            >
-                              {filter.prefix ? <span>{filter.prefix}</span> : null}
-                              {filter.label}
-                              <strong>×</strong>
-                            </button>
-                          ))}
-                          {excludedWardrobeFilterChips.map((filter) => (
-                            <button
-                              key={filter.key}
-                              type="button"
-                              className="active-filter-chip active-filter-chip-button is-negative"
-                              onClick={filter.onClear}
-                            >
-                              {filter.prefix ? <span>{filter.prefix}</span> : null}
-                              {filter.label}
-                              <strong>×</strong>
-                            </button>
-                          ))}
+                        <div className="wardrobe-tags-filter">
+                          <div className="wardrobe-filter-section-header">
+                            <strong>Tags</strong>
+                            <span>Click to include. Shift-click to exclude.</span>
+                          </div>
+                          {hasVisibleWardrobeFilterOptions ? (
+                            <TagTree
+                              entries={filteredLibraryTagEntries}
+                              selectedTags={wardrobeFilters.tags}
+                              excludedTags={wardrobeFilters.excludedTags}
+                              onToggleTag={toggleLibraryTagFilter}
+                              onToggleGroup={toggleLibraryTagGroup}
+                              storageKey="library-filters"
+                              noTagsCount={filteredLibraryNoTagsCount}
+                              searchQuery={wardrobeFilterSearchQuery}
+                            />
+                          ) : (
+                            <p className="wardrobe-filter-empty">No tags match this search.</p>
+                          )}
                         </div>
-                      ) : null}
 
-                      <div className="filter-summary-actions wardrobe-popover-actions">
-                        <button type="button" className="ghost-button clear-filters-button" onClick={clearWardrobeFilters}>
-                          Clear filters
-                        </button>
-                        <button type="button" className="ghost-button clear-excluded-button" onClick={clearExcluded}>
-                          Clear excluded
-                        </button>
-                      </div>
+                        <div className="wardrobe-controls-inline-row">
+                          <details className="wardrobe-filter-row">
+                            <summary>
+                              <span>Favorite</span>
+                            </summary>
+                            <div className="wardrobe-filter-row-options" role="group" aria-label="Favorite filter">
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${!normalizedWardrobeFilters.favorite ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, favorite: "" }))}
+                                aria-pressed={!normalizedWardrobeFilters.favorite}
+                              >
+                                All
+                              </button>
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.favorite === "yes" ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, favorite: "yes" }))}
+                                aria-pressed={normalizedWardrobeFilters.favorite === "yes"}
+                              >
+                                Favorites
+                              </button>
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.favorite === "no" ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, favorite: "no" }))}
+                                aria-pressed={normalizedWardrobeFilters.favorite === "no"}
+                              >
+                                Not favorites
+                              </button>
+                            </div>
+                          </details>
 
-                      <div className="wardrobe-tags-filter">
-                        <span>Tags</span>
-                        <TagTree
-                          entries={libraryTagEntries}
-                          selectedTags={wardrobeFilters.tags}
-                          excludedTags={wardrobeFilters.excludedTags}
-                          onToggleTag={toggleLibraryTagFilter}
-                          onToggleGroup={toggleLibraryTagGroup}
-                          storageKey="library-filters"
-                          noTagsCount={libraryNoTagsCount}
-                        />
-                      </div>
+                          <details className="wardrobe-filter-row">
+                            <summary>
+                              <span>Exclude</span>
+                            </summary>
+                            <div className="wardrobe-filter-row-options" role="group" aria-label="Excluded filter">
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${!normalizedWardrobeFilters.laundry ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, laundry: "" }))}
+                                aria-pressed={!normalizedWardrobeFilters.laundry}
+                              >
+                                All
+                              </button>
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.laundry === "show" ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, laundry: "show" }))}
+                                aria-pressed={normalizedWardrobeFilters.laundry === "show"}
+                              >
+                                Show excluded
+                              </button>
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.laundry === "hide" ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, laundry: "hide" }))}
+                                aria-pressed={normalizedWardrobeFilters.laundry === "hide"}
+                              >
+                                Hide excluded
+                              </button>
+                            </div>
+                          </details>
+
+                          <details className="wardrobe-filter-row wardrobe-inline-filter-match">
+                            <summary>
+                              <span>Match</span>
+                            </summary>
+                            <div className="wardrobe-filter-row-options" role="group" aria-label="Tag matching">
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.tagMatchMode === "all" ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, tagMatchMode: "all" }))}
+                                aria-pressed={normalizedWardrobeFilters.tagMatchMode === "all"}
+                              >
+                                All tags
+                              </button>
+                              <button
+                                type="button"
+                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.tagMatchMode === "any" ? "is-active" : ""}`}
+                                onClick={() => setWardrobeFilters((current) => ({ ...current, tagMatchMode: "any" }))}
+                                aria-pressed={normalizedWardrobeFilters.tagMatchMode === "any"}
+                              >
+                                Any tag
+                              </button>
+                            </div>
+                          </details>
+                        </div>
+
+                        <div className={`wardrobe-controls-footer ${(includedWardrobeFilterChips.length || excludedWardrobeFilterChips.length) ? "" : "is-without-selected-filters"}`.trim()}>
+                          {(includedWardrobeFilterChips.length || excludedWardrobeFilterChips.length) ? (
+                            <div className="wardrobe-selected-filters" aria-label="Active library filters">
+                              <div className="wardrobe-popover-chips">
+                                {includedWardrobeFilterChips.map((filter) => (
+                                  <button
+                                    key={filter.key}
+                                    type="button"
+                                    className="active-filter-chip active-filter-chip-button"
+                                    onClick={filter.onClear}
+                                  >
+                                    {filter.prefix ? <span>{filter.prefix}</span> : null}
+                                    {filter.label}
+                                    <strong>×</strong>
+                                  </button>
+                                ))}
+                                {excludedWardrobeFilterChips.map((filter) => (
+                                  <button
+                                    key={filter.key}
+                                    type="button"
+                                    className="active-filter-chip active-filter-chip-button is-negative"
+                                    onClick={filter.onClear}
+                                  >
+                                    {filter.prefix ? <span>{filter.prefix}</span> : null}
+                                    {filter.label}
+                                    <strong>×</strong>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          <div className="filter-summary-actions wardrobe-popover-actions">
+                            <button
+                              type="button"
+                              className="ghost-button clear-filters-button"
+                              onClick={clearWardrobeFiltersAndSearch}
+                              disabled={!hasActiveWardrobeFilters && !wardrobeFilterSearch.trim()}
+                            >
+                              Clear search + filters
+                            </button>
+                          </div>
+                        </div>
                     </div>
                   </div>
                 </div>
 
                   <div className="library-command-bar-context">
+                    <span className="library-image-count" aria-label={libraryImageCountLabel}>
+                      {libraryImageCountLabel}
+                    </span>
                     {hasSelectedReferences ? (
                       <div className="library-command-bar-context-selection">
                         <span className="wardrobe-selection-chip">
@@ -9847,14 +10164,14 @@ export default function App() {
                           <div ref={librarySelectionActionsRef} className="library-tag-action-anchor">
                             <button
                               type="button"
-                              className={`ghost-button library-context-button ${librarySelectionActionsOpen || libraryTagActionMode ? "is-active" : ""}`}
+                              className={`ghost-button library-context-button library-selection-actions-trigger ${librarySelectionActionsOpen || libraryTagActionMode ? "is-active" : ""}`}
                               onMouseDown={preventMouseButtonFocus}
                               onClick={toggleLibrarySelectionActions}
                               aria-expanded={librarySelectionActionsOpen || Boolean(libraryTagActionMode)}
                               aria-haspopup="menu"
                               aria-controls="library-selection-actions-popover"
                             >
-                              Actions
+                              Actions ▾
                             </button>
                             {(librarySelectionActionsOpen || libraryTagActionMode) ? (
                               <div id="library-selection-actions-popover" className="selection-actions-popover" aria-label="Selection actions">
@@ -9883,50 +10200,84 @@ export default function App() {
                                   </div>
                                 ) : (
                                   <>
-                                    <button
-                                      type="button"
-                                      className="selection-actions-popover-item"
-                                      onClick={() => toggleLibraryTagAction("add")}
-                                    >
-                                      Add tags
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="selection-actions-popover-item"
-                                      onClick={() => toggleLibraryTagAction("remove")}
-                                    >
-                                      Remove tags
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="selection-actions-popover-item"
-                                      onClick={async () => {
-                                        setLibrarySelectionActionsOpen(false);
-                                        await applyImmediateBulkFavoriteEdit("yes");
-                                      }}
-                                    >
-                                      Favorite selected
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="selection-actions-popover-item"
-                                      onClick={async () => {
-                                        setLibrarySelectionActionsOpen(false);
-                                        await applyImmediateBulkFavoriteEdit("no");
-                                      }}
-                                    >
-                                      Unfavorite selected
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="selection-actions-popover-item is-danger"
-                                      onClick={async () => {
-                                        setLibrarySelectionActionsOpen(false);
-                                        await deleteSelectedReferences();
-                                      }}
-                                    >
-                                      Delete selected
-                                    </button>
+                                    <div className="selection-actions-popover-section">
+                                      <button
+                                        type="button"
+                                        className="selection-actions-popover-item"
+                                        onClick={() => toggleLibraryTagAction("add")}
+                                      >
+                                        Add tags
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="selection-actions-popover-item"
+                                        onClick={() => toggleLibraryTagAction("remove")}
+                                      >
+                                        Remove tags
+                                      </button>
+                                    </div>
+                                    <div className="selection-actions-popover-section selection-actions-popover-section-divider">
+                                      {showFavoriteSelectedAction ? (
+                                        <button
+                                          type="button"
+                                          className="selection-actions-popover-item"
+                                          onClick={async () => {
+                                            setLibrarySelectionActionsOpen(false);
+                                            await applyImmediateBulkFavoriteEdit("yes");
+                                          }}
+                                        >
+                                          Favorite
+                                        </button>
+                                      ) : null}
+                                      {showUnfavoriteSelectedAction ? (
+                                        <button
+                                          type="button"
+                                          className="selection-actions-popover-item"
+                                          onClick={async () => {
+                                            setLibrarySelectionActionsOpen(false);
+                                            await applyImmediateBulkFavoriteEdit("no");
+                                          }}
+                                        >
+                                          Unfavorite
+                                        </button>
+                                      ) : null}
+                                      {showExcludeSelectedAction ? (
+                                        <button
+                                          type="button"
+                                          className="selection-actions-popover-item"
+                                          onClick={async () => {
+                                            setLibrarySelectionActionsOpen(false);
+                                            await applyImmediateBulkExcludedEdit("yes");
+                                          }}
+                                        >
+                                          Exclude
+                                        </button>
+                                      ) : null}
+                                      {showIncludeSelectedAction ? (
+                                        <button
+                                          type="button"
+                                          className="selection-actions-popover-item"
+                                          onClick={async () => {
+                                            setLibrarySelectionActionsOpen(false);
+                                            await applyImmediateBulkExcludedEdit("no");
+                                          }}
+                                        >
+                                          Include
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                    <div className="selection-actions-popover-section selection-actions-popover-section-danger">
+                                      <button
+                                        type="button"
+                                        className="selection-actions-popover-item is-danger"
+                                        onClick={async () => {
+                                          setLibrarySelectionActionsOpen(false);
+                                          await deleteSelectedReferences();
+                                        }}
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
                                   </>
                                 )}
                               </div>
@@ -10034,7 +10385,10 @@ export default function App() {
 
         {referencePreview ? (
           <div className="floating-backdrop fitpic-preview-backdrop" onClick={() => setReferencePreview(null)}>
-            <div className="fitpic-preview-overlay reference-preview-overlay" onClick={(event) => event.stopPropagation()}>
+            <div
+              className={`fitpic-preview-overlay reference-preview-overlay ${referencePreviewExcluded ? "is-excluded" : ""}`}
+              onClick={(event) => event.stopPropagation()}
+            >
               {(() => {
                 const referencePreviewTags = uniqueTags(referencePreview.tags);
                 const referencePreviewTagLabel = referencePreviewTags.map((tag) => getLeafTagLabel(tag)).join(", ");
@@ -10044,7 +10398,7 @@ export default function App() {
               <div className="fitpic-preview-header">
                 <div className="reference-preview-title">
                   <strong>{buildDisplayName(referencePreview)}</strong>
-                  {referencePreviewTagLabel || referencePreviewDescription || referencePreview.favorite ? (
+                  {referencePreviewTagLabel || referencePreviewDescription || referencePreview.favorite || referencePreviewExcluded ? (
                     <div className="reference-preview-meta" aria-label="Reference metadata">
                       {referencePreviewTagLabel ? <span title={referencePreviewTagLabel}>{referencePreviewTagLabel}</span> : null}
                       {referencePreviewDescription ? (
@@ -10057,11 +10411,21 @@ export default function App() {
                           ♥
                         </span>
                       ) : null}
+                      {referencePreviewExcluded ? <span className="reference-preview-status-chip">Excluded from generation</span> : null}
                     </div>
                   ) : null}
                   {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
                 </div>
                 <div className="reference-preview-actions">
+                  <button
+                    type="button"
+                    className={`ghost-button ${referencePreviewExcluded ? "is-active" : ""}`}
+                    onClick={() => toggleExcluded(referencePreview.id)}
+                    aria-pressed={referencePreviewExcluded}
+                    aria-label={referencePreviewExcluded ? "Include reference in generation" : "Exclude reference from generation"}
+                  >
+                    {referencePreviewExcluded ? "Excluded" : "Exclude"}
+                  </button>
                   <button
                     type="button"
                     className={`ghost-button ${referencePreview.favorite ? "is-active" : ""}`}
