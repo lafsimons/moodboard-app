@@ -17,6 +17,14 @@ const dependencies = {
     itemA: { id: "itemA", itemUuid: "uuid-a" },
     itemB: { id: "itemB", itemUuid: "uuid-b" }
   },
+  itemsByItemUuid: {
+    "uuid-a": { id: "itemA", itemUuid: "uuid-a" },
+    "uuid-b": { id: "itemB", itemUuid: "uuid-b" }
+  },
+  itemsByReferenceSourceKey: {
+    "source-a.jpg": { id: "itemA", itemUuid: "uuid-a" },
+    "source-b.jpg": { id: "itemB", itemUuid: "uuid-b" }
+  },
   getBoardKey: (board) => board.images.map((image) => image.referenceId).join(","),
   getOutfitKey: (outfit) => Object.values(outfit ?? {}).filter(Boolean).join(","),
   buildBoardFromLegacyReferences: (referenceIds) => ({
@@ -102,6 +110,49 @@ test("hydrateSavedBoards filters missing board references and falls back to lega
     ["itemB"]
   );
   assert.equal(hydrated[1].board.images[0].referenceItemUuid, "uuid-b");
+});
+
+test("hydrateSavedBoards relinks saved board references by referenceItemUuid", () => {
+  const hydrated = hydrateSavedBoards(
+    [
+      {
+        id: "saved-relinked",
+        board: {
+          images: [
+            { referenceId: "legacy-item-id", referenceItemUuid: "uuid-a" }
+          ]
+        },
+        outfit: {}
+      }
+    ],
+    [dependencies.itemsById.itemA],
+    dependencies
+  );
+
+  assert.equal(hydrated.length, 1);
+  assert.equal(hydrated[0].board.images[0].referenceId, "itemA");
+  assert.equal(hydrated[0].board.images[0].referenceItemUuid, "uuid-a");
+});
+
+test("hydrateSavedBoards relinks saved board references by referenceSourceKey", () => {
+  const hydrated = hydrateSavedBoards(
+    [
+      {
+        id: "saved-source-relinked",
+        board: {
+          images: [
+            { referenceId: "legacy-item-id", referenceSourceKey: "source-a.jpg" }
+          ]
+        },
+        outfit: {}
+      }
+    ],
+    [dependencies.itemsById.itemA],
+    dependencies
+  );
+
+  assert.equal(hydrated.length, 1);
+  assert.equal(hydrated[0].board.images[0].referenceId, "itemA");
 });
 
 test("resolveBoardFromAppState falls back to legacy references when persisted board becomes empty", () => {

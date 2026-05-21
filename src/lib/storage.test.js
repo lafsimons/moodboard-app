@@ -671,6 +671,48 @@ test("saved board create edit and delete mark metadata pending upload", async ()
   assert.equal(deletedMetadata.recordVersion, 5);
 });
 
+test("saved boards persist across app state save and load", async () => {
+  installFakeIndexedDb();
+
+  const savedBoardState = {
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "Persistent board",
+        board: {
+          id: "board-1",
+          boardUuid: "board-uuid-1",
+          width: 1600,
+          height: 1200,
+          images: [
+            {
+              id: "board-image-1",
+              referenceId: "item-1",
+              referenceItemUuid: "uuid-1",
+              x: 10,
+              y: 20,
+              width: 220,
+              height: 260,
+              rotation: 0,
+              zIndex: 1,
+              generationSlot: "TopInner"
+            }
+          ]
+        }
+      }
+    ],
+    recentOutfits: []
+  };
+
+  await saveAppState(savedBoardState);
+
+  const restoredAppState = await loadAppState();
+
+  assert.deepEqual(restoredAppState.savedOutfits, savedBoardState.savedOutfits);
+  assert.deepEqual(restoredAppState.recentOutfits, []);
+});
+
 test("saved boards dirty when reference id rewrites change persisted payload", async () => {
   installFakeIndexedDb();
 

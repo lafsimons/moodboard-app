@@ -175,7 +175,7 @@ button:disabled {
 
 .outfit-feedback-panel {
   display: grid;
-  gap: 6px;
+  gap: 7px;
   position: relative;
   overflow: visible;
 }
@@ -2469,6 +2469,8 @@ button:disabled {
   grid-template-columns: 1fr;
   width: min(380px, calc(100vw - 32px));
   max-height: min(620px, calc(100vh - 170px - env(safe-area-inset-bottom)));
+  gap: 6px;
+  padding: 12px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.12);
 }
 
@@ -2511,22 +2513,26 @@ button:disabled {
 
 .tag-manager-panel {
   display: grid;
-  gap: 8px;
+  gap: 7px;
 }
 
 .tag-manager-toggle {
   justify-content: flex-start;
 }
 
-.wardrobe-modal-header {
-  display: grid;
-  gap: 2px;
+.wardrobe-manage-action {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 7px;
+  font-size: 0.66rem;
+  text-align: left;
 }
 
-.wardrobe-modal-header p:last-child {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
+.wardrobe-manage-divider {
+  width: 100%;
+  height: 1px;
+  background: var(--border-soft);
 }
 
 .tag-manager-body {
@@ -2687,7 +2693,7 @@ button:disabled {
 
 .wardrobe-add-upload {
   grid-template-columns: minmax(110px, 132px) 1fr;
-  padding: 10px;
+  padding: 8px;
 }
 
 .wardrobe-add-preview {
@@ -3703,7 +3709,7 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 }
 
 .wardrobe-panel-body.has-side-editor {
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns: minmax(0, 1fr) 10px minmax(300px, var(--side-editor-width, 348px));
 }
 
 .wardrobe-panel-scroll {
@@ -3998,6 +4004,14 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
 .fitpics-panel {
   padding: 14px;
+}
+
+.dashboard-panel {
+  min-height: calc(100vh - 164px - env(safe-area-inset-bottom));
+}
+
+.dashboard-stats-section {
+  gap: 14px;
 }
 
 .wardrobe-worth-summary {
@@ -4299,8 +4313,23 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   display: flex;
 }
 
-.side-editor-header {
-  margin-bottom: 14px;
+.side-editor-resize-handle {
+  position: sticky;
+  top: 24px;
+  align-self: stretch;
+  width: 10px;
+  min-width: 10px;
+  cursor: col-resize;
+}
+
+.side-editor-resize-handle::before {
+  content: "";
+  display: block;
+  width: 2px;
+  height: 100%;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.14) 12%, rgba(0, 0, 0, 0.14) 88%, transparent 100%);
 }
 
 .side-editor > *:last-child {
@@ -4709,6 +4738,11 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 }
 
 .item-image-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.item-image-action-group {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
@@ -4728,6 +4762,56 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
 .editor-inline-checkbox input {
   margin: 0;
+}
+
+.editor-workspace-toggles {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 0 2px;
+}
+
+.editor-image-button {
+  display: inline-grid;
+  place-items: center;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.editor-favorite-button {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  line-height: 1;
+}
+
+.editor-favorite-button.is-active {
+  border-color: var(--text);
+  color: var(--text);
+  background: var(--soft);
+}
+
+.editor-remove-image-button {
+  min-height: 28px;
+  padding-inline: 8px;
 }
 
 .image-preservation-note {
@@ -4849,6 +4933,35 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
 .side-editor .tag-input-field {
   min-width: 72px;
+}
+
+.side-editor .editor-form,
+.floating-item-editor .editor-form {
+  gap: 10px;
+}
+
+.side-editor .item-image-upload,
+.floating-item-editor .item-image-upload {
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.side-editor .item-image-preview,
+.floating-item-editor .item-image-preview {
+  min-height: 124px;
+}
+
+.side-editor .item-image-preview .managed-image,
+.floating-item-editor .item-image-preview .managed-image {
+  max-height: calc(112px * var(--managed-frame-scale, 1));
+}
+
+.side-editor .image-preservation-note,
+.floating-item-editor .image-preservation-note,
+.side-editor .form-error,
+.floating-item-editor .form-error {
+  grid-column: 2;
 }
 
 .form-actions {
@@ -5058,6 +5171,10 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   .wardrobe-panel-body.has-side-editor {
     grid-template-columns: 1fr;
     gap: 0;
+  }
+
+  .side-editor-resize-handle {
+    display: none;
   }
 
   .wardrobe-inline-utilities {
