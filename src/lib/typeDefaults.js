@@ -86,6 +86,7 @@ export const emptyForm = {
   accessorySlot: "",
   color: "",
   weight: "",
+  showTitleOnCard: false,
   list: "Wardrobe",
   quantity: 1,
   styleTags: [],

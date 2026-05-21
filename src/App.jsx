@@ -73,6 +73,7 @@ import {
   getReferenceImportMessage,
   importReferenceFiles
 } from "./lib/referenceImport";
+import { shouldShowLibraryCardTitle } from "./lib/libraryCards.js";
 import {
   applyPreviewImageFields,
   createImageAsset,
@@ -1427,6 +1428,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
   onVisibleImageMount
 }) {
   const itemName = useMemo(() => buildDisplayName(item), [item]);
+  const showTitle = useMemo(() => shouldShowLibraryCardTitle(item), [item]);
   const itemTagsLabel = useMemo(() => {
     const normalizedTags = uniqueTags(item.tags);
     if (!normalizedTags.length) {
@@ -1484,10 +1486,12 @@ const LibraryGridCard = memo(function LibraryGridCard({
       </button>
 
       <div className="wardrobe-meta">
-        <strong title={itemName}>
-          <span>{itemName}</span>
-          {item.favorite ? <span className="wardrobe-meta-favorite" aria-label="Favorite">♥</span> : null}
-        </strong>
+        {showTitle ? (
+          <strong title={itemName}>
+            <span>{itemName}</span>
+            {item.favorite ? <span className="wardrobe-meta-favorite" aria-label="Favorite">♥</span> : null}
+          </strong>
+        ) : null}
         <span title={itemTagsLabel}>{itemTagsLabel}</span>
       </div>
     </article>
@@ -2371,6 +2375,7 @@ function normalizeItem(item) {
     imageCropWidth: getNormalizedImageCrop(item).width,
     imageCropHeight: getNormalizedImageCrop(item).height,
     favorite: Boolean(item.favorite),
+    showTitleOnCard: Boolean(item.showTitleOnCard),
     quantity: normalizeQuantity(item.quantity),
     garmentType: normalizeGarmentType({ ...emptyForm, ...item, ...correction }),
     weight: normalizeWeight(item.weight),
@@ -9021,15 +9026,37 @@ export default function App() {
       </div>
 
       <div className="editor-core-fields">
-        <label>
-          Name / Title
+        <div className="editor-field">
+          <div className="editor-label-row">
+            <span>Name / Title</span>
+            <label className="editor-inline-checkbox">
+              <input
+                type="checkbox"
+                checked={Boolean(draft.showTitleOnCard)}
+                onChange={(event) => {
+                  const nextShowTitleOnCard = event.target.checked;
+
+                  if (editorReturnTarget === "outfit" && editingId !== "new") {
+                    updateExistingDraftItem({
+                      ...draft,
+                      showTitleOnCard: nextShowTitleOnCard
+                    });
+                    return;
+                  }
+
+                  setDraft((current) => ({ ...current, showTitleOnCard: nextShowTitleOnCard }));
+                }}
+              />
+              <span>Show on cards</span>
+            </label>
+          </div>
           <input
             list="item-name-suggestions"
             value={draft.name}
             onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
             placeholder="Concrete study, chrome lamp, gallery wall"
           />
-        </label>
+        </div>
         <datalist id="item-name-suggestions">
           {nameSuggestions.map((name) => (
             <option key={name} value={name} />

@@ -4348,6 +4348,7 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
 
 .editor-form .metadata-tag-group > .editor-label-row,
 .editor-form .checkbox-field > .editor-label-row,
+.editor-form .editor-field > .editor-label-row,
 .editor-form label > .editor-label-row {
   text-transform: uppercase;
   letter-spacing: 0.02em;
@@ -4434,6 +4435,9 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
   gap: 6px;
   font-size: 0.72rem;
   color: var(--muted);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
 }
 
 .editor-inline-checkbox input {
@@ -4504,6 +4508,13 @@ html[data-input-modality="keyboard"] .wardrobe-inline-filter:has(select:focus-vi
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+
+.editor-form .editor-field {
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  min-width: 0;
 }
 
 .editor-form .checkbox-field {
