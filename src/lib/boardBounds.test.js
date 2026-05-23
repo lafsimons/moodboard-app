@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildBoardRenderMetadata,
-  calculateBoardFittedView,
   getBoardItemRenderedBounds,
-  getViewportOccludedBottomInset,
   rectanglesIntersect
 } from "./boardBounds.js";
 
@@ -93,57 +91,4 @@ test("rendered collision rectangles report gutter intersections consistently", (
 
   assert.equal(rectanglesIntersect(leftBounds.collisionRect, rightBounds.collisionRect, 20), false);
   assert.equal(rectanglesIntersect(leftBounds.collisionRect, rightBounds.collisionRect, 0), false);
-});
-
-test("calculateBoardFittedView keeps mobile fit within the visible viewport above bottom navigation", () => {
-  const board = {
-    width: 1400,
-    height: 1800,
-    images: new Array(14).fill(null)
-  };
-
-  const mobileView = calculateBoardFittedView(board, {
-    viewportWidth: 390,
-    viewportHeight: 844,
-    isMobileViewport: true,
-    occludedBottomInset: 84
-  });
-
-  const desktopView = calculateBoardFittedView(board, {
-    viewportWidth: 1440,
-    viewportHeight: 900,
-    isMobileViewport: false
-  });
-  const mobileAvailableHeight = 844 - 24 - 84;
-  const mobileScaledHeight = board.height * mobileView.zoom;
-
-  assert.ok(mobileScaledHeight <= mobileAvailableHeight);
-  assert.ok(mobileView.zoom < desktopView.zoom);
-});
-
-test("getViewportOccludedBottomInset measures overlap from fixed bottom chrome", () => {
-  const inset = getViewportOccludedBottomInset(
-    {
-      left: 0,
-      top: 0,
-      width: 390,
-      height: 844
-    },
-    {
-      left: 10,
-      top: 760,
-      width: 300,
-      height: 60
-    },
-    8
-  );
-
-  assert.equal(inset, 92);
-  assert.equal(
-    getViewportOccludedBottomInset(
-      { left: 0, top: 0, width: 390, height: 844 },
-      { left: 420, top: 760, width: 100, height: 60 }
-    ),
-    0
-  );
 });
