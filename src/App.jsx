@@ -104,7 +104,9 @@ import {
 } from "./lib/taggingUx";
 import {
   buildBoardRenderMetadata,
-  getBoardItemRenderedBounds
+  calculateBoardFittedView,
+  getBoardItemRenderedBounds,
+  getViewportOccludedBottomInset
 } from "./lib/boardBounds.js";
 import {
   normalizeLibrarySearch,
@@ -3203,6 +3205,7 @@ export default function App() {
   const importBackupRef = useRef(null);
   const outfitStageRef = useRef(null);
   const boardViewportRef = useRef(null);
+  const workspaceTabsRef = useRef(null);
   const pickerOverlayRef = useRef(null);
   const outfitDebugRef = useRef(null);
   const editorImageFrameRef = useRef(null);
@@ -3236,7 +3239,7 @@ export default function App() {
   const paletteCacheRef = useRef(new Map());
   const boardRenderLayoutSignatureRef = useRef("");
   const suppressNextBoardRelayoutRef = useRef(false);
-  const pendingRestoredBoardFitRef = useRef(false);
+  const appliedBoardFitRequestRef = useRef(0);
   const lastInteractionWasPointerRef = useRef(false);
   const pointerActivatedControlRef = useRef(null);
   const excludedOutfitReconcileFrameRef = useRef(0);
@@ -3364,6 +3367,7 @@ export default function App() {
     height: 0,
     scrollTop: 0
   });
+  const [boardFitRequestToken, setBoardFitRequestToken] = useState(0);
   const [dockExpanded, setDockExpanded] = useState(getIsMobileViewport);
   const [isMobileViewport, setIsMobileViewport] = useState(getIsMobileViewport);
   const [weatherOpen, setWeatherOpen] = useState(false);
@@ -4672,7 +4676,7 @@ export default function App() {
       setGuidedDebugPayload(result.guidedDebugPayload);
 
       if (fitView) {
-        setBoardView(getFittedBoardView(result.board));
+        requestBoardFit();
       }
 
       perfSession?.mark("state commit scheduled");
@@ -4685,7 +4689,7 @@ export default function App() {
         });
       });
     }
-  }, [clearBoardGenerationFeedback, startBoardTransition]);
+  }, [clearBoardGenerationFeedback, requestBoardFit, startBoardTransition]);
 
   const scheduleBoardGeneration = useCallback((buildBoard, options = {}) => {
     if (boardGenerationInFlightRef.current) {
@@ -4804,13 +4808,38 @@ export default function App() {
   }, [board]);
 
   useEffect(() => {
-    if (!pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
+    if (
+      !boardFitRequestToken ||
+      appliedBoardFitRequestRef.current === boardFitRequestToken ||
+      loading ||
+      !board?.images?.length ||
+      !boardViewportRef.current
+    ) {
       return;
     }
 
-    pendingRestoredBoardFitRef.current = false;
-    setBoardView(getFittedBoardView(board));
-  }, [board, loading]);
+    let cancelled = false;
+    const requestToken = boardFitRequestToken;
+    let firstFrameId = 0;
+    let secondFrameId = 0;
+
+    firstFrameId = requestAnimationFrame(() => {
+      secondFrameId = requestAnimationFrame(() => {
+        if (cancelled || appliedBoardFitRequestRef.current === requestToken) {
+          return;
+        }
+
+        appliedBoardFitRequestRef.current = requestToken;
+        setBoardView(getFittedBoardView(board));
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(firstFrameId);
+      cancelAnimationFrame(secondFrameId);
+    };
+  }, [board, boardFitRequestToken, dockExpanded, isMobileViewport, loading]);
 
   useEffect(() => {
     setImageCountDraft(String(imageCount));
@@ -4834,7 +4863,6 @@ export default function App() {
         recentOutfits: normalizeRecentOutfits(defaultState.recentOutfits)
       });
 
-      pendingRestoredBoardFitRef.current = false;
       setItems(normalizedItems);
       setLayering(Boolean(defaultState.layering));
       setAccessoriesEnabled(defaultState.accessoriesEnabled ?? true);
@@ -4843,7 +4871,7 @@ export default function App() {
       setBoard(generatedBoard.board);
       setImageCount(resolvePersistedImageCount(defaultState.imageCount));
       setOutfit(generatedBoard.syntheticOutfit);
-      setBoardView(getFittedBoardView(generatedBoard.board));
+      requestBoardFit();
       setGuidedDebugPayload([]);
       setIgnoredImportImages(defaultState.ignoredImportImages ?? []);
       setSavedOutfits([]);
@@ -4927,11 +4955,14 @@ export default function App() {
                 recentOutfits: normalizedRecentOutfits
               }).board
             : restoredBoard;
-          pendingRestoredBoardFitRef.current = Boolean(nextBoard?.images?.length);
           setBoard(nextBoard);
           setImageCount(resolvedImageCount);
           setOutfit(boardToSyntheticOutfit(nextBoard));
-          setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+          if (!nextBoard?.images?.length) {
+            setBoardView({ x: 0, y: 0, zoom: 1 });
+          } else {
+            requestBoardFit();
+          }
           setGuidedDebugPayload([]);
           setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
           const hydratedSavedBoards = hydrateSavedBoards(
@@ -5317,7 +5348,7 @@ export default function App() {
         });
         setOutfit(generatedBoard.syntheticOutfit);
         setGuidedDebugPayload(generatedBoard.guidedDebugPayload);
-        setBoardView(getFittedBoardView(generatedBoard.board));
+        requestBoardFit();
         return generatedBoard.board;
       }
 
@@ -5341,7 +5372,7 @@ export default function App() {
         });
         setOutfit(generatedBoard.syntheticOutfit);
         setGuidedDebugPayload(generatedBoard.guidedDebugPayload);
-        setBoardView(getFittedBoardView(generatedBoard.board));
+        requestBoardFit();
         return generatedBoard.board;
       }
 
@@ -5356,7 +5387,7 @@ export default function App() {
       setGuidedDebugPayload([]);
       return nextBoard;
     });
-  }, [items, itemsById, excluded, imageCount, generationLists, generationMode, generationMetadataFilters, outfitFilters, weatherData, outfitAffinity, recentOutfits, loading]);
+  }, [items, itemsById, excluded, imageCount, generationLists, generationMode, generationMetadataFilters, outfitFilters, weatherData, outfitAffinity, recentOutfits, loading, requestBoardFit]);
 
   useEffect(() => {
     if (loading || !board?.images?.length) {
@@ -5806,11 +5837,14 @@ export default function App() {
           recentOutfits: normalizedRecentOutfits
         }).board
       : restoredBoard;
-    pendingRestoredBoardFitRef.current = Boolean(nextBoard?.images?.length);
     setBoard(nextBoard);
     setImageCount(resolvedImageCount);
     setOutfit(boardToSyntheticOutfit(nextBoard));
-    setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+    if (!nextBoard?.images?.length) {
+      setBoardView({ x: 0, y: 0, zoom: 1 });
+    } else {
+      requestBoardFit();
+    }
     setGuidedDebugPayload([]);
     setIgnoredImportImages(nextAppState?.ignoredImportImages ?? []);
     setSavedOutfits(hydrateSavedBoards(nextAppState?.savedOutfits, effectiveItems, getBoardRepositoryDependencies()));
@@ -8124,37 +8158,42 @@ export default function App() {
     });
   }
 
-  function getFittedBoardView(nextBoard) {
-    if (!nextBoard?.width || !nextBoard?.height || !boardViewportRef.current) {
-      return { x: 0, y: 0, zoom: 1 };
+  const requestBoardFit = useCallback(() => {
+    setBoardFitRequestToken((current) => current + 1);
+  }, []);
+
+  function getBoardViewportFitMetrics() {
+    if (!boardViewportRef.current) {
+      return null;
     }
 
     const viewportRect = boardViewportRef.current.getBoundingClientRect();
-    const viewportWidth = Math.max(1, viewportRect.width - 24);
-    const viewportHeight = Math.max(1, viewportRect.height - 24);
-    const widthZoom = viewportWidth / nextBoard.width;
-    const heightZoom = viewportHeight / nextBoard.height;
-    const fittedZoom = Math.min(widthZoom, heightZoom);
-    const boardImageCount = Array.isArray(nextBoard.images) ? nextBoard.images.length : 0;
-    const relaxedZoom =
-      boardImageCount >= 12 && boardImageCount <= 15
-        ? Math.min(0.62, Math.max(0.6, fittedZoom * 1.55))
-        : boardImageCount > 15
-        ? fittedZoom >= 0.34
-          ? Math.min(0.62, Math.max(0.52, fittedZoom * 1.46))
-          : fittedZoom * 1.22
-        : fittedZoom >= 0.82
-          ? 1
-          : fittedZoom >= 0.62
-            ? fittedZoom * 1.12
-            : fittedZoom * 1.05;
-    const nextZoom = Math.min(BOARD_ZOOM_MAX, Math.max(BOARD_ZOOM_MIN, Math.round(relaxedZoom * 1000) / 1000));
+    const occludedBottomInset = isMobileViewport
+      ? getViewportOccludedBottomInset(viewportRect, workspaceTabsRef.current?.getBoundingClientRect(), 12)
+      : 0;
 
     return {
-      x: Math.round((nextBoard.width * (1 - nextZoom) * 0.5) * 1000) / 1000,
-      y: Math.round((nextBoard.height * (1 - nextZoom) * 0.5) * 1000) / 1000,
-      zoom: nextZoom
+      width: viewportRect.width,
+      height: viewportRect.height,
+      occludedBottomInset
     };
+  }
+
+  function getFittedBoardView(nextBoard) {
+    const viewportMetrics = getBoardViewportFitMetrics();
+
+    if (!nextBoard?.width || !nextBoard?.height || !viewportMetrics) {
+      return { x: 0, y: 0, zoom: 1 };
+    }
+
+    return calculateBoardFittedView(nextBoard, {
+      viewportWidth: viewportMetrics.width,
+      viewportHeight: viewportMetrics.height,
+      isMobileViewport,
+      occludedBottomInset: viewportMetrics.occludedBottomInset,
+      minZoom: BOARD_ZOOM_MIN,
+      maxZoom: BOARD_ZOOM_MAX
+    });
   }
 
   function zoomBoardView(nextZoomOrUpdater, anchor = null) {
@@ -8305,7 +8344,7 @@ export default function App() {
 
     setBoard(nextBoard);
     setImageCount(getBoardImageCount(nextBoard));
-    setBoardView(getFittedBoardView(nextBoard));
+    requestBoardFit();
     setOutfit(boardToSyntheticOutfit(nextBoard));
     setRecentOutfits((current) =>
       rememberRecentOutfit(
@@ -9213,7 +9252,14 @@ export default function App() {
           <button
             type="button"
             className="ghost-button"
-            onClick={() => setBoardView(board ? getFittedBoardView(board) : { x: 0, y: 0, zoom: 1 })}
+            onClick={() => {
+              if (!board) {
+                setBoardView({ x: 0, y: 0, zoom: 1 });
+                return;
+              }
+
+              requestBoardFit();
+            }}
           >
             Reset view
           </button>
@@ -9916,6 +9962,7 @@ export default function App() {
 
         {isMobileFullscreenEditorOpen ? null : (
           <div
+            ref={workspaceTabsRef}
             className={`workspace-tabs ${isDockExpanded ? "is-dock-expanded" : ""} ${paletteOpen ? "is-palette-open" : ""}`}
             aria-label="Workspace sections"
           >

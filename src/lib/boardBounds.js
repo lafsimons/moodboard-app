@@ -202,3 +202,74 @@ export function rectanglesIntersect(leftRect, rightRect, gap = 0) {
     rightRect.bottom + gap <= leftRect.top
   );
 }
+
+function roundBoardViewValue(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+export function getViewportOccludedBottomInset(viewportRect, overlayRect, gap = 0) {
+  const normalizedViewportRect = normalizeRect(viewportRect);
+  const normalizedOverlayRect = normalizeRect(overlayRect);
+  const overlapsHorizontally =
+    normalizedOverlayRect.right > normalizedViewportRect.left &&
+    normalizedOverlayRect.left < normalizedViewportRect.right;
+  const overlapsVertically =
+    normalizedOverlayRect.bottom > normalizedViewportRect.top &&
+    normalizedOverlayRect.top < normalizedViewportRect.bottom;
+
+  if (!overlapsHorizontally || !overlapsVertically) {
+    return 0;
+  }
+
+  return Math.max(0, normalizedViewportRect.bottom - normalizedOverlayRect.top + Math.max(0, Number(gap) || 0));
+}
+
+export function calculateBoardFittedView(
+  board,
+  {
+    viewportWidth,
+    viewportHeight,
+    isMobileViewport = false,
+    occludedBottomInset = 0,
+    paddingX = 24,
+    paddingY = 24,
+    minZoom = 0.1,
+    maxZoom = 6
+  } = {}
+) {
+  if (!board?.width || !board?.height) {
+    return { x: 0, y: 0, zoom: 1 };
+  }
+
+  const availableWidth = Math.max(1, (Number(viewportWidth) || 0) - Math.max(0, Number(paddingX) || 0));
+  const availableHeight = Math.max(
+    1,
+    (Number(viewportHeight) || 0) - Math.max(0, Number(paddingY) || 0) - Math.max(0, Number(occludedBottomInset) || 0)
+  );
+  const widthZoom = availableWidth / board.width;
+  const heightZoom = availableHeight / board.height;
+  const fittedZoom = Math.min(widthZoom, heightZoom);
+  const boardImageCount = Array.isArray(board.images) ? board.images.length : 0;
+  const rawZoom = isMobileViewport
+    ? fittedZoom >= 1
+      ? 1
+      : fittedZoom * 0.98
+    : boardImageCount >= 12 && boardImageCount <= 15
+      ? Math.min(0.62, Math.max(0.6, fittedZoom * 1.55))
+      : boardImageCount > 15
+        ? fittedZoom >= 0.34
+          ? Math.min(0.62, Math.max(0.52, fittedZoom * 1.46))
+          : fittedZoom * 1.22
+        : fittedZoom >= 0.82
+          ? 1
+          : fittedZoom >= 0.62
+            ? fittedZoom * 1.12
+            : fittedZoom * 1.05;
+  const zoom = Math.min(maxZoom, Math.max(minZoom, roundBoardViewValue(rawZoom)));
+
+  return {
+    x: roundBoardViewValue(board.width * (1 - zoom) * 0.5),
+    y: roundBoardViewValue(board.height * (1 - zoom) * 0.5),
+    zoom
+  };
+}
