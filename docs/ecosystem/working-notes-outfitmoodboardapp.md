@@ -20,6 +20,9 @@ Current sync/cloud implementation spec:
 npm run dev -- --host 0.0.0.0
 ````
 
+`/Users/lafsimons/Desktop/outfit-app/`
+`/Users/lafsimons/Desktop/moodboard-app/`
+
 ---
 
 # OA & MBA Current priorities
@@ -33,30 +36,24 @@ npm run dev -- --host 0.0.0.0
 - Audit/spec dashboard-local filters
 - Implement dashboard-local filters
 
----
+### **Core interaction fixes** - done
 
-### **Core interaction fixes**
+- ~~Fix exclude in selector not triggering reroll/generation~~
+- ~~Clicking item no longer auto-opens Select on desktop~~
+- ~~Outfit single-click = select~~
+- ~~Outfit double-click = preview~~
+- ~~Add “Unlock all slots” control~~
+- ~~Toolbar selected/unselected layout stability~~ - later
+- ~~Persist editor/add-images window positions~~
 
-- Fix exclude in selector not triggering reroll/generation
-- Clicking item no longer auto-opens Select on desktop
-- Outfit single-click = select
-- Outfit double-click = preview
-- Add “Unlock all slots” control
-- Toolbar selected/unselected layout stability
-- Persist editor/add-images window positions
+### **UI polish / smaller fixes** - done
 
----
-
-### **UI polish / smaller fixes**
-
-- Headwear hover buttons cut off
-- Remove click/select shadows
-- Preview equip → unequip state polish
-- Preview favorite heart icon
-- Dashboard search hidden + filter reposition
-- Manage buttons non-wrapping layout
-
----
+- ~~Headwear hover buttons cut off~~ - almost
+- ~~Remove click/select shadows~~
+- ~~Preview equip → unequip state polish~~
+- ~~Preview favorite heart icon~~
+- ~~Dashboard search hidden + filter reposition~~
+- ~~Manage buttons non-wrapping layout~~
 
 ## **OA — Phase 2 (Selector & preview UX redesign)**
 
@@ -66,16 +63,12 @@ npm run dev -- --host 0.0.0.0
 - Implement Actions dropdown in outfit hover controls
 - Preview view redesign / action hierarchy cleanup
 
----
-
 ### **Layering / accessory systems**
 
 - Audit/spec accessory visibility system
 - Implement per-item accessory visibility toggles
 - Audit/spec layering-off “which item stays” behavior
 - Implement layering-off keep-inner/keep-outer behavior
-
----
 
 ## **OA — Phase 3 (Secondary collection surfaces)**
 
@@ -87,48 +80,38 @@ npm run dev -- --host 0.0.0.0
 
 - Lightweight local search/sort for Fitpics
 
----
+## ~~**MBA — Phase 1 (Interaction & layout stabilization)** - done~~
 
-## **MBA — Phase 1 (Interaction & layout stabilization)**
+### ~~**Boards / navigation**~~
 
-### **Boards / navigation**
+- ~~Remove “Back to Library” button in Boards~~
+- ~~ESC in Boards closes panel only~~
+- ~~Library button toggles closed again~~
 
-- Remove “Back to Library” button in Boards
-- ESC in Boards closes panel only
-- Library button toggles closed again
+### ~~**Window persistence**~~
 
----
+- ~~Persist editor window positions~~
+- ~~Persist add-images window positions~~
 
-### **Window persistence**
+### ~~**Filters / manage tags**~~
 
-- Persist editor window positions
-- Persist add-images window positions
+- ~~Move Manage Tags into Filter panel~~
 
----
+### ~~**Item editor structure/layout**~~
 
-### **Filters / manage tags**
+- ~~Refactor image controls hierarchy/layout~~
+- ~~Keep Add Tag full-width row~~
+- ~~Consistent button heights/grid widths~~
+- ~~Reduce oversized gaps~~
+- ~~Align controls to top~~
 
-- Move Manage Tags into Filter panel
+### ~~**Item editor visual polish**~~
 
----
-
-### **Item editor structure/layout**
-
-- Refactor image controls hierarchy/layout
-- Keep Add Tag full-width row
-- Consistent button heights/grid widths
-- Reduce oversized gaps
-- Align controls to top
-
----
-
-### **Item editor visual polish**
-
-- Subtle favorite heart
-- Hover-only heart circle
-- Secondary styling for Replace Original Image
-- Technical/subtle preview regeneration controls
-- Separate destructive Remove Image area
+- ~~Subtle favorite heart~~
+- ~~Hover-only heart circle~~
+- ~~Secondary styling for Replace Original Image~~
+- ~~Technical/subtle preview regeneration controls~~
+- ~~Separate destructive Remove Image area~~
 
 ---
 
@@ -140,8 +123,6 @@ npm run dev -- --host 0.0.0.0
 - Implement OA screenshot-style saved outfit previews
 - Implement MBA screenshot-style saved board previews
 
----
-
 ## **Architectural direction / principles**
 
 ### **Local state per surface**
@@ -151,33 +132,6 @@ npm run dev -- --host 0.0.0.0
 - Saved Outfits controls independent
 - Fitpics controls independent
 - Avoid global shared filter state across surfaces
-
----
-
-## **Recommended implementation order**
-
-### **Highest priority**
-
-1. Selector-local controls
-2. Dashboard-local filters
-3. Toolbar stability
-4. Click/double-click interaction fixes
-5. Exclude without reroll
-6. Unlock all slots
-7. Window persistence
-
-### **Medium priority**
-
-8. MBA interaction/layout fixes
-9. Selector action dropdown
-10. Preview redesign
-11. Layering/accessory systems
-
-### **Later / polish**
-
-12. Saved Outfits controls
-13. Fitpics controls
-14. Screenshot-style miniatures
 
 # OA & MBA Secondary Priorities 
 (might be partially already in list above, will be checked afterwards)
