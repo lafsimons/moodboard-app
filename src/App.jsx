@@ -114,6 +114,12 @@ import {
   normalizeWardrobeSort
 } from "./lib/appStateModel.js";
 import {
+  DEFAULT_LIBRARY_ADD_WIDTH,
+  DEFAULT_SIDE_EDITOR_WIDTH,
+  getMaxSideEditorWidth,
+  normalizePanelLayoutState
+} from "./lib/panelLayoutState.js";
+import {
   replaceBoardImagePreservingLayout,
   replaceBoardImageReferencePreservingLayout
 } from "./lib/boardLayoutState.js";
@@ -536,6 +542,14 @@ function getCanUseDebugPopout() {
   }
 
   return window.matchMedia("(min-width: 1180px)").matches;
+}
+
+function getViewportWidth() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.innerWidth;
 }
 
 const garmentTypes = [
@@ -1235,10 +1249,14 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   image,
   item,
   isActive,
+  isEditing,
+  isPickerOpen,
   onImagePointerDown,
   onImageDoubleClick,
   onEditImage,
+  onCloseEdit,
   onSelectImage,
+  onCloseSelect,
   onMetrics
 }) {
   const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, "preview"));
@@ -1326,8 +1344,18 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
         <button
           type="button"
           className="board-image-picker-button"
+          onMouseDown={preventMouseButtonFocus}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
           onClick={(event) => {
             event.stopPropagation();
+            if (isEditing) {
+              onCloseEdit();
+              return;
+            }
+
             onEditImage(item);
           }}
           aria-label={`Edit ${buildDisplayName(item)}`}
@@ -1337,8 +1365,18 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
         <button
           type="button"
           className="board-image-picker-button"
+          onMouseDown={preventMouseButtonFocus}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
           onClick={(event) => {
             event.stopPropagation();
+            if (isPickerOpen) {
+              onCloseSelect();
+              return;
+            }
+
             onSelectImage(image);
           }}
           aria-label={`Select ${buildDisplayName(item)}`}
@@ -1351,7 +1389,9 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
 }, (prevProps, nextProps) =>
   prevProps.image === nextProps.image &&
   prevProps.item === nextProps.item &&
-  prevProps.isActive === nextProps.isActive
+  prevProps.isActive === nextProps.isActive &&
+  prevProps.isEditing === nextProps.isEditing &&
+  prevProps.isPickerOpen === nextProps.isPickerOpen
 );
 
 function preventMouseButtonFocus(event) {
@@ -3272,7 +3312,8 @@ export default function App() {
   const [librarySearch, setLibrarySearch] = useState("");
   const [librarySelectionActionsOpen, setLibrarySelectionActionsOpen] = useState(false);
   const [wardrobeSort, setWardrobeSort] = useState("newest");
-  const [sideEditorWidth, setSideEditorWidth] = useState(348);
+  const [sideEditorWidth, setSideEditorWidth] = useState(DEFAULT_SIDE_EDITOR_WIDTH);
+  const [libraryAddWidth, setLibraryAddWidth] = useState(DEFAULT_LIBRARY_ADD_WIDTH);
   const [libraryTagActionMode, setLibraryTagActionMode] = useState(null);
   const [outfitPalette, setOutfitPalette] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -3291,6 +3332,23 @@ export default function App() {
   useEffect(() => () => {
     sideEditorResizeCleanupRef.current?.();
   }, []);
+  useEffect(() => {
+    function handleWindowResize() {
+      const viewportWidth = getViewportWidth();
+
+      setSideEditorWidth((current) => normalizePanelLayoutState({
+        sideEditorWidth: current,
+        libraryAddWidth
+      }, viewportWidth).sideEditorWidth);
+      setLibraryAddWidth((current) => normalizePanelLayoutState({
+        sideEditorWidth,
+        libraryAddWidth: current
+      }, viewportWidth).libraryAddWidth);
+    }
+
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
+  }, [libraryAddWidth, sideEditorWidth]);
   const selectedReferenceIds = selectedReferenceSelection.ids;
   const [isBoardGenerating, setIsBoardGenerating] = useState(false);
   const [showBoardGenerationBusy, setShowBoardGenerationBusy] = useState(false);
@@ -3583,6 +3641,43 @@ export default function App() {
             {node.childNodes.map((childNode) => renderTagManagerNode(childNode, depth + 1))}
           </div>
         ) : null}
+      </div>
+    );
+  }
+
+  function renderTagManagerPanelBody() {
+    return (
+      <div className="tag-manager-body">
+        <div className="tag-manager-toolbar">
+          <label className="tag-manager-search">
+            <span className="sr-only">Search tags</span>
+            <input
+              type="search"
+              value={tagManagerSearch}
+              onChange={(event) => setTagManagerSearch(event.target.value)}
+              placeholder="Search tags"
+              aria-label="Search tags"
+            />
+          </label>
+          <span className="tag-manager-count">
+            {tagManagerEntries.length} {tagManagerEntries.length === 1 ? "tag" : "tags"}
+          </span>
+        </div>
+
+        {tagManagerFeedback ? <p className="form-success tag-manager-feedback">{tagManagerFeedback}</p> : null}
+
+        {tagManagerEntries.length ? (
+          <div className="tag-manager-list">
+            {tagManagerTree.childNodes.map((node) => renderTagManagerNode(node))}
+          </div>
+        ) : (
+          <p className="tag-manager-empty">No tags match this search.</p>
+        )}
+        <datalist id="tag-manager-targets">
+          {allLibraryTagEntries.map(({ tag }) => (
+            <option key={tag} value={tag} />
+          ))}
+        </datalist>
       </div>
     );
   }
@@ -4727,6 +4822,7 @@ export default function App() {
     function applyDefaultBootstrapState(sourceItems, appStateOverride = null) {
       const defaultData = getDefaultData();
       const defaultState = appStateOverride ?? defaultData.appState;
+      const normalizedPanelLayoutState = normalizePanelLayoutState(defaultState.panelLayoutState, getViewportWidth());
       const normalizedItems = sourceItems.length ? sourceItems : defaultData.items.map(normalizeItem);
       const generatedBoard = buildGeneratedBoard(normalizedItems, {
         imageCount: normalizeImageCount(defaultState.imageCount),
@@ -4761,6 +4857,8 @@ export default function App() {
       setWardrobeFilters(normalizeWardrobeFilterState(defaultState.wardrobeFilters));
       setLibrarySearch(normalizeLibrarySearch(defaultState.librarySearch));
       setWardrobeSort(normalizeWardrobeSort(defaultState.wardrobeSort));
+      setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
+      setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
       const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
       setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
       setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
@@ -4802,6 +4900,7 @@ export default function App() {
           const normalizedMetadataFilters = normalizeMetadataFilterState(storedAppState.generationMetadataFilters);
           const normalizedWardrobeFilters = normalizeWardrobeFilterState(storedAppState.wardrobeFilters);
           const normalizedWardrobeSort = normalizeWardrobeSort(storedAppState.wardrobeSort);
+          const normalizedPanelLayoutState = normalizePanelLayoutState(storedAppState.panelLayoutState, getViewportWidth());
           const normalizedLibraryUiState = normalizeLibraryUiState(storedAppState.libraryUiState);
           const normalizedOutfitFilters = normalizeOutfitFilters(storedAppState.outfitFilters);
           const normalizedOutfitAffinity = normalizeOutfitAffinity(storedAppState.outfitAffinity);
@@ -4851,6 +4950,8 @@ export default function App() {
           setWardrobeFilters(normalizedWardrobeFilters);
           setLibrarySearch(normalizeLibrarySearch(storedAppState.librarySearch));
           setWardrobeSort(normalizedWardrobeSort);
+          setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
+          setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
           setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
           setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
           setWardrobeSavedOpen(normalizedLibraryUiState.wardrobeSavedOpen);
@@ -4954,6 +5055,10 @@ export default function App() {
         wardrobeFiltersOpen,
         wardrobeSavedOpen
       },
+      panelLayoutState: {
+        sideEditorWidth,
+        libraryAddWidth
+      },
       outfitFilters,
       weatherSettings,
       weatherData,
@@ -4982,6 +5087,8 @@ export default function App() {
       activePanel,
       wardrobeFiltersOpen,
       wardrobeSavedOpen,
+      sideEditorWidth,
+      libraryAddWidth,
       outfitFilters,
       weatherSettings,
       weatherData,
@@ -5032,6 +5139,10 @@ export default function App() {
         wardrobeFiltersOpen,
         wardrobeSavedOpen
       },
+      panelLayoutState: {
+        sideEditorWidth,
+        libraryAddWidth
+      },
       outfitFilters,
       weatherSettings,
       weatherData,
@@ -5068,7 +5179,7 @@ export default function App() {
         runSave();
       }, 120);
     }
-  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady]);
+  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, sideEditorWidth, libraryAddWidth, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady]);
 
   useEffect(() => () => {
     if (saveAppStateTimeoutRef.current) {
@@ -5412,8 +5523,7 @@ export default function App() {
       if (wardrobeSavedOpen) {
         event.preventDefault();
         blurRetainedPointerFocus();
-        cancelEditSavedOutfit();
-        setWardrobeSavedOpen(false);
+        closeWorkspacePanel();
         return;
       }
 
@@ -5677,6 +5787,7 @@ export default function App() {
     const normalizedMetadataFilters = normalizeMetadataFilterState(nextAppState?.generationMetadataFilters);
     const normalizedWardrobeFilters = normalizeWardrobeFilterState(nextAppState?.wardrobeFilters);
     const normalizedWardrobeSort = normalizeWardrobeSort(nextAppState?.wardrobeSort);
+    const normalizedPanelLayoutState = normalizePanelLayoutState(nextAppState?.panelLayoutState, getViewportWidth());
     const normalizedLibraryUiState = normalizeLibraryUiState(nextAppState?.libraryUiState);
     const normalizedOutfitFilters = normalizeOutfitFilters(nextAppState?.outfitFilters);
     const normalizedOutfitAffinity = normalizeOutfitAffinity(nextAppState?.outfitAffinity);
@@ -5712,6 +5823,8 @@ export default function App() {
     setWardrobeFilters(normalizedWardrobeFilters);
     setLibrarySearch(normalizeLibrarySearch(nextAppState?.librarySearch));
     setWardrobeSort(normalizedWardrobeSort);
+    setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
+    setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
     setOutfitFilters(normalizedOutfitFilters);
     setWeatherSettings(normalizeWeatherSettings(nextAppState?.weatherSettings));
     setWeatherLocationDraft(nextAppState?.weatherSettings?.locationName ?? "");
@@ -6137,7 +6250,8 @@ export default function App() {
     const requestedReturnTarget = options.returnTarget ?? "wardrobe";
     const resolvedReturnTarget = isMobileViewport ? "outfit" : requestedReturnTarget;
 
-    if (!selectionEditorActive && editingId === item.id && editorReturnTarget === resolvedReturnTarget) {
+    if (editingId === item.id && editorReturnTarget === resolvedReturnTarget) {
+      setSelectionEditorActive(false);
       resetEditorState();
       return;
     }
@@ -6213,6 +6327,17 @@ export default function App() {
   }
 
   function startFloatingEdit(item) {
+    if (editingId === item?.id && editorReturnTarget === "outfit") {
+      setSelectionEditorActive(false);
+      resetEditorState();
+      closePickerOverlay();
+      setWardrobeFiltersOpen(false);
+      setWardrobeWorthOpen(false);
+      setWardrobeSavedOpen(false);
+      setWardrobeManageOpen(false);
+      return;
+    }
+
     startEdit(item, { returnTarget: "outfit" });
     closePickerOverlay();
     setWardrobeFiltersOpen(false);
@@ -6222,12 +6347,56 @@ export default function App() {
   }
 
   function startFloatingEditFromPreview(item) {
+    if (editingId === item?.id && editorReturnTarget === "outfit") {
+      setSelectionEditorActive(false);
+      resetEditorState();
+      return;
+    }
+
     startEdit(item, { returnTarget: "outfit", preserveReferencePreview: true });
     closePickerOverlay();
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeManageOpen(false);
+  }
+
+  function toggleBoardImageEdit(item) {
+    if (!item) {
+      return;
+    }
+
+    if (editingId === item.id && editorReturnTarget === "outfit") {
+      setSelectionEditorActive(false);
+      resetEditorState();
+      return;
+    }
+
+    startFloatingEdit(item);
+  }
+
+  function toggleBoardImagePicker(image) {
+    if (!image) {
+      return;
+    }
+
+    if (pickerBoardImageId === image.id) {
+      closePickerOverlay();
+      setActiveBoardImageId(null);
+      return;
+    }
+
+    openBoardImagePicker(image);
+  }
+
+  function closeBoardImageEdit() {
+    setSelectionEditorActive(false);
+    resetEditorState();
+  }
+
+  function closeBoardImagePickerSelection() {
+    closePickerOverlay();
+    setActiveBoardImageId(null);
   }
 
   function scheduleExcludedOutfitReconcile(nextExcluded) {
@@ -6361,6 +6530,12 @@ export default function App() {
 
   function openSelectionEditor() {
     if (!selectedReferenceCount) {
+      return;
+    }
+
+    if (selectedReferenceCount === 1 && editingId === selectedReferenceItems[0]?.id && editorReturnTarget !== "outfit") {
+      setSelectionEditorActive(false);
+      resetEditorState();
       return;
     }
 
@@ -8338,6 +8513,18 @@ export default function App() {
   }
 
   function openLibraryPanel(event = null) {
+    const shouldClosePanel = activePanel === "wardrobe" && !wardrobeSavedOpen;
+
+    if (shouldClosePanel) {
+      closeWorkspacePanel();
+
+      if (event) {
+        blurPointerActivatedControl(event);
+      }
+
+      return;
+    }
+
     closeUtilityWindows();
     setControlsOpen(false);
     setDockExpanded(isMobileViewport);
@@ -8539,7 +8726,7 @@ export default function App() {
     }
   }
 
-  function startSideEditorResize(event) {
+  function startSideEditorResize(event, edge = "left") {
     if (isMobileViewport) {
       return;
     }
@@ -8551,11 +8738,11 @@ export default function App() {
     sideEditorResizeCleanupRef.current?.();
 
     const handlePointerMove = (moveEvent) => {
-      const maxWidth = Math.min(560, Math.max(320, Math.round(window.innerWidth * 0.46)));
-      const nextWidth = Math.min(
-        maxWidth,
-        Math.max(300, Math.round(initialWidth - (moveEvent.clientX - startX)))
-      );
+      const deltaX = moveEvent.clientX - startX;
+      const nextWidth = normalizePanelLayoutState({
+        sideEditorWidth: Math.round(initialWidth + (edge === "right" ? deltaX : -deltaX)),
+        libraryAddWidth
+      }, getViewportWidth()).sideEditorWidth;
       setSideEditorWidth(nextWidth);
     };
 
@@ -8604,15 +8791,6 @@ export default function App() {
     cancelEditSavedOutfit();
     setWardrobeSavedOpen(false);
     setActivePanel(null);
-
-    if (event) {
-      blurPointerActivatedControl(event);
-    }
-  }
-
-  function closeSavedOutfitsView(event = null) {
-    cancelEditSavedOutfit();
-    setWardrobeSavedOpen(false);
 
     if (event) {
       blurPointerActivatedControl(event);
@@ -9056,14 +9234,18 @@ export default function App() {
                   image={image}
                   item={item}
                   isActive={activeBoardImageId === image.id}
+                  isEditing={editingId === item.id && editorReturnTarget === "outfit"}
+                  isPickerOpen={pickerBoardImageId === image.id}
                   onMetrics={(metrics) => syncBoardImageDimensions(image.id, item, metrics)}
                   onImagePointerDown={handleBoardImagePointerDown}
                   onImageDoubleClick={(boardImage, boardItem) => {
                     selectBoardImage(boardImage.id);
                     openReferencePreview(boardItem);
                   }}
-                  onEditImage={startFloatingEdit}
-                  onSelectImage={openBoardImagePicker}
+                  onEditImage={toggleBoardImageEdit}
+                  onCloseEdit={closeBoardImageEdit}
+                  onSelectImage={toggleBoardImagePicker}
+                  onCloseSelect={closeBoardImagePickerSelection}
                 />
               ))}
             </div>
@@ -9350,6 +9532,36 @@ export default function App() {
   const referencePreviewExcluded = Boolean(referencePreview?.id && excluded[referencePreview.id]);
   const isSideEditorOpen = Boolean(isBulkSelectionEditing || (editingId && editorReturnTarget !== "outfit"));
   const isMobileFullscreenEditorOpen = Boolean((editingId || isBulkSelectionEditing) && isMobileViewport);
+  const draftImageUrl = draft.imageUrl.trim();
+  const draftImageCrop = getNormalizedImageCrop(draft);
+  const hasDraftImagePresentationAdjustments = Boolean(draftImageUrl) && (
+    normalizeImageFrameScale(draft.imageFrameScale) !== 100 ||
+    normalizeImageScale(draft.imageScale) !== 100 ||
+    normalizeImageOffset(draft.imageOffsetX) !== 0 ||
+    normalizeImageOffset(draft.imageOffsetY) !== 0 ||
+    draftImageCrop.x !== 0 ||
+    draftImageCrop.y !== 0 ||
+    draftImageCrop.width !== 100 ||
+    draftImageCrop.height !== 100
+  );
+  const floatingEditorWidth = !isMobileViewport
+    ? Math.min(sideEditorWidth, getMaxSideEditorWidth(getViewportWidth()))
+    : null;
+  const floatingEditorStyle = !isMobileViewport && floatingEditorWidth !== null
+    ? {
+        width: `${floatingEditorWidth}px`
+      }
+    : undefined;
+  const libraryAddWindowStyle = !isMobileViewport
+    ? {
+        "--wardrobe-add-width": `${libraryAddWidth}px`
+      }
+    : undefined;
+  const floatingEditorShellStyle = !isMobileViewport && floatingEditorWidth !== null
+    ? {
+        "--floating-editor-width": `${floatingEditorWidth}px`
+      }
+    : undefined;
   const draftSystemMetadata = getItemSystemMetadata(draft);
   const draftSavedMetadataRows = [
     ["Captured", draftSystemMetadata.capturedAt ? formatCreatedAt(draftSystemMetadata.capturedAt) : ""],
@@ -9449,54 +9661,24 @@ export default function App() {
         onDrop={handleItemImageDrop}
       >
         <div className="item-image-preview">
-          {draft.imageUrl.trim() ? (
+          {draftImageUrl ? (
             <ManagedItemImage item={draft} alt="" frameRef={editorImageFrameRef} imageRef={editorImageRef} />
           ) : (
             <span>No image selected</span>
           )}
         </div>
-        {!draft.originalPreserved && draft.imageUrl.trim() ? (
+        {!draft.originalPreserved && draftImageUrl ? (
           <p className="image-preservation-note">Original not preserved</p>
         ) : null}
         <div className="item-image-actions">
-          <div className="item-image-action-group item-image-action-group-primary">
+          <div className="item-image-action-row item-image-action-row-primary">
             <label className="upload-button upload-button-secondary editor-image-button">
-              {draft.imageUrl.trim() ? "Change image" : "Choose image"}
+              {draftImageUrl ? "Change image" : "Choose image"}
               <input type="file" accept="image/*" multiple onChange={handleItemImageUpload} disabled={imageProcessing || itemImporting} />
             </label>
-            {draft.imageUrl.trim() ? (
-              <label className="upload-button upload-button-secondary editor-image-button">
-                Replace original image
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleReplaceOriginalImageUpload}
-                  disabled={imageProcessing || itemImporting}
-                />
-              </label>
-            ) : null}
-            {draft.imageUrl.trim() ? (
+            {draftImageUrl ? (
               <button type="button" className="editor-image-button" onClick={openCropEditor} disabled={imageProcessing || itemImporting}>
                 Crop
-              </button>
-            ) : null}
-          </div>
-          <div className="item-image-action-group item-image-action-group-secondary">
-            {draft.imageUrl.trim() ? (
-              <label className="editor-inline-checkbox">
-                <input
-                  type="checkbox"
-                  checked={replaceOriginalShouldRegenerate}
-                  onChange={(event) => setReplaceOriginalShouldRegenerate(event.target.checked)}
-                  disabled={imageProcessing || itemImporting}
-                />
-                <span>Regenerate optimized previews</span>
-              </label>
-            ) : null}
-            {draft.imageUrl.trim() ? (
-              <button type="button" className="editor-image-button" onClick={resetDraftImageCrop} disabled={imageProcessing || itemImporting}>
-                Reset crop
               </button>
             ) : null}
             <button
@@ -9507,63 +9689,54 @@ export default function App() {
             >
               {imageProcessing ? "Removing..." : "Remove background"}
             </button>
-            {draft.imageUrl.trim() ? (
-              <button type="button" className="editor-image-button editor-remove-image-button" onClick={removeDraftImage} disabled={imageProcessing || itemImporting}>
+          </div>
+          {draftImageUrl ? (
+            <div className="item-image-action-row item-image-action-row-secondary">
+              <label className="upload-button upload-button-secondary editor-image-button editor-image-button-secondary">
+                Replace original image
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleReplaceOriginalImageUpload}
+                  disabled={imageProcessing || itemImporting}
+                />
+              </label>
+            </div>
+          ) : null}
+          {draftImageUrl ? (
+            <div className="item-image-action-row item-image-action-row-checkbox">
+              <label className="editor-inline-checkbox editor-inline-checkbox-technical">
+                <input
+                  type="checkbox"
+                  checked={replaceOriginalShouldRegenerate}
+                  onChange={(event) => setReplaceOriginalShouldRegenerate(event.target.checked)}
+                  disabled={imageProcessing || itemImporting}
+                />
+                <span>Regenerate optimized previews</span>
+              </label>
+            </div>
+          ) : null}
+          {hasDraftImagePresentationAdjustments ? (
+            <div className="item-image-action-row item-image-action-row-reset">
+              <button type="button" className="editor-image-button" onClick={resetDraftImageCrop} disabled={imageProcessing || itemImporting}>
+                Reset crop
+              </button>
+            </div>
+          ) : null}
+          {draftImageUrl ? (
+            <div className="item-image-action-row item-image-action-row-destructive">
+              <button type="button" className="editor-image-button editor-image-button-danger editor-remove-image-button" onClick={removeDraftImage} disabled={imageProcessing || itemImporting}>
                 Remove image
               </button>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </div>
         {imageUploadError ? <p className="form-error">{imageUploadError}</p> : null}
       </div>
 
       <div className="editor-core-fields">
-        <div className="editor-workspace-toggles">
-          <button
-            type="button"
-            className={`editor-favorite-button ${draft.favorite ? "is-active" : ""}`}
-            aria-pressed={Boolean(draft.favorite)}
-            aria-label={draft.favorite ? "Remove from favorites" : "Add to favorites"}
-            onClick={() => {
-              const nextFavorite = !draft.favorite;
-
-              if (editorReturnTarget === "outfit" && editingId !== "new") {
-                updateExistingDraftItem({
-                  ...draft,
-                  favorite: nextFavorite
-                });
-                return;
-              }
-
-              setDraft((current) => ({ ...current, favorite: nextFavorite }));
-            }}
-          >
-            <span aria-hidden="true">{draft.favorite ? "♥" : "♡"}</span>
-          </button>
-
-          <label className="editor-inline-checkbox">
-            <input
-              type="checkbox"
-              checked={Boolean(draft.showTitleOnCard)}
-              onChange={(event) => {
-                const nextShowTitleOnCard = event.target.checked;
-
-                if (editorReturnTarget === "outfit" && editingId !== "new") {
-                  updateExistingDraftItem({
-                    ...draft,
-                    showTitleOnCard: nextShowTitleOnCard
-                  });
-                  return;
-                }
-
-                setDraft((current) => ({ ...current, showTitleOnCard: nextShowTitleOnCard }));
-              }}
-            />
-            <span>Show on cards</span>
-          </label>
-        </div>
-
-        <div className="editor-field">
+        <div className="editor-field editor-tags-field">
           <div className="editor-label-row">
             <span>Tags</span>
           </div>
@@ -9584,6 +9757,53 @@ export default function App() {
             placeholder="Add tag…"
             showAllSuggestionsOnFocus
           />
+        </div>
+
+        <div className="editor-metadata-row">
+          <div className="editor-metadata-toggle-group">
+            <button
+              type="button"
+              className={`editor-favorite-button ${draft.favorite ? "is-active" : ""}`}
+              aria-pressed={Boolean(draft.favorite)}
+              aria-label={draft.favorite ? "Remove from favorites" : "Add to favorites"}
+              onClick={() => {
+                const nextFavorite = !draft.favorite;
+
+                if (editorReturnTarget === "outfit" && editingId !== "new") {
+                  updateExistingDraftItem({
+                    ...draft,
+                    favorite: nextFavorite
+                  });
+                  return;
+                }
+
+                setDraft((current) => ({ ...current, favorite: nextFavorite }));
+              }}
+            >
+              <span aria-hidden="true">{draft.favorite ? "♥" : "♡"}</span>
+            </button>
+          </div>
+
+          <label className="editor-inline-checkbox editor-inline-checkbox-subtle">
+            <span>Show titles on cards</span>
+            <input
+              type="checkbox"
+              checked={Boolean(draft.showTitleOnCard)}
+              onChange={(event) => {
+                const nextShowTitleOnCard = event.target.checked;
+
+                if (editorReturnTarget === "outfit" && editingId !== "new") {
+                  updateExistingDraftItem({
+                    ...draft,
+                    showTitleOnCard: nextShowTitleOnCard
+                  });
+                  return;
+                }
+
+                setDraft((current) => ({ ...current, showTitleOnCard: nextShowTitleOnCard }));
+              }}
+            />
+          </label>
         </div>
         <datalist id="item-name-suggestions">
           {nameSuggestions.map((name) => (
@@ -9991,9 +10211,6 @@ export default function App() {
                   <p className="eyebrow">Boards</p>
                   <h2>Saved boards</h2>
                 </div>
-                <button type="button" className="ghost-button" onClick={closeSavedOutfitsView}>
-                  Back to library
-                </button>
               </div>
             ) : (
               <div className="library-command-bar">
@@ -10061,52 +10278,6 @@ export default function App() {
                           className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`}
                           aria-label="Library management"
                         >
-                          <div className={`tag-manager-panel ${manageTagsOpen ? "is-open" : ""}`}>
-                            <button
-                              type="button"
-                              className={`ghost-button wardrobe-manage-action tag-manager-toggle ${manageTagsOpen ? "is-active" : ""}`}
-                              onClick={() => setManageTagsOpen((current) => !current)}
-                              aria-expanded={manageTagsOpen}
-                            >
-                              Manage Tags
-                            </button>
-
-                            {manageTagsOpen ? (
-                              <div className="tag-manager-body">
-                                <div className="tag-manager-toolbar">
-                                  <label className="tag-manager-search">
-                                    <span className="sr-only">Search tags</span>
-                                    <input
-                                      type="search"
-                                      value={tagManagerSearch}
-                                      onChange={(event) => setTagManagerSearch(event.target.value)}
-                                      placeholder="Search tags"
-                                      aria-label="Search tags"
-                                    />
-                                  </label>
-                                  <span className="tag-manager-count">
-                                    {tagManagerEntries.length} {tagManagerEntries.length === 1 ? "tag" : "tags"}
-                                  </span>
-                                </div>
-
-                                {tagManagerFeedback ? <p className="form-success tag-manager-feedback">{tagManagerFeedback}</p> : null}
-
-                                {tagManagerEntries.length ? (
-                                  <div className="tag-manager-list">
-                                    {tagManagerTree.childNodes.map((node) => renderTagManagerNode(node))}
-                                  </div>
-                                ) : (
-                                  <p className="tag-manager-empty">No tags match this search.</p>
-                                )}
-                                <datalist id="tag-manager-targets">
-                                  {allLibraryTagEntries.map(({ tag }) => (
-                                    <option key={tag} value={tag} />
-                                  ))}
-                                </datalist>
-                              </div>
-                            ) : null}
-                          </div>
-                          <div className="wardrobe-manage-divider" aria-hidden="true" />
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportWardrobeImage}>
                             Export library image
                           </button>
@@ -10142,7 +10313,12 @@ export default function App() {
                         >
                           Add
                         </button>
-                        <div id="library-add-popover" className={`wardrobe-add-window ${wardrobeAddOpen ? "is-open" : ""}`} aria-label="Add references">
+                        <div
+                          id="library-add-popover"
+                          className={`wardrobe-add-window ${wardrobeAddOpen ? "is-open" : ""}`}
+                          aria-label="Add references"
+                          style={libraryAddWindowStyle}
+                        >
                           <div
                             className={`item-image-upload wardrobe-add-upload ${itemImageDragActive ? "is-drag-active" : ""}`}
                             onDragEnter={handleItemImageDragEnter}
@@ -10190,26 +10366,30 @@ export default function App() {
                           />
                         </label>
 
-                        <div className="wardrobe-tags-filter">
-                          <div className="wardrobe-filter-section-header">
-                            <strong>Tags</strong>
-                            <span>Click to include. Shift-click to exclude.</span>
+                        <details className="wardrobe-filter-row wardrobe-tags-filter" open>
+                          <summary>
+                            <span>Tags</span>
+                          </summary>
+                          <div className="wardrobe-tags-filter-body">
+                            <div className="wardrobe-filter-section-header">
+                              <span>Click to include. Shift-click to exclude.</span>
+                            </div>
+                            {hasVisibleWardrobeFilterOptions ? (
+                              <TagTree
+                                entries={filteredLibraryTagEntries}
+                                selectedTags={wardrobeFilters.tags}
+                                excludedTags={wardrobeFilters.excludedTags}
+                                onToggleTag={toggleLibraryTagFilter}
+                                onToggleGroup={toggleLibraryTagGroup}
+                                storageKey="library-filters"
+                                noTagsCount={filteredLibraryNoTagsCount}
+                                searchQuery={wardrobeFilterSearchQuery}
+                              />
+                            ) : (
+                              <p className="wardrobe-filter-empty">No tags match this search.</p>
+                            )}
                           </div>
-                          {hasVisibleWardrobeFilterOptions ? (
-                            <TagTree
-                              entries={filteredLibraryTagEntries}
-                              selectedTags={wardrobeFilters.tags}
-                              excludedTags={wardrobeFilters.excludedTags}
-                              onToggleTag={toggleLibraryTagFilter}
-                              onToggleGroup={toggleLibraryTagGroup}
-                              storageKey="library-filters"
-                              noTagsCount={filteredLibraryNoTagsCount}
-                              searchQuery={wardrobeFilterSearchQuery}
-                            />
-                          ) : (
-                            <p className="wardrobe-filter-empty">No tags match this search.</p>
-                          )}
-                        </div>
+                        </details>
 
                         <div className="wardrobe-controls-inline-row">
                           <details className="wardrobe-filter-row">
@@ -10298,6 +10478,19 @@ export default function App() {
                                 Any tag
                               </button>
                             </div>
+                          </details>
+
+                          <details
+                            className="wardrobe-filter-row wardrobe-inline-filter-manage-tags"
+                            open={manageTagsOpen}
+                            onToggle={(event) => {
+                              setManageTagsOpen(event.currentTarget.open);
+                            }}
+                          >
+                            <summary>
+                              <span>Manage Tags</span>
+                            </summary>
+                            {renderTagManagerPanelBody()}
                           </details>
                         </div>
 
@@ -10624,9 +10817,26 @@ export default function App() {
         ) : null}
 
         {(isBulkSelectionEditing && editorReturnTarget === "outfit") || (editingId && editorReturnTarget === "outfit") ? (
-          <aside className={`panel floating-item-editor ${isMobileViewport ? "is-mobile-fullscreen" : ""}`}>
-            {editorBody}
-          </aside>
+          <div
+            className={`floating-item-editor-shell ${isMobileViewport ? "is-mobile-fullscreen" : ""}`}
+            style={floatingEditorShellStyle}
+          >
+            <aside
+              className={`panel floating-item-editor ${isMobileViewport ? "is-mobile-fullscreen" : ""}`}
+              style={floatingEditorStyle}
+            >
+              {editorBody}
+            </aside>
+            {!isMobileViewport ? (
+              <div
+                className="floating-item-editor-resize-handle"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize floating reference editor"
+                onPointerDown={(event) => startSideEditorResize(event, "right")}
+              />
+            ) : null}
+          </div>
         ) : null}
 
         {confirmation ? (

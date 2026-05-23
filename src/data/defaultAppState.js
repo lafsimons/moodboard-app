@@ -1,3 +1,8 @@
+import {
+  DEFAULT_LIBRARY_ADD_WIDTH,
+  DEFAULT_SIDE_EDITOR_WIDTH
+} from "../lib/panelLayoutState.js";
+
 const defaultAppState = {
   layering: true,
   accessoriesEnabled: true,
@@ -45,6 +50,10 @@ const defaultAppState = {
     libraryOpen: false,
     wardrobeFiltersOpen: false,
     wardrobeSavedOpen: false
+  },
+  panelLayoutState: {
+    sideEditorWidth: DEFAULT_SIDE_EDITOR_WIDTH,
+    libraryAddWidth: DEFAULT_LIBRARY_ADD_WIDTH
   },
   outfitFilters: {
     style: [],
