@@ -8344,7 +8344,7 @@ export default function App() {
 
     setBoard(nextBoard);
     setImageCount(getBoardImageCount(nextBoard));
-    requestBoardFit();
+    setBoardView(getFittedBoardView(nextBoard));
     setOutfit(boardToSyntheticOutfit(nextBoard));
     setRecentOutfits((current) =>
       rememberRecentOutfit(
@@ -9252,14 +9252,7 @@ export default function App() {
           <button
             type="button"
             className="ghost-button"
-            onClick={() => {
-              if (!board) {
-                setBoardView({ x: 0, y: 0, zoom: 1 });
-                return;
-              }
-
-              requestBoardFit();
-            }}
+            onClick={() => setBoardView(board ? getFittedBoardView(board) : { x: 0, y: 0, zoom: 1 })}
           >
             Reset view
           </button>
@@ -9962,7 +9955,6 @@ export default function App() {
 
         {isMobileFullscreenEditorOpen ? null : (
           <div
-            ref={workspaceTabsRef}
             className={`workspace-tabs ${isDockExpanded ? "is-dock-expanded" : ""} ${paletteOpen ? "is-palette-open" : ""}`}
             aria-label="Workspace sections"
           >
