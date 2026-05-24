@@ -25,9 +25,117 @@ const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
 const STARTUP_DEBUG_LIMIT_VALUES = new Set([100, 250, 500, 1000]);
+const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizePersistedId(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function sanitizePersistedBoardImage(image, index = 0) {
+  if (!image || typeof image !== "object") {
+    return null;
+  }
+
+  const sanitizedImage = {
+    id: normalizePersistedId(image.id) || `board_image_${index}`,
+    referenceId: normalizePersistedId(image.referenceId),
+    referenceItemUuid: normalizePersistedId(image.referenceItemUuid),
+    x: Math.round(Number(image.x) || 0),
+    y: Math.round(Number(image.y) || 0),
+    width: Math.max(0, Math.round(Number(image.width) || 0)),
+    height: Math.max(0, Math.round(Number(image.height) || 0)),
+    rotation: Math.round((Number(image.rotation) || 0) * 10) / 10,
+    zIndex: Math.max(1, Math.round(Number(image.zIndex) || index + 1)),
+    generationSlot: normalizePersistedId(image.generationSlot)
+  };
+  const referenceSourceKey = normalizePersistedId(image.referenceSourceKey).toLowerCase();
+
+  if (referenceSourceKey) {
+    sanitizedImage.referenceSourceKey = referenceSourceKey;
+  }
+
+  return sanitizedImage;
+}
+
+function sanitizePersistedBoard(board) {
+  if (!board || typeof board !== "object") {
+    return null;
+  }
+
+  const images = (Array.isArray(board.images) ? board.images : [])
+    .map((image, index) => sanitizePersistedBoardImage(image, index))
+    .filter((image) => image?.referenceId);
+
+  if (!images.length) {
+    return null;
+  }
+
+  return {
+    id: normalizePersistedId(board.id) || `board_${Date.now()}`,
+    boardUuid: normalizePersistedId(board.boardUuid),
+    width: Math.max(0, Math.round(Number(board.width) || 0)),
+    height: Math.max(0, Math.round(Number(board.height) || 0)),
+    images
+  };
+}
+
+function sanitizePersistedOutfit(outfit) {
+  return Object.fromEntries(
+    Object.entries(outfit && typeof outfit === "object" ? outfit : {}).map(([slot, itemId]) => [slot, normalizePersistedId(itemId) || null])
+  );
+}
+
+function sanitizePersistedSavedOutfit(savedOutfit, index = 0) {
+  if (!savedOutfit || typeof savedOutfit !== "object") {
+    return null;
+  }
+
+  const sanitizedOutfit = sanitizePersistedOutfit(savedOutfit.outfit);
+  const sanitizedSavedOutfit = {
+    id: normalizePersistedId(savedOutfit.id) || `saved_outfit_${index}`,
+    name: typeof savedOutfit.name === "string" ? savedOutfit.name : "Saved board",
+    description: typeof savedOutfit.description === "string" ? savedOutfit.description : "",
+    board: sanitizePersistedBoard(savedOutfit.board)
+  };
+
+  if (Object.keys(sanitizedOutfit).length) {
+    sanitizedSavedOutfit.outfit = sanitizedOutfit;
+  }
+
+  if (savedOutfit.layering) {
+    sanitizedSavedOutfit.layering = true;
+  }
+
+  return sanitizedSavedOutfit;
+}
+
+function sanitizePersistedAppState(value = {}) {
+  return {
+    ...value,
+    itemDefaultsMigrationVersion: Math.max(0, Math.round(Number(value.itemDefaultsMigrationVersion) || 0)),
+    imagePresentationMigrationVersion: Math.max(0, Math.round(Number(value.imagePresentationMigrationVersion) || 0)),
+    outfit: sanitizePersistedOutfit(value.outfit),
+    board: sanitizePersistedBoard(value.board),
+    savedOutfits: (Array.isArray(value.savedOutfits) ? value.savedOutfits : [])
+      .map((savedOutfit, index) => sanitizePersistedSavedOutfit(savedOutfit, index))
+      .filter(Boolean)
+  };
+}
+
+function getApproxSerializedBytes(value) {
+  const serialized = JSON.stringify(value);
+  const approxBytes = typeof TextEncoder !== "undefined"
+    ? new TextEncoder().encode(serialized).length
+    : serialized.length * 2;
+
+  return {
+    serialized,
+    approxBytes
+  };
 }
 
 function getStartupDebugConfig() {
@@ -1224,22 +1332,40 @@ export async function loadAppState() {
 }
 
 export async function saveAppState(value) {
+  const sanitizedValue = sanitizePersistedAppState(value);
+  const { approxBytes } = getApproxSerializedBytes(sanitizedValue);
+
   emitEffectsStorageDebug("before IndexedDB write after first render", {
     operation: "saveAppState",
-    savedOutfitCount: Array.isArray(value?.savedOutfits) ? value.savedOutfits.length : 0,
-    boardImageCount: Array.isArray(value?.board?.images) ? value.board.images.length : 0
+    approxBytes,
+    savedOutfitCount: Array.isArray(sanitizedValue?.savedOutfits) ? sanitizedValue.savedOutfits.length : 0,
+    boardImageCount: Array.isArray(sanitizedValue?.board?.images) ? sanitizedValue.board.images.length : 0
   });
+
+  if (approxBytes > PERSISTED_APP_STATE_MAX_BYTES) {
+    console.warn("Skipping app-state IndexedDB write because serialized payload exceeds safe threshold.", {
+      approxBytes,
+      threshold: PERSISTED_APP_STATE_MAX_BYTES
+    });
+    emitEffectsStorageDebug("skipped oversized IndexedDB write", {
+      operation: "saveAppState",
+      approxBytes,
+      threshold: PERSISTED_APP_STATE_MAX_BYTES
+    });
+    return;
+  }
+
   const previousAppState = await loadAppState();
 
   await withStore(APP_STORE, "readwrite", (store) =>
     store.put({
       key: "state",
-      value
+      value: sanitizedValue
     })
   );
 
   const previousSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(previousAppState?.savedOutfits);
-  const nextSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(value?.savedOutfits);
+  const nextSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(sanitizedValue?.savedOutfits);
   const affectedStableKeys = new Set([
     ...Object.keys(previousSavedBoardsByStableKey),
     ...Object.keys(nextSavedBoardsByStableKey)

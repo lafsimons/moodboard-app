@@ -382,6 +382,10 @@ function getStartupBehaviorFlags() {
   };
 }
 
+function isPersistenceExplicitlyAllowed() {
+  return hasUrlFlag("allowPersistence");
+}
+
 function isDebugEffectsEnabled() {
   return hasUrlFlag("debugEffects");
 }
@@ -449,6 +453,118 @@ function logEffectsDebug(enabled, label, extra = {}) {
   };
   console.log("[effects]", entry);
   appendEffectsDebugDomLine(entry);
+}
+
+const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
+
+function normalizePersistedId(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function sanitizePersistedBoardImage(image, index = 0) {
+  if (!image || typeof image !== "object") {
+    return null;
+  }
+
+  const sanitizedImage = {
+    id: normalizePersistedId(image.id) || `board_image_${index}`,
+    referenceId: normalizePersistedId(image.referenceId),
+    referenceItemUuid: normalizePersistedId(image.referenceItemUuid),
+    x: Math.round(Number(image.x) || 0),
+    y: Math.round(Number(image.y) || 0),
+    width: Math.max(0, Math.round(Number(image.width) || 0)),
+    height: Math.max(0, Math.round(Number(image.height) || 0)),
+    rotation: Math.round((Number(image.rotation) || 0) * 10) / 10,
+    zIndex: Math.max(1, Math.round(Number(image.zIndex) || index + 1)),
+    generationSlot: normalizePersistedId(image.generationSlot)
+  };
+  const referenceSourceKey = normalizePersistedId(image.referenceSourceKey).toLowerCase();
+
+  if (referenceSourceKey) {
+    sanitizedImage.referenceSourceKey = referenceSourceKey;
+  };
+
+  return sanitizedImage;
+}
+
+function sanitizePersistedBoard(board) {
+  if (!board || typeof board !== "object") {
+    return null;
+  }
+
+  const images = (Array.isArray(board.images) ? board.images : [])
+    .map((image, index) => sanitizePersistedBoardImage(image, index))
+    .filter((image) => image?.referenceId);
+
+  if (!images.length) {
+    return null;
+  }
+
+  return {
+    id: normalizePersistedId(board.id) || `board_${Date.now()}`,
+    boardUuid: normalizePersistedId(board.boardUuid),
+    width: Math.max(0, Math.round(Number(board.width) || 0)),
+    height: Math.max(0, Math.round(Number(board.height) || 0)),
+    images
+  };
+}
+
+function sanitizePersistedOutfit(outfit) {
+  return Object.fromEntries(
+    Object.entries(outfit && typeof outfit === "object" ? outfit : {}).map(([slot, itemId]) => [slot, normalizePersistedId(itemId) || null])
+  );
+}
+
+function sanitizePersistedSavedOutfit(savedOutfit, index = 0) {
+  if (!savedOutfit || typeof savedOutfit !== "object") {
+    return null;
+  }
+
+  const sanitizedOutfit = sanitizePersistedOutfit(savedOutfit.outfit);
+  const sanitizedSavedOutfit = {
+    id: normalizePersistedId(savedOutfit.id) || `saved_outfit_${index}`,
+    name: typeof savedOutfit.name === "string" ? savedOutfit.name : "Saved board",
+    description: typeof savedOutfit.description === "string" ? savedOutfit.description : "",
+    board: sanitizePersistedBoard(savedOutfit.board)
+  };
+
+  if (Object.keys(sanitizedOutfit).length) {
+    sanitizedSavedOutfit.outfit = sanitizedOutfit;
+  }
+
+  if (savedOutfit.layering) {
+    sanitizedSavedOutfit.layering = true;
+  }
+
+  return sanitizedSavedOutfit;
+}
+
+function sanitizePersistedAppStatePayload(appState = {}) {
+  const sanitizedBoard = sanitizePersistedBoard(appState.board);
+  const sanitizedSavedOutfits = (Array.isArray(appState.savedOutfits) ? appState.savedOutfits : [])
+    .map((savedOutfit, index) => sanitizePersistedSavedOutfit(savedOutfit, index))
+    .filter(Boolean);
+
+  return {
+    ...appState,
+    itemDefaultsMigrationVersion: Math.max(0, Math.round(Number(appState.itemDefaultsMigrationVersion) || 0)),
+    imagePresentationMigrationVersion: Math.max(0, Math.round(Number(appState.imagePresentationMigrationVersion) || 0)),
+    outfit: sanitizePersistedOutfit(appState.outfit),
+    board: sanitizedBoard,
+    savedOutfits: sanitizedSavedOutfits
+  };
+}
+
+function serializePersistedAppState(appState) {
+  const serialized = JSON.stringify(sanitizePersistedAppStatePayload(appState));
+  const approxBytes = typeof TextEncoder !== "undefined"
+    ? new TextEncoder().encode(serialized).length
+    : serialized.length * 2;
+
+  return {
+    serialized,
+    approxBytes
+  };
 }
 
 function createLibraryPerfSession(enabled) {
@@ -3547,6 +3663,7 @@ function MainApp() {
   const debugStartup = isStartupDebugEnabled();
   const debugEffects = isDebugEffectsEnabled();
   const freezePostStartup = isFreezePostStartupEnabled();
+  const allowPersistence = isPersistenceExplicitlyAllowed();
   const startupFlags = useMemo(() => getStartupBehaviorFlags(), []);
   const {
     noBoardRestore,
@@ -3583,9 +3700,11 @@ function MainApp() {
   const saveAppStateIdleCallbackRef = useRef(null);
   const currentPersistedAppStateRef = useRef(null);
   const pendingAppStateSaveRef = useRef(null);
+  const pendingAppStateSaveSerializedRef = useRef("");
   const appStateSaveInFlightRef = useRef(false);
   const pendingPersistenceReadyRef = useRef(false);
   const postStartupReadyRef = useRef(false);
+  const lastPersistedAppStateSerializedRef = useRef("");
   const loadedMigrationVersionsRef = useRef({
     itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
     imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION
@@ -5536,7 +5655,7 @@ function MainApp() {
   }, []);
 
   const currentPersistedAppState = useMemo(
-    () => ({
+    () => sanitizePersistedAppStatePayload({
       itemDefaultsMigrationVersion: noImageMigration
         ? loadedMigrationVersionsRef.current.itemDefaultsMigrationVersion
         : ITEM_DEFAULTS_MIGRATION_VERSION,
@@ -5647,12 +5766,20 @@ function MainApp() {
   useEffect(() => {
     logEffectsDebug(debugEffects, "app-state persistence effect", {
       recoverNormal,
+      noInitialMedia,
+      allowPersistence,
       loading,
       persistenceReady,
       frozen: freezePostStartup && postStartupReadyRef.current
     });
 
-    if (recoverNormal || loading || !persistenceReady || (freezePostStartup && postStartupReadyRef.current)) {
+    if (
+      recoverNormal ||
+      ((noInitialMedia || freezePostStartup) && !allowPersistence) ||
+      loading ||
+      !persistenceReady ||
+      (freezePostStartup && postStartupReadyRef.current)
+    ) {
       return;
     }
 
@@ -5707,8 +5834,10 @@ function MainApp() {
     }
 
     const runSave = () => {
+      const { approxBytes } = serializePersistedAppState(nextAppState);
       logEffectsDebug(debugEffects, "before saveAppState enqueue", {
         reason: "debounced",
+        approxBytes,
         savedOutfitCount: nextAppState.savedOutfits.length,
         boardImageCount: Array.isArray(nextAppState.board?.images) ? nextAppState.board.images.length : 0
       });
@@ -5732,7 +5861,7 @@ function MainApp() {
         runSave();
       }, 120);
     }
-  }, [activePanel, accessoriesEnabled, board, debugEffects, excluded, fitpics, freezePostStartup, generateCount, generationLists, generationMetadataFilters, generationMode, ignoredImportImages, imageCount, isGeneratePerfDebug, layering, libraryAddWidth, librarySearch, likedOutfitKeys, loading, locked, noImageMigration, outfit, outfitAffinity, outfitFilters, persistenceReady, recentOutfits, recoverNormal, savedOutfits, sideEditorWidth, wardrobeFilters, wardrobeFiltersOpen, wardrobeSavedOpen, wardrobeSort, weatherData, weatherSettings]);
+  }, [activePanel, accessoriesEnabled, allowPersistence, board, debugEffects, excluded, fitpics, freezePostStartup, generateCount, generationLists, generationMetadataFilters, generationMode, ignoredImportImages, imageCount, isGeneratePerfDebug, layering, libraryAddWidth, librarySearch, likedOutfitKeys, loading, locked, noImageMigration, noInitialMedia, outfit, outfitAffinity, outfitFilters, persistenceReady, recentOutfits, recoverNormal, savedOutfits, sideEditorWidth, wardrobeFilters, wardrobeFiltersOpen, wardrobeSavedOpen, wardrobeSort, weatherData, weatherSettings]);
 
   useEffect(() => () => {
     if (saveAppStateTimeoutRef.current) {
@@ -5749,12 +5878,20 @@ function MainApp() {
   useEffect(() => {
     logEffectsDebug(debugEffects, "pagehide persistence effect", {
       recoverNormal,
+      noInitialMedia,
+      allowPersistence,
       loading,
       persistenceReady,
       frozen: freezePostStartup && postStartupReadyRef.current
     });
 
-    if (recoverNormal || loading || !persistenceReady || (freezePostStartup && postStartupReadyRef.current)) {
+    if (
+      recoverNormal ||
+      ((noInitialMedia || freezePostStartup) && !allowPersistence) ||
+      loading ||
+      !persistenceReady ||
+      (freezePostStartup && postStartupReadyRef.current)
+    ) {
       return undefined;
     }
 
@@ -5779,39 +5916,82 @@ function MainApp() {
       window.removeEventListener("pagehide", flushAppState);
       document.removeEventListener("visibilitychange", flushOnHide);
     };
-  }, [debugEffects, freezePostStartup, loading, persistenceReady, recoverNormal]);
+  }, [allowPersistence, debugEffects, freezePostStartup, loading, noInitialMedia, persistenceReady, recoverNormal]);
 
   useEffect(() => {
     logEffectsDebug(debugEffects, "savedOutfits persistence effect", {
       loading,
       persistenceReady,
+      noInitialMedia,
+      allowPersistence,
       frozen: freezePostStartup && postStartupReadyRef.current,
       savedOutfitCount: savedOutfits.length
     });
 
-    if (loading || !persistenceReady || (freezePostStartup && postStartupReadyRef.current)) {
+    if (
+      recoverNormal ||
+      ((noInitialMedia || freezePostStartup) && !allowPersistence) ||
+      loading ||
+      !persistenceReady ||
+      (freezePostStartup && postStartupReadyRef.current)
+    ) {
       return;
     }
 
     void enqueueAppStateSave(currentPersistedAppState, "savedOutfitsEffect");
-  }, [currentPersistedAppState, debugEffects, freezePostStartup, loading, persistenceReady, savedOutfits]);
+  }, [allowPersistence, currentPersistedAppState, debugEffects, freezePostStartup, loading, noInitialMedia, persistenceReady, recoverNormal, savedOutfits]);
 
   function enqueueAppStateSave(nextState, reason = "unknown") {
     if (!nextState) {
       return Promise.resolve();
     }
 
+    const sanitizedState = sanitizePersistedAppStatePayload(nextState);
+    const { serialized, approxBytes } = serializePersistedAppState(sanitizedState);
+
     logEffectsDebug(debugEffects, "enqueueAppStateSave", {
       reason,
+      approxBytes,
       frozen: freezePostStartup && postStartupReadyRef.current,
-      savedOutfitCount: Array.isArray(nextState.savedOutfits) ? nextState.savedOutfits.length : 0
+      savedOutfitCount: Array.isArray(sanitizedState.savedOutfits) ? sanitizedState.savedOutfits.length : 0
     });
 
     if (freezePostStartup && postStartupReadyRef.current) {
       return Promise.resolve();
     }
 
-    pendingAppStateSaveRef.current = nextState;
+    if ((noInitialMedia || recoverNormal) && !allowPersistence) {
+      logEffectsDebug(debugEffects, "persistence suppressed", {
+        reason,
+        mode: recoverNormal ? "recoverNormal" : "noInitialMedia"
+      });
+      return Promise.resolve();
+    }
+
+    if (approxBytes > PERSISTED_APP_STATE_MAX_BYTES) {
+      console.warn("Skipping app-state persistence because serialized payload exceeds safe threshold.", {
+        reason,
+        approxBytes,
+        threshold: PERSISTED_APP_STATE_MAX_BYTES
+      });
+      logEffectsDebug(debugEffects, "persistence skipped: oversized payload", {
+        reason,
+        approxBytes,
+        threshold: PERSISTED_APP_STATE_MAX_BYTES
+      });
+      return Promise.resolve();
+    }
+
+    if (serialized === lastPersistedAppStateSerializedRef.current || serialized === pendingAppStateSaveSerializedRef.current) {
+      logEffectsDebug(debugEffects, "persistence skipped: duplicate payload", {
+        reason,
+        approxBytes
+      });
+      return Promise.resolve();
+    }
+
+    pendingAppStateSaveRef.current = sanitizedState;
+    pendingAppStateSaveSerializedRef.current = serialized;
 
     if (appStateSaveInFlightRef.current) {
       return Promise.resolve();
@@ -5823,13 +6003,19 @@ function MainApp() {
       try {
         while (pendingAppStateSaveRef.current) {
           const stateToSave = pendingAppStateSaveRef.current;
+          const serializedToSave = pendingAppStateSaveSerializedRef.current;
           pendingAppStateSaveRef.current = null;
+          pendingAppStateSaveSerializedRef.current = "";
           logEffectsDebug(debugEffects, "before saveAppState", {
             reason,
+            approxBytes: typeof TextEncoder !== "undefined"
+              ? new TextEncoder().encode(serializedToSave).length
+              : serializedToSave.length * 2,
             boardImageCount: Array.isArray(stateToSave.board?.images) ? stateToSave.board.images.length : 0,
             savedOutfitCount: Array.isArray(stateToSave.savedOutfits) ? stateToSave.savedOutfits.length : 0
           });
           await saveAppState(stateToSave);
+          lastPersistedAppStateSerializedRef.current = serializedToSave;
         }
       } finally {
         appStateSaveInFlightRef.current = false;
