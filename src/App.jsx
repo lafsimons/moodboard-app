@@ -177,6 +177,7 @@ const LIBRARY_GRID_GAP = 12;
 const LIBRARY_GRID_ESTIMATED_ROW_HEIGHT = 222;
 const LIBRARY_GRID_OVERSCAN_ROWS = 2;
 const LIBRARY_VIRTUALIZATION_THRESHOLD = 120;
+const LIBRARY_MEDIA_CONCURRENCY_LIMIT = 12;
 const BOARD_PICKER_GRID_COLUMNS = 3;
 const BOARD_PICKER_GRID_GAP = 8;
 const BOARD_PICKER_ESTIMATED_ROW_HEIGHT = 126;
@@ -378,7 +379,8 @@ function getStartupBehaviorFlags() {
     noImageMigration: hasUrlFlag("noImageMigration"),
     noSyncBackfill: hasUrlFlag("noSyncBackfill"),
     startLibraryClosed: hasUrlFlag("startLibraryClosed"),
-    noInitialMedia: hasUrlFlag("noInitialMedia")
+    noInitialMedia: hasUrlFlag("noInitialMedia"),
+    noLibrary: hasUrlFlag("noLibrary")
   };
 }
 
@@ -453,6 +455,40 @@ function logEffectsDebug(enabled, label, extra = {}) {
   };
   console.log("[effects]", entry);
   appendEffectsDebugDomLine(entry);
+}
+
+let activeLibraryMediaLoads = 0;
+const queuedLibraryMediaLoads = [];
+
+function runNextLibraryMediaLoad() {
+  while (activeLibraryMediaLoads < LIBRARY_MEDIA_CONCURRENCY_LIMIT && queuedLibraryMediaLoads.length) {
+    const nextLoad = queuedLibraryMediaLoads.shift();
+
+    if (!nextLoad) {
+      return;
+    }
+
+    activeLibraryMediaLoads += 1;
+
+    Promise.resolve()
+      .then(nextLoad.task)
+      .then(nextLoad.resolve, nextLoad.reject)
+      .finally(() => {
+        activeLibraryMediaLoads = Math.max(0, activeLibraryMediaLoads - 1);
+        runNextLibraryMediaLoad();
+      });
+  }
+}
+
+function enqueueLibraryMediaLoad(task) {
+  return new Promise((resolve, reject) => {
+    queuedLibraryMediaLoads.push({
+      task,
+      resolve,
+      reject
+    });
+    runNextLibraryMediaLoad();
+  });
 }
 
 const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
@@ -1371,18 +1407,28 @@ function useImageMetrics(imageUrl, initialMetrics = null) {
   return metrics ?? { naturalWidth: 1, naturalHeight: 1, resolvedSrc: imageUrlCandidates[0] ?? "" };
 }
 
-function useDeferredItemMedia(item, variant = "preview") {
+function useDeferredItemMedia(item, variant = "preview", options = {}) {
   const immediateSrc = getManagedItemImageSrc(item, variant);
   const startupFlags = useMemo(() => getStartupBehaviorFlags(), []);
   const debugEffects = useMemo(() => isDebugEffectsEnabled(), []);
   const freezePostStartup = useMemo(() => isFreezePostStartupEnabled(), []);
+  const { enabled = true, concurrencyLimited = false, placeholderFirst = false } = options;
   const [resolvedMedia, setResolvedMedia] = useState(() => ({
-    src: startupFlags.noInitialMedia ? "" : immediateSrc,
+    src: startupFlags.noInitialMedia || placeholderFirst || !enabled ? "" : immediateSrc,
     width: 0,
     height: 0
   }));
 
   useEffect(() => {
+    if (!enabled) {
+      setResolvedMedia({
+        src: "",
+        width: 0,
+        height: 0
+      });
+      return undefined;
+    }
+
     if (freezePostStartup && globalThis.__MBA_POST_STARTUP_READY__) {
       logEffectsDebug(debugEffects, "media resolution skipped", {
         reason: "freezePostStartup",
@@ -1437,9 +1483,12 @@ function useDeferredItemMedia(item, variant = "preview") {
         logEffectsDebug(debugEffects, "before media resolution", {
           itemId: item.id,
           variant,
-          immediateSrcPresent: Boolean(immediateSrc)
+          immediateSrcPresent: Boolean(immediateSrc),
+          concurrencyLimited
         });
-        const asset = await loadItemMediaAssetById(item.id, variant);
+        const asset = await (concurrencyLimited
+          ? enqueueLibraryMediaLoad(() => loadItemMediaAssetById(item.id, variant))
+          : loadItemMediaAssetById(item.id, variant));
 
         if (cancelled) {
           return;
@@ -1460,6 +1509,7 @@ function useDeferredItemMedia(item, variant = "preview") {
         logEffectsDebug(debugEffects, "after media resolution", {
           itemId: item.id,
           variant,
+          concurrencyLimited,
           hasBlob: asset?.blob instanceof Blob,
           srcPresent: Boolean(nextSrc)
         });
@@ -1467,7 +1517,8 @@ function useDeferredItemMedia(item, variant = "preview") {
         if (!cancelled) {
           logEffectsDebug(debugEffects, "media resolution failed", {
             itemId: item?.id ?? "",
-            variant
+            variant,
+            concurrencyLimited
           });
           setResolvedMedia({
             src: "",
@@ -1487,7 +1538,7 @@ function useDeferredItemMedia(item, variant = "preview") {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [debugEffects, freezePostStartup, immediateSrc, item?.id, startupFlags.noInitialMedia, variant]);
+  }, [concurrencyLimited, debugEffects, enabled, freezePostStartup, immediateSrc, item?.id, placeholderFirst, startupFlags.noInitialMedia, variant]);
 
   return resolvedMedia;
 }
@@ -1502,6 +1553,48 @@ function getItemPresentationAspectRatio(item, metricsOverride = null) {
   const cropHeight = Math.max(crop.height / 100, 0.01);
 
   return Math.max(0.55, Math.min(1.7, (naturalWidth * cropWidth) / (naturalHeight * cropHeight)));
+}
+
+function useVisibilityGate(options = {}) {
+  const { root = null, rootMargin = "240px 0px", threshold = 0.01, disabled = false } = options;
+  const targetRef = useRef(null);
+  const [isVisible, setIsVisible] = useState(disabled);
+
+  useEffect(() => {
+    if (disabled) {
+      setIsVisible(true);
+      return undefined;
+    }
+
+    const node = targetRef.current;
+
+    if (!node || typeof IntersectionObserver === "undefined") {
+      setIsVisible(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const nextEntry = entries[0];
+        if (nextEntry) {
+          setIsVisible(nextEntry.isIntersecting);
+        }
+      },
+      {
+        root,
+        rootMargin,
+        threshold
+      }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [disabled, root, rootMargin, threshold]);
+
+  return {
+    targetRef,
+    isVisible
+  };
 }
 
 function getBoardAspectSizeBoost(aspectRatio) {
@@ -1594,10 +1687,17 @@ const ManagedItemImage = memo(function ManagedItemImage({
   onMetrics = null,
   variant = "preview",
   loadingStrategy = "lazy",
-  decodingStrategy = "async"
+  decodingStrategy = "async",
+  mediaEnabled = true,
+  concurrencyLimited = false,
+  placeholderFirst = false
 }) {
   const safeModeEnabled = isSafeModeEnabled();
-  const deferredMedia = useDeferredItemMedia(item, variant);
+  const deferredMedia = useDeferredItemMedia(item, variant, {
+    enabled: mediaEnabled,
+    concurrencyLimited,
+    placeholderFirst
+  });
   const resolvedImageUrl = resolveImageUrl(deferredMedia.src);
   const seedMetrics = useMemo(() => getStoredImageMetrics(item), [item]);
   const metrics = useImageMetrics(
@@ -1924,7 +2024,8 @@ const LibraryGridCard = memo(function LibraryGridCard({
   cardStyle = null,
   onSelectReference,
   onOpenReferencePreview,
-  onVisibleImageMount
+  onVisibleImageMount,
+  libraryDisabled = false
 }) {
   const itemName = useMemo(() => buildDisplayName(item), [item]);
   const showTitle = useMemo(() => shouldShowLibraryCardTitle(item), [item]);
@@ -1945,13 +2046,19 @@ const LibraryGridCard = memo(function LibraryGridCard({
     }),
     [cardStyle, presentation.style]
   );
+  const { targetRef, isVisible } = useVisibilityGate({
+    disabled: libraryDisabled
+  });
 
   useEffect(() => {
-    onVisibleImageMount?.();
-  }, [onVisibleImageMount]);
+    if (isVisible) {
+      onVisibleImageMount?.();
+    }
+  }, [isVisible, onVisibleImageMount]);
 
   return (
     <article
+      ref={targetRef}
       className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""}`}
       style={mergedCardStyle}
     >
@@ -1984,8 +2091,11 @@ const LibraryGridCard = memo(function LibraryGridCard({
           normalizeToFrameScale
           useCrop
           usePresentation
-          loadingStrategy="eager"
-          decodingStrategy="sync"
+          loadingStrategy="lazy"
+          decodingStrategy="async"
+          mediaEnabled={isVisible}
+          concurrencyLimited
+          placeholderFirst
         />
       </button>
 
@@ -3674,7 +3784,8 @@ function MainApp() {
     noImageMigration,
     noSyncBackfill,
     startLibraryClosed,
-    noInitialMedia
+    noInitialMedia,
+    noLibrary
   } = startupFlags;
   const editorRef = useRef(null);
   const importBackupRef = useRef(null);
@@ -4166,6 +4277,40 @@ function MainApp() {
     );
   }
 
+  const libraryMountAllowed = !noLibrary;
+  const libraryPathActive = libraryMountAllowed && activePanel === "wardrobe";
+
+  useEffect(() => {
+    logEffectsDebug(debugEffects, "panel/open-state transition", {
+      activePanel,
+      wardrobeSavedOpen,
+      controlsOpen,
+      libraryMountAllowed,
+      libraryPathActive
+    });
+  }, [activePanel, controlsOpen, debugEffects, libraryMountAllowed, libraryPathActive, wardrobeSavedOpen]);
+
+  useEffect(() => {
+    if (libraryMountAllowed) {
+      return;
+    }
+
+    if (activePanel === "wardrobe" || wardrobeSavedOpen) {
+      logEffectsDebug(debugEffects, "panel/open-state correction", {
+        reason: "noLibrary",
+        activePanel,
+        wardrobeSavedOpen
+      });
+      setActivePanel((current) => (current === "wardrobe" ? null : current));
+      setWardrobeSavedOpen(false);
+      setWardrobeFiltersOpen(false);
+      setWardrobeManageOpen(false);
+      setWardrobeAddOpen(false);
+      setLibrarySelectionActionsOpen(false);
+      setLibraryTagActionMode(null);
+    }
+  }, [activePanel, debugEffects, libraryMountAllowed, wardrobeSavedOpen]);
+
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
       return undefined;
@@ -4610,7 +4755,7 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
-    if (activePanel !== "wardrobe" || wardrobeSavedOpen) {
+    if (!libraryPathActive || wardrobeSavedOpen) {
       libraryPerfRef.current = null;
       return undefined;
     }
@@ -4623,7 +4768,7 @@ function MainApp() {
     return () => {
       libraryPerfRef.current = null;
     };
-  }, [activePanel, isLibraryPerfDebug, items.length, wardrobeSavedOpen]);
+  }, [isLibraryPerfDebug, items.length, libraryPathActive, wardrobeSavedOpen]);
 
   function requestConfirmation({ title, message, confirmLabel = "Confirm" }) {
     return new Promise((resolve) => {
@@ -4643,6 +4788,10 @@ function MainApp() {
     });
   }
   const visibleWardrobeItems = useMemo(() => {
+    if (!libraryPathActive) {
+      return [];
+    }
+
     const startedAt = isLibraryPerfDebug ? performance.now() : 0;
     const filtered = items.filter((item) =>
       matchesLibrarySearch(item, librarySearch) &&
@@ -4683,7 +4832,7 @@ function MainApp() {
     }
 
     return sortedItems;
-  }, [activePanel, excluded, isLibraryPerfDebug, items, librarySearch, wardrobeFilters, wardrobeSort, wardrobeSavedOpen]);
+  }, [excluded, isLibraryPerfDebug, items, libraryPathActive, librarySearch, wardrobeFilters, wardrobeSort]);
   const visibleWardrobeItemIds = useMemo(
     () => visibleWardrobeItems.map((item) => item.id),
     [visibleWardrobeItems]
@@ -4847,7 +4996,7 @@ function MainApp() {
       return undefined;
     }
 
-    if (activePanel !== "wardrobe" || wardrobeSavedOpen) {
+    if (!libraryPathActive || wardrobeSavedOpen) {
       return undefined;
     }
 
@@ -4915,7 +5064,7 @@ function MainApp() {
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [activePanel, debugEffects, freezePostStartup, visibleWardrobeItems.length, wardrobeSavedOpen]);
+  }, [activePanel, debugEffects, freezePostStartup, libraryPathActive, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   useEffect(() => {
     if (!pickerBoardImageId) {
@@ -4995,7 +5144,7 @@ function MainApp() {
       return undefined;
     }
 
-    if (activePanel !== "wardrobe" || wardrobeSavedOpen || !virtualizedWardrobeGrid.virtualItems.length) {
+    if (!libraryPathActive || wardrobeSavedOpen || !virtualizedWardrobeGrid.virtualItems.length) {
       return undefined;
     }
 
@@ -5023,7 +5172,7 @@ function MainApp() {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activePanel, debugEffects, freezePostStartup, shouldVirtualizeWardrobeGrid, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
+  }, [activePanel, debugEffects, freezePostStartup, libraryPathActive, shouldVirtualizeWardrobeGrid, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   const handleLibraryReferenceSelect = useCallback((itemId, event) => {
     selectReference(itemId, event);
@@ -5405,9 +5554,9 @@ function MainApp() {
       setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
       setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
       const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
-      setActivePanel(recoverNormal || startLibraryClosed ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
+      setActivePanel(recoverNormal || startLibraryClosed || noLibrary ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
       setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-      setWardrobeSavedOpen(recoverNormal || startLibraryClosed ? false : normalizedLibraryUiState.wardrobeSavedOpen);
+      setWardrobeSavedOpen(recoverNormal || startLibraryClosed || noLibrary ? false : normalizedLibraryUiState.wardrobeSavedOpen);
       setOutfitFilters(normalizeOutfitFilters(defaultState.outfitFilters));
       setWeatherSettings(normalizeWeatherSettings(defaultState.weatherSettings));
       setWeatherLocationDraft(defaultState.weatherSettings?.locationName ?? "");
@@ -5540,9 +5689,9 @@ function MainApp() {
           setWardrobeSort(normalizedWardrobeSort);
           setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
           setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
-          setActivePanel(recoverNormal || startLibraryClosed ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
+          setActivePanel(recoverNormal || startLibraryClosed || noLibrary ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
           setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-          setWardrobeSavedOpen(recoverNormal || startLibraryClosed ? false : normalizedLibraryUiState.wardrobeSavedOpen);
+          setWardrobeSavedOpen(recoverNormal || startLibraryClosed || noLibrary ? false : normalizedLibraryUiState.wardrobeSavedOpen);
           setOutfitFilters(normalizedOutfitFilters);
           setWeatherSettings(normalizeWeatherSettings(storedAppState.weatherSettings));
           setWeatherLocationDraft(storedAppState.weatherSettings?.locationName ?? "");
@@ -5608,7 +5757,7 @@ function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [debugEffects, debugStartup, noAutoFit, noAutoGenerate, noSyncBackfill, noBoardRestore, recoverNormal, safeMode, startLibraryClosed]);
+  }, [debugEffects, debugStartup, noAutoFit, noAutoGenerate, noLibrary, noSyncBackfill, noBoardRestore, recoverNormal, safeMode, startLibraryClosed]);
 
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
 
@@ -6634,9 +6783,9 @@ function MainApp() {
     setEditingId(null);
     setEditorReturnTarget(null);
     setDraft(emptyForm);
-    setActivePanel(recoverNormal || startLibraryClosed ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
+    setActivePanel(recoverNormal || startLibraryClosed || noLibrary ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
     setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-    setWardrobeSavedOpen(recoverNormal || startLibraryClosed ? false : normalizedLibraryUiState.wardrobeSavedOpen);
+    setWardrobeSavedOpen(recoverNormal || startLibraryClosed || noLibrary ? false : normalizedLibraryUiState.wardrobeSavedOpen);
     setControlsOpen(true);
     setActiveBoardImageId(null);
     setPickerBoardImageId(null);
@@ -8154,7 +8303,7 @@ function MainApp() {
       return nextItem;
     }
 
-    const shouldReturnToWardrobe = editorReturnTarget === "wardrobe" && activePanel !== "wardrobe";
+    const shouldReturnToWardrobe = libraryMountAllowed && editorReturnTarget === "wardrobe" && activePanel !== "wardrobe";
     cancelEdit();
 
     if (shouldReturnToWardrobe) {
@@ -9358,6 +9507,17 @@ function MainApp() {
   }
 
   function openLibraryPanel(event = null) {
+    if (!libraryMountAllowed) {
+      logEffectsDebug(debugEffects, "panel/open-state transition blocked", {
+        target: "wardrobe",
+        reason: "noLibrary"
+      });
+      if (event) {
+        blurPointerActivatedControl(event);
+      }
+      return;
+    }
+
     const shouldClosePanel = activePanel === "wardrobe" && !wardrobeSavedOpen;
 
     if (shouldClosePanel) {
@@ -9397,6 +9557,17 @@ function MainApp() {
   }
 
   function toggleSavedBoardsPanel(event = null) {
+    if (!libraryMountAllowed) {
+      logEffectsDebug(debugEffects, "panel/open-state transition blocked", {
+        target: "wardrobeSaved",
+        reason: "noLibrary"
+      });
+      if (event) {
+        blurPointerActivatedControl(event);
+      }
+      return;
+    }
+
     const shouldClosePanel = activePanel === "wardrobe" && wardrobeSavedOpen;
 
     if (shouldClosePanel) {
@@ -10125,6 +10296,7 @@ function MainApp() {
                 onSelectReference={handleLibraryReferenceSelect}
                 onOpenReferencePreview={handleLibraryReferencePreview}
                 onVisibleImageMount={handleVisibleLibraryImageMount}
+                libraryDisabled={!libraryMountAllowed}
               />
             ))}
           </div>
@@ -10139,6 +10311,7 @@ function MainApp() {
               onSelectReference={handleLibraryReferenceSelect}
               onOpenReferencePreview={handleLibraryReferencePreview}
               onVisibleImageMount={handleVisibleLibraryImageMount}
+              libraryDisabled={!libraryMountAllowed}
             />
           ))
         )}
@@ -10359,7 +10532,7 @@ function MainApp() {
   ) : null;
 
   if (loading) {
-    return <main className="app-shell loading-state">Loading library…</main>;
+    return <main className="app-shell loading-state">Loading app…</main>;
   }
 
   const selectedReferenceTags = uniqueTags(selectedReferenceItems.flatMap((item) => item.tags ?? []));
@@ -10747,6 +10920,7 @@ function MainApp() {
     noImageMigration ? "noImageMigration" : "",
     noSyncBackfill ? "noSyncBackfill" : "",
     startLibraryClosed ? "startLibraryClosed" : "",
+    noLibrary ? "noLibrary" : "",
     noInitialMedia ? "noInitialMedia" : "",
     freezePostStartup ? "freezePostStartup" : "",
     debugEffects ? "debugEffects" : ""
@@ -10770,6 +10944,12 @@ function MainApp() {
         <div className="safe-mode-banner recover-normal-banner" role="status" aria-live="polite">
           <strong>Recovery Boot</strong>
           <span>Normal UI loaded with library collapsed, board restore disabled, palette extraction disabled, and automatic persistence suspended for this session.</span>
+        </div>
+      ) : null}
+      {noLibrary ? (
+        <div className="safe-mode-banner recover-normal-banner" role="status" aria-live="polite">
+          <strong>Diagnostics</strong>
+          <span>Library disabled for diagnostics</span>
         </div>
       ) : null}
       {!safeMode && !recoverNormal && activeStartupFlagLabels.length ? (
@@ -10814,24 +10994,28 @@ function MainApp() {
               CONTROLS
             </button>
             <div className={`workspace-tab-group ${isDockExpanded ? "is-expanded" : ""}`}>
-              <button
-                type="button"
-                className={`workspace-tab ${activePanel === "wardrobe" && !wardrobeSavedOpen ? "is-active" : ""}`}
-                onClick={(event) => openLibraryPanel(event)}
-                aria-pressed={activePanel === "wardrobe" && !wardrobeSavedOpen}
-                tabIndex={isDockExpanded ? 0 : -1}
-              >
-                Library
-              </button>
-              <button
-                type="button"
-                className={`workspace-tab ${activePanel === "wardrobe" && wardrobeSavedOpen ? "is-active" : ""}`}
-                onClick={(event) => toggleSavedBoardsPanel(event)}
-                aria-pressed={activePanel === "wardrobe" && wardrobeSavedOpen}
-                tabIndex={isDockExpanded ? 0 : -1}
-              >
-                Boards
-              </button>
+              {libraryMountAllowed ? (
+                <>
+                  <button
+                    type="button"
+                    className={`workspace-tab ${activePanel === "wardrobe" && !wardrobeSavedOpen ? "is-active" : ""}`}
+                    onClick={(event) => openLibraryPanel(event)}
+                    aria-pressed={activePanel === "wardrobe" && !wardrobeSavedOpen}
+                    tabIndex={isDockExpanded ? 0 : -1}
+                  >
+                    Library
+                  </button>
+                  <button
+                    type="button"
+                    className={`workspace-tab ${activePanel === "wardrobe" && wardrobeSavedOpen ? "is-active" : ""}`}
+                    onClick={(event) => toggleSavedBoardsPanel(event)}
+                    aria-pressed={activePanel === "wardrobe" && wardrobeSavedOpen}
+                    tabIndex={isDockExpanded ? 0 : -1}
+                  >
+                    Boards
+                  </button>
+                </>
+              ) : null}
               <button
                 type="button"
                 className={`workspace-tab ${activePanel === "dashboard" ? "is-active" : ""}`}
@@ -11073,13 +11257,13 @@ function MainApp() {
           </div>
         ) : null}
 
-        {activePanel ? (
+        {activePanel && (libraryMountAllowed || activePanel !== "wardrobe") ? (
           <div className="floating-backdrop active-panel-backdrop" onClick={closeWorkspacePanel}>
         <div
           className={`active-panel-overlay ${activePanel === "wardrobe" ? "is-wardrobe-panel" : ""}`}
           onClick={(event) => event.stopPropagation()}
         >
-        {activePanel === "wardrobe" ? (
+        {libraryMountAllowed && activePanel === "wardrobe" ? (
         <div className="wardrobe-workspace">
           <div className="panel wardrobe-panel">
           <div className="panel-header">
