@@ -3820,6 +3820,8 @@ function MainApp() {
     itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
     imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION
   });
+  const skippedEffectLogsRef = useRef(new Set());
+  const effectLoopTrackerRef = useRef(new Map());
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
@@ -3830,6 +3832,10 @@ function MainApp() {
   const backupExportFeedbackTimeoutRef = useRef(null);
   const paletteCacheRef = useRef(new Map());
   const boardRenderLayoutSignatureRef = useRef("");
+  const boardRenderLayoutSignatureCacheRef = useRef({
+    key: "",
+    signature: ""
+  });
   const suppressNextBoardRelayoutRef = useRef(false);
   const pendingRestoredBoardFitRef = useRef(false);
   const lastInteractionWasPointerRef = useRef(false);
@@ -4279,6 +4285,42 @@ function MainApp() {
 
   const libraryMountAllowed = !noLibrary;
   const libraryPathActive = libraryMountAllowed && activePanel === "wardrobe";
+
+  function logEffectSkipOnce(effectName, reason, extra = {}) {
+    const key = `${effectName}:${reason}`;
+
+    if (skippedEffectLogsRef.current.has(key)) {
+      return;
+    }
+
+    skippedEffectLogsRef.current.add(key);
+    logEffectsDebug(debugEffects, `${effectName} skipped because ${reason}`, extra);
+  }
+
+  function shouldSuppressEffectWork(effectName, inputKey = "") {
+    const now = Date.now();
+    const trackerKey = `${effectName}:${inputKey}`;
+    const previousEntries = effectLoopTrackerRef.current.get(trackerKey) ?? [];
+    const recentEntries = previousEntries.filter((timestamp) => now - timestamp <= 5000);
+    recentEntries.push(now);
+    effectLoopTrackerRef.current.set(trackerKey, recentEntries);
+
+    if (recentEntries.length > 20) {
+      console.warn(`Suppressing repeated effect work for ${effectName}.`, {
+        count: recentEntries.length,
+        windowMs: 5000,
+        inputKey
+      });
+      logEffectsDebug(debugEffects, `${effectName} suppressed for loop protection`, {
+        count: recentEntries.length,
+        windowMs: 5000,
+        inputKey
+      });
+      return true;
+    }
+
+    return false;
+  }
 
   useEffect(() => {
     logEffectsDebug(debugEffects, "panel/open-state transition", {
@@ -5205,18 +5247,31 @@ function MainApp() {
       Object.entries(boardLayoutMetadataByReferenceId).map(([referenceId, value]) => [referenceId, value.renderMetadata])
     )
   }), [boardLayoutMetadataByReferenceId]);
-  const boardRenderLayoutSignature = useMemo(
-    () => {
-      const signatureEntries = (board?.images ?? []).map((image) => ({
+  const boardRenderLayoutSignature = useMemo(() => {
+    if (noAutoFit || !board?.images?.length) {
+      return "";
+    }
+
+    const signatureEntries = (board?.images ?? [])
+      .map((image) => ({
         ...getBoardLayoutSignatureEntry(image, itemsById[image.referenceId])
-      })).filter(Boolean);
-      logEffectsDebug(debugEffects, "JSON.stringify board signature", {
-        entryCount: signatureEntries.length
-      });
-      return JSON.stringify(signatureEntries);
-    },
-    [board?.images, itemsById]
-  );
+      }))
+      .filter(Boolean);
+    const cacheKey = JSON.stringify(signatureEntries);
+
+    if (boardRenderLayoutSignatureCacheRef.current.key === cacheKey) {
+      return boardRenderLayoutSignatureCacheRef.current.signature;
+    }
+
+    logEffectsDebug(debugEffects, "JSON.stringify board signature", {
+      entryCount: signatureEntries.length
+    });
+    boardRenderLayoutSignatureCacheRef.current = {
+      key: cacheKey,
+      signature: cacheKey
+    };
+    return cacheKey;
+  }, [board?.images, debugEffects, itemsById, noAutoFit]);
   const tagManagerEntries = useMemo(() => {
     const query = normalizeTag(tagManagerSearch);
 
@@ -5422,20 +5477,29 @@ function MainApp() {
     let cancelled = false;
 
     async function updateOutfitPalette() {
-      logEffectsDebug(debugEffects, "palette extraction effect", {
-        boardItemCount: currentBoardItems.length,
-        frozen: freezePostStartup && postStartupReadyRef.current
-      });
-
       if (freezePostStartup && postStartupReadyRef.current) {
+        logEffectSkipOnce("palette extraction", "freezePostStartup");
         setOutfitPalette([]);
         return;
       }
 
       if (safeMode || recoverNormal || noPalette || noInitialMedia) {
+        logEffectSkipOnce(
+          "palette extraction",
+          safeMode ? "safeMode" : recoverNormal ? "recoverNormal" : noPalette ? "noPalette" : "noInitialMedia"
+        );
         setOutfitPalette([]);
         return;
       }
+
+      if (shouldSuppressEffectWork("palette extraction", `${currentBoardItems.length}`)) {
+        return;
+      }
+
+      logEffectsDebug(debugEffects, "palette extraction effect", {
+        boardItemCount: currentBoardItems.length,
+        frozen: freezePostStartup && postStartupReadyRef.current
+      });
 
       if (!currentBoardItems.length) {
         setOutfitPalette([]);
@@ -5477,14 +5541,8 @@ function MainApp() {
   }, [board]);
 
   useEffect(() => {
-    logEffectsDebug(debugEffects, "board fit effect", {
-      pending: pendingRestoredBoardFitRef.current,
-      loading,
-      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0,
-      frozen: freezePostStartup && postStartupReadyRef.current
-    });
-
     if (freezePostStartup && postStartupReadyRef.current) {
+      logEffectSkipOnce("board fit", "freezePostStartup");
       return;
     }
 
@@ -5497,8 +5555,22 @@ function MainApp() {
       !board?.images?.length ||
       !boardViewportRef.current
     ) {
+      if (noAutoFit) {
+        logEffectSkipOnce("board fit", "noAutoFit");
+      }
       return;
     }
+
+    if (shouldSuppressEffectWork("board fit", `${board?.id ?? ""}:${board?.images?.length ?? 0}`)) {
+      return;
+    }
+
+    logEffectsDebug(debugEffects, "board fit effect", {
+      pending: pendingRestoredBoardFitRef.current,
+      loading,
+      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
 
     pendingRestoredBoardFitRef.current = false;
     setBoardView(getFittedBoardView(board));
@@ -5516,7 +5588,7 @@ function MainApp() {
       const defaultState = appStateOverride ?? defaultData.appState;
       const normalizedPanelLayoutState = normalizePanelLayoutState(defaultState.panelLayoutState, getViewportWidth());
       const normalizedItems = sourceItems.length ? sourceItems : defaultData.items.map(normalizeItem);
-      const generatedBoard = safeMode || recoverNormal
+      const generatedBoard = safeMode || recoverNormal || noBoardRestore || noAutoGenerate
         ? null
         : buildGeneratedBoard(normalizedItems, {
             imageCount: normalizeImageCount(defaultState.imageCount),
@@ -5536,8 +5608,12 @@ function MainApp() {
       setExcluded(defaultState.excluded ?? {});
       setBoard(generatedBoard?.board ?? null);
       setImageCount(resolvePersistedImageCount(defaultState.imageCount));
-      setOutfit(recoverNormal ? {} : (generatedBoard?.syntheticOutfit ?? defaultState.outfit ?? {}));
-      setBoardView(generatedBoard?.board && !safeMode && !recoverNormal ? getFittedBoardView(generatedBoard.board) : { x: 0, y: 0, zoom: 1 });
+      setOutfit(recoverNormal || noBoardRestore ? {} : (generatedBoard?.syntheticOutfit ?? defaultState.outfit ?? {}));
+      setBoardView(
+        generatedBoard?.board && !safeMode && !recoverNormal && !noAutoFit
+          ? getFittedBoardView(generatedBoard.board)
+          : { x: 0, y: 0, zoom: 1 }
+      );
       setGuidedDebugPayload([]);
       setIgnoredImportImages(defaultState.ignoredImportImages ?? []);
       setSavedOutfits([]);
@@ -5634,6 +5710,9 @@ function MainApp() {
           setLocked(storedAppState.locked ?? {});
           setExcluded(storedAppState.excluded ?? {});
           const shouldSkipBoardRestore = recoverNormal || noBoardRestore;
+          if (shouldSkipBoardRestore) {
+            logEffectSkipOnce("board restore", noBoardRestore ? "noBoardRestore" : "recoverNormal");
+          }
           const restoredBoard = shouldSkipBoardRestore
             ? null
             : resolveBoardFromAppState(
@@ -5656,10 +5735,6 @@ function MainApp() {
             : restoredBoard;
           logStartupDebug(debugStartup, "after board restore", effectiveItems, {
             restoredBoardImageCount: Array.isArray(nextBoard?.images) ? nextBoard.images.length : 0
-          });
-          logEffectsDebug(debugEffects, "board restore", {
-            restoredBoardImageCount: Array.isArray(nextBoard?.images) ? nextBoard.images.length : 0,
-            skipped: shouldSkipBoardRestore
           });
           pendingRestoredBoardFitRef.current =
             !safeMode && !recoverNormal && !noAutoFit && Boolean(nextBoard?.images?.length);
@@ -5712,6 +5787,8 @@ function MainApp() {
             } catch (syncMetadataError) {
               console.error("Failed to initialize local sync metadata.", syncMetadataError);
             }
+          } else if (noSyncBackfill) {
+            logEffectSkipOnce("sync backfill", "noSyncBackfill");
           }
         } else {
           loadedMigrationVersionsRef.current = {
@@ -5734,6 +5811,8 @@ function MainApp() {
             } catch (syncMetadataError) {
               console.error("Failed to initialize local sync metadata.", syncMetadataError);
             }
+          } else if (noSyncBackfill) {
+            logEffectSkipOnce("sync backfill", "noSyncBackfill");
           }
         }
       } catch (error) {
@@ -5762,13 +5841,13 @@ function MainApp() {
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
 
   useEffect(() => {
-    logEffectsDebug(debugEffects, "metadata migration/writeback effect", {
-      target: "boardUuid",
-      frozen: freezePostStartup && postStartupReadyRef.current,
-      hasBoard: Boolean(board)
-    });
-
     if (freezePostStartup && postStartupReadyRef.current) {
+      logEffectSkipOnce("metadata migration/writeback", "freezePostStartup");
+      return;
+    }
+
+    if (noImageMigration) {
+      logEffectSkipOnce("metadata migration/writeback", "noImageMigration");
       return;
     }
 
@@ -5780,13 +5859,13 @@ function MainApp() {
   }, [board, debugEffects, freezePostStartup]);
 
   useEffect(() => {
-    logEffectsDebug(debugEffects, "metadata migration/writeback effect", {
-      target: "savedBoardUuid",
-      frozen: freezePostStartup && postStartupReadyRef.current,
-      savedOutfitCount: savedOutfits.length
-    });
-
     if (freezePostStartup && postStartupReadyRef.current) {
+      logEffectSkipOnce("metadata migration/writeback", "freezePostStartup");
+      return;
+    }
+
+    if (noImageMigration) {
+      logEffectSkipOnce("metadata migration/writeback", "noImageMigration");
       return;
     }
 
@@ -5795,7 +5874,7 @@ function MainApp() {
     }
 
     setSavedOutfits((current) => current.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)));
-  }, [debugEffects, freezePostStartup, savedOutfits]);
+  }, [debugEffects, freezePostStartup, noImageMigration, savedOutfits]);
 
   useEffect(() => () => {
     if (boardRelayoutFrameRef.current) {
@@ -5913,15 +5992,6 @@ function MainApp() {
   }, [activePanel, board, debugEffects, debugStartup, freezePostStartup, items, loading, savedOutfits.length]);
 
   useEffect(() => {
-    logEffectsDebug(debugEffects, "app-state persistence effect", {
-      recoverNormal,
-      noInitialMedia,
-      allowPersistence,
-      loading,
-      persistenceReady,
-      frozen: freezePostStartup && postStartupReadyRef.current
-    });
-
     if (
       recoverNormal ||
       ((noInitialMedia || freezePostStartup) && !allowPersistence) ||
@@ -5929,6 +5999,12 @@ function MainApp() {
       !persistenceReady ||
       (freezePostStartup && postStartupReadyRef.current)
     ) {
+      if (recoverNormal || noInitialMedia || (freezePostStartup && !allowPersistence)) {
+        logEffectSkipOnce(
+          "app-state persistence",
+          recoverNormal ? "recoverNormal" : noInitialMedia ? "noInitialMedia" : "freezePostStartup"
+        );
+      }
       return;
     }
 
@@ -5972,6 +6048,30 @@ function MainApp() {
       weatherData,
       fitpics
     };
+    const { serialized: nextSerialized, approxBytes } = serializePersistedAppState(nextAppState);
+
+    if (
+      nextSerialized === lastPersistedAppStateSerializedRef.current ||
+      nextSerialized === pendingAppStateSaveSerializedRef.current
+    ) {
+      logEffectSkipOnce("app-state persistence", "unchanged payload");
+      return;
+    }
+
+    if (shouldSuppressEffectWork("app-state persistence", nextSerialized.slice(0, 256))) {
+      return;
+    }
+
+    logEffectsDebug(debugEffects, "app-state persistence effect", {
+      recoverNormal,
+      noInitialMedia,
+      allowPersistence,
+      loading,
+      persistenceReady,
+      frozen: freezePostStartup && postStartupReadyRef.current,
+      approxBytes
+    });
+
     const saveStartedAt = isGeneratePerfDebug ? performance.now() : 0;
     if (saveAppStateTimeoutRef.current) {
       clearTimeout(saveAppStateTimeoutRef.current);
@@ -5983,7 +6083,6 @@ function MainApp() {
     }
 
     const runSave = () => {
-      const { approxBytes } = serializePersistedAppState(nextAppState);
       logEffectsDebug(debugEffects, "before saveAppState enqueue", {
         reason: "debounced",
         approxBytes,
@@ -6068,6 +6167,26 @@ function MainApp() {
   }, [allowPersistence, debugEffects, freezePostStartup, loading, noInitialMedia, persistenceReady, recoverNormal]);
 
   useEffect(() => {
+    if (
+      recoverNormal ||
+      ((noInitialMedia || freezePostStartup) && !allowPersistence) ||
+      loading ||
+      !persistenceReady ||
+      (freezePostStartup && postStartupReadyRef.current)
+    ) {
+      if (recoverNormal || noInitialMedia || (freezePostStartup && !allowPersistence)) {
+        logEffectSkipOnce(
+          "savedOutfits persistence",
+          recoverNormal ? "recoverNormal" : noInitialMedia ? "noInitialMedia" : "freezePostStartup"
+        );
+      }
+      return;
+    }
+
+    if (shouldSuppressEffectWork("savedOutfits persistence", `${savedOutfits.length}`)) {
+      return;
+    }
+
     logEffectsDebug(debugEffects, "savedOutfits persistence effect", {
       loading,
       persistenceReady,
@@ -6076,16 +6195,6 @@ function MainApp() {
       frozen: freezePostStartup && postStartupReadyRef.current,
       savedOutfitCount: savedOutfits.length
     });
-
-    if (
-      recoverNormal ||
-      ((noInitialMedia || freezePostStartup) && !allowPersistence) ||
-      loading ||
-      !persistenceReady ||
-      (freezePostStartup && postStartupReadyRef.current)
-    ) {
-      return;
-    }
 
     void enqueueAppStateSave(currentPersistedAppState, "savedOutfitsEffect");
   }, [allowPersistence, currentPersistedAppState, debugEffects, freezePostStartup, loading, noInitialMedia, persistenceReady, recoverNormal, savedOutfits]);
@@ -6215,20 +6324,30 @@ function MainApp() {
   }, [board, clearBoardGenerationFeedback]);
 
   useEffect(() => {
-    logEffectsDebug(debugEffects, "auto board generation effect", {
-      loading,
-      itemCount: items.length,
-      frozen: freezePostStartup && postStartupReadyRef.current,
-      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0
-    });
-
     if (freezePostStartup && postStartupReadyRef.current) {
+      logEffectSkipOnce("auto board generation", "freezePostStartup");
+      return;
+    }
+
+    if (noAutoGenerate) {
+      logEffectSkipOnce("auto board generation", "noAutoGenerate");
       return;
     }
 
     if (loading || !items.length) {
       return;
     }
+
+    if (shouldSuppressEffectWork("auto board generation", `${board?.id ?? ""}:${items.length}:${board?.images?.length ?? 0}`)) {
+      return;
+    }
+
+    logEffectsDebug(debugEffects, "auto board generation effect", {
+      loading,
+      itemCount: items.length,
+      frozen: freezePostStartup && postStartupReadyRef.current,
+      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0
+    });
 
     setBoard((current) => {
       if (!current?.images?.length) {
@@ -6292,16 +6411,16 @@ function MainApp() {
       setGuidedDebugPayload([]);
       return nextBoard;
     });
-  }, [board?.images, debugEffects, excluded, freezePostStartup, generationLists, generationMetadataFilters, generationMode, imageCount, items, itemsById, loading, outfitAffinity, outfitFilters, recentOutfits, weatherData]);
+  }, [board?.images, debugEffects, excluded, freezePostStartup, generationLists, generationMetadataFilters, generationMode, imageCount, items, itemsById, loading, noAutoGenerate, outfitAffinity, outfitFilters, recentOutfits, weatherData]);
 
   useEffect(() => {
-    logEffectsDebug(debugEffects, "board fit / measurement effect", {
-      loading,
-      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0,
-      frozen: freezePostStartup && postStartupReadyRef.current
-    });
-
     if (freezePostStartup && postStartupReadyRef.current) {
+      logEffectSkipOnce("board fit / measurement", "freezePostStartup");
+      return;
+    }
+
+    if (noAutoFit) {
+      logEffectSkipOnce("board fit / measurement", "noAutoFit");
       return;
     }
 
@@ -6309,6 +6428,16 @@ function MainApp() {
       boardRenderLayoutSignatureRef.current = boardRenderLayoutSignature;
       return;
     }
+
+    if (shouldSuppressEffectWork("board fit / measurement", boardRenderLayoutSignature)) {
+      return;
+    }
+
+    logEffectsDebug(debugEffects, "board fit / measurement effect", {
+      loading,
+      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
 
     if (boardGenerationInFlightRef.current) {
       boardRenderLayoutSignatureRef.current = boardRenderLayoutSignature;
@@ -6336,7 +6465,7 @@ function MainApp() {
       boardRelayoutFrameRef.current = null;
       setBoard((current) => (current?.images?.length ? relayoutBoardStateImages(current.images) : current));
     });
-  }, [board?.images?.length, boardRenderLayoutSignature, debugEffects, freezePostStartup, loading]);
+  }, [board?.images?.length, boardRenderLayoutSignature, debugEffects, freezePostStartup, loading, noAutoFit]);
 
   useEffect(() => {
     if (!pickerBoardImageId) {
