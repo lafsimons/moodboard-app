@@ -671,6 +671,33 @@ test("saved board create edit and delete mark metadata pending upload", async ()
   assert.equal(deletedMetadata.recordVersion, 5);
 });
 
+test("saveAppState can diff saved boards against an in-memory previous snapshot", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    savedOutfits: []
+  }, {
+    previousAppState: {
+      savedOutfits: [
+        {
+          id: "saved-1",
+          name: "Saved board",
+          description: "",
+          board: {
+            id: "board-1",
+            boardUuid: "board-uuid-1",
+            images: [{ referenceId: "item-1" }]
+          }
+        }
+      ]
+    }
+  });
+
+  const deletedMetadata = await getSyncMetadata("mba:board:board-uuid-1");
+  assert.equal(deletedMetadata.pendingDelete, true);
+  assert.equal(deletedMetadata.syncStatus, "pending_upload");
+});
+
 test("saved boards persist across app state save and load", async () => {
   installFakeIndexedDb();
 

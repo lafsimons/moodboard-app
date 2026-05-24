@@ -1331,7 +1331,7 @@ export async function loadAppState() {
   return entry?.value ?? null;
 }
 
-export async function saveAppState(value) {
+export async function saveAppState(value, options = {}) {
   const sanitizedValue = sanitizePersistedAppState(value);
   const { approxBytes } = getApproxSerializedBytes(sanitizedValue);
 
@@ -1355,7 +1355,10 @@ export async function saveAppState(value) {
     return;
   }
 
-  const previousAppState = await loadAppState();
+  const hasPreviousAppStateOverride = Object.prototype.hasOwnProperty.call(options, "previousAppState");
+  const previousAppState = hasPreviousAppStateOverride
+    ? options.previousAppState
+    : await loadAppState();
 
   await withStore(APP_STORE, "readwrite", (store) =>
     store.put({
