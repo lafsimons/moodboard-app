@@ -59,9 +59,7 @@ class RootErrorBoundary extends React.Component {
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <RootErrorBoundary>
-      <App />
-    </RootErrorBoundary>
-  </React.StrictMode>
+  <RootErrorBoundary>
+    <App />
+  </RootErrorBoundary>
 );

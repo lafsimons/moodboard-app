@@ -491,6 +491,44 @@ test("backfillLocalSyncMetadata keeps the current working board unsynced", async
   assert.equal(await getSyncMetadata("mba:board:working-board-uuid"), null);
 });
 
+test("backfillLocalSyncMetadata skips unchanged existing metadata", async () => {
+  installFakeIndexedDb();
+
+  const firstResult = await backfillLocalSyncMetadata([
+    {
+      id: "item-1",
+      itemUuid: "uuid-1",
+      imageUrl: "data:image/webp;base64,preview",
+      imageWidth: 1200,
+      imageHeight: 800,
+      mimeType: "image/webp",
+      fileSize: 1111,
+      originalFilename: "ref.png"
+    }
+  ], []);
+
+  const existingMetadata = await getSyncMetadata("mba:reference:uuid-1");
+
+  const secondResult = await backfillLocalSyncMetadata([
+    {
+      id: "item-1",
+      itemUuid: "uuid-1",
+      imageUrl: "data:image/webp;base64,preview",
+      imageWidth: 1200,
+      imageHeight: 800,
+      mimeType: "image/webp",
+      fileSize: 1111,
+      originalFilename: "ref.png"
+    }
+  ], []);
+
+  const metadataAfterSecondPass = await getSyncMetadata("mba:reference:uuid-1");
+
+  assert.equal(firstResult.createdCount, 1);
+  assert.equal(secondResult.createdCount, 0);
+  assert.deepEqual(metadataAfterSecondPass, existingMetadata);
+});
+
 test("reference create and update mark metadata pending upload", async () => {
   installFakeIndexedDb();
 

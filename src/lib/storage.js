@@ -25,6 +25,7 @@ const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
 const STARTUP_DEBUG_LIMIT_VALUES = new Set([100, 250, 500, 1000]);
+const SYNC_BACKFILL_BATCH_SIZE = 100;
 const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
 
 function cloneData(value) {
@@ -187,6 +188,25 @@ function getEffectsDebugConfig() {
       postStartupReady: false
     };
   }
+}
+
+function isNoSyncBackfillEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    return searchParams.get("noSyncBackfill") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function yieldToMainThread() {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 function getStartupDebugMemorySnapshot() {
@@ -387,8 +407,7 @@ function createNextDirtySyncMetadataRecord({
 }
 
 function buildReferenceSyncMetadata(item, deviceId, existingRecord = null) {
-  const normalizedItem = migrateReferenceMetadataToTags(item);
-  const stableKey = normalizeSyncText(normalizedItem?.itemUuid);
+  const stableKey = normalizeSyncText(item?.itemUuid);
   const key = createReferenceSyncMetadataKey(stableKey);
 
   if (!key) {
@@ -403,7 +422,7 @@ function buildReferenceSyncMetadata(item, deviceId, existingRecord = null) {
     key,
     entityType: "mbaReference",
     stableKey,
-    localId: normalizeSyncText(normalizedItem?.id),
+    localId: normalizeSyncText(item?.id),
     recordVersion: 0,
     syncStatus: "local_only",
     lastSyncedAt: "",
@@ -1469,38 +1488,163 @@ export async function clearSyncMetadata() {
 }
 
 export async function backfillLocalSyncMetadata(items = [], savedOutfits = []) {
+  if (isNoSyncBackfillEnabled()) {
+    emitEffectsStorageDebug("sync backfill skipped", {
+      reason: "noSyncBackfill"
+    });
+    return {
+      deviceId: "",
+      createdCount: 0
+    };
+  }
+
   const deviceId = await getOrCreateDeviceId();
-  const existingMetadataEntries = await getSyncMetadata();
-  const existingMetadataByKey = Object.fromEntries(existingMetadataEntries.map((entry) => [entry.key, entry]));
-  const nextMetadataEntries = [
-    ...(Array.isArray(items) ? items : [])
-      .map((item) => buildReferenceSyncMetadata(item, deviceId, existingMetadataByKey[createReferenceSyncMetadataKey(item?.itemUuid)]))
-      .filter(Boolean),
-    ...(Array.isArray(savedOutfits) ? savedOutfits : [])
-      .map((savedOutfit) =>
-        buildSavedBoardSyncMetadata(
-          savedOutfit,
-          deviceId,
-          existingMetadataByKey[createBoardSyncMetadataKey(savedOutfit?.board?.boardUuid ?? ensureSavedBoardUuid(savedOutfit)?.board?.boardUuid)]
-        )
-      )
-      .filter(Boolean)
-  ];
+  const itemList = Array.isArray(items) ? items : [];
+  const savedOutfitList = Array.isArray(savedOutfits) ? savedOutfits : [];
+  const existingKeys = new Set();
+  let scannedMetadataCount = 0;
+
+  emitEffectsStorageDebug("sync backfill start", {
+    itemCount: itemList.length,
+    savedOutfitCount: savedOutfitList.length,
+    batchSize: SYNC_BACKFILL_BATCH_SIZE
+  });
+
+  await withStore(SYNC_METADATA_STORE, "readonly", async (store) => {
+    if (typeof store.openCursor !== "function") {
+      const entries = await requestToPromise(store.getAll());
+
+      entries.forEach((entry, index) => {
+        existingKeys.add(normalizeSyncMetadataKey(entry?.key));
+        scannedMetadataCount = index + 1;
+
+        if (scannedMetadataCount % SYNC_BACKFILL_BATCH_SIZE === 0) {
+          emitEffectsStorageDebug("sync backfill existing metadata progress", {
+            scannedMetadataCount,
+            fallback: "getAll"
+          });
+        }
+      });
+
+      emitEffectsStorageDebug("sync backfill existing metadata scan complete", {
+        scannedMetadataCount,
+        fallback: "getAll"
+      });
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
+      const request = store.openCursor();
+
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+
+        if (!cursor) {
+          emitEffectsStorageDebug("sync backfill existing metadata scan complete", {
+            scannedMetadataCount
+          });
+          resolve();
+          return;
+        }
+
+        existingKeys.add(normalizeSyncMetadataKey(cursor.primaryKey));
+        scannedMetadataCount += 1;
+
+        if (scannedMetadataCount % SYNC_BACKFILL_BATCH_SIZE === 0) {
+          emitEffectsStorageDebug("sync backfill existing metadata progress", {
+            scannedMetadataCount
+          });
+        }
+
+        cursor.continue();
+      };
+    });
+  });
+
+  const nextMetadataEntries = [];
+
+  for (const item of itemList) {
+    const key = createReferenceSyncMetadataKey(item?.itemUuid);
+
+    if (!key || existingKeys.has(key)) {
+      continue;
+    }
+
+    const nextEntry = buildReferenceSyncMetadata(item, deviceId, null);
+
+    if (!nextEntry) {
+      continue;
+    }
+
+    existingKeys.add(key);
+    nextMetadataEntries.push(nextEntry);
+  }
+
+  for (const savedOutfit of savedOutfitList) {
+    const boardUuid = normalizeSyncText(savedOutfit?.board?.boardUuid)
+      || normalizeSyncText(ensureSavedBoardUuid(savedOutfit)?.board?.boardUuid);
+    const key = createBoardSyncMetadataKey(boardUuid);
+
+    if (!key || existingKeys.has(key)) {
+      continue;
+    }
+
+    const nextEntry = buildSavedBoardSyncMetadata(savedOutfit, deviceId, null);
+
+    if (!nextEntry) {
+      continue;
+    }
+
+    existingKeys.add(key);
+    nextMetadataEntries.push(nextEntry);
+  }
 
   if (!nextMetadataEntries.length) {
+    emitEffectsStorageDebug("sync backfill complete", {
+      createdCount: 0,
+      scannedMetadataCount
+    });
     return {
       deviceId,
       createdCount: 0
     };
   }
 
-  await withStore(SYNC_METADATA_STORE, "readwrite", (store) => {
-    nextMetadataEntries.forEach((entry) => store.put(entry));
+  let createdCount = 0;
+
+  for (let index = 0; index < nextMetadataEntries.length; index += SYNC_BACKFILL_BATCH_SIZE) {
+    const batch = nextMetadataEntries.slice(index, index + SYNC_BACKFILL_BATCH_SIZE);
+
+    emitEffectsStorageDebug("sync backfill write batch", {
+      batchStart: index,
+      batchSize: batch.length,
+      totalPlanned: nextMetadataEntries.length
+    });
+
+    await withStore(SYNC_METADATA_STORE, "readwrite", (store) => {
+      batch.forEach((entry) => store.put(entry));
+    });
+
+    createdCount += batch.length;
+    emitEffectsStorageDebug("sync backfill progress", {
+      createdCount,
+      totalPlanned: nextMetadataEntries.length
+    });
+
+    if (index + SYNC_BACKFILL_BATCH_SIZE < nextMetadataEntries.length) {
+      await yieldToMainThread();
+    }
+  }
+
+  emitEffectsStorageDebug("sync backfill complete", {
+    createdCount,
+    scannedMetadataCount
   });
 
   return {
     deviceId,
-    createdCount: nextMetadataEntries.length
+    createdCount
   };
 }
 
