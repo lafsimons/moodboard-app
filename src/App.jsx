@@ -1,6 +1,6 @@
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
-  createLightweightBackupData,
+  exportBackup,
   getDefaultData,
   prepareBackupImport,
   replaceWithPreparedBackup,
@@ -132,14 +132,18 @@ import {
   savedOutfitHasMissingItems
 } from "./repositories/boardsRepository.js";
 import {
+  countInlinePayloadFields,
+  stripItemMediaPayloads
+} from "./lib/startupItemMetadata.js";
+import {
   deleteItem,
   deleteItems,
-  loadItems,
-  prepareLoadedItems,
+  loadItemMediaAssetById,
+  loadStartupItemMetadata,
   saveItem,
   saveItems
 } from "./repositories/itemsRepository.js";
-import { loadAppState, saveAppState } from "./repositories/appStateRepository.js";
+import { loadAppState, loadStartupAppState, saveAppState } from "./repositories/appStateRepository.js";
 import { backfillLocalSyncMetadata } from "./repositories/syncRepository.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
@@ -311,6 +315,45 @@ function isRecoverNormalEnabled() {
   } catch {
     return false;
   }
+}
+
+function isStartupDebugEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return new URLSearchParams(window.location.search).get("debugStartup") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function getStartupDebugMemory() {
+  if (typeof performance === "undefined" || !performance.memory) {
+    return null;
+  }
+
+  const { usedJSHeapSize, totalJSHeapSize, jsHeapSizeLimit } = performance.memory;
+  return {
+    usedJSHeapSize,
+    totalJSHeapSize,
+    jsHeapSizeLimit
+  };
+}
+
+function logStartupDebug(enabled, label, items = [], extra = {}) {
+  if (!enabled) {
+    return;
+  }
+
+  const payloadSummary = countInlinePayloadFields(items);
+  console.log(`[startup] ${label}`, {
+    itemCount: Array.isArray(items) ? items.length : 0,
+    payloadSummary,
+    memory: getStartupDebugMemory(),
+    ...extra
+  });
 }
 
 function createLibraryPerfSession(enabled) {
@@ -1117,6 +1160,81 @@ function useImageMetrics(imageUrl, initialMetrics = null) {
   return metrics ?? { naturalWidth: 1, naturalHeight: 1, resolvedSrc: imageUrlCandidates[0] ?? "" };
 }
 
+function useDeferredItemMedia(item, variant = "preview") {
+  const immediateSrc = getManagedItemImageSrc(item, variant);
+  const [resolvedMedia, setResolvedMedia] = useState(() => ({
+    src: immediateSrc,
+    width: 0,
+    height: 0
+  }));
+
+  useEffect(() => {
+    if (immediateSrc) {
+      setResolvedMedia({
+        src: immediateSrc,
+        width: 0,
+        height: 0
+      });
+      return undefined;
+    }
+
+    if (!item?.id) {
+      setResolvedMedia({
+        src: "",
+        width: 0,
+        height: 0
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    let objectUrl = "";
+
+    async function resolveMedia() {
+      try {
+        const asset = await loadItemMediaAssetById(item.id, variant);
+
+        if (cancelled) {
+          return;
+        }
+
+        let nextSrc = asset?.src ?? "";
+
+        if (!nextSrc && asset?.blob instanceof Blob && typeof URL?.createObjectURL === "function") {
+          objectUrl = URL.createObjectURL(asset.blob);
+          nextSrc = objectUrl;
+        }
+
+        setResolvedMedia({
+          src: nextSrc,
+          width: Math.max(Number(asset?.width) || 0, 0),
+          height: Math.max(Number(asset?.height) || 0, 0)
+        });
+      } catch {
+        if (!cancelled) {
+          setResolvedMedia({
+            src: "",
+            width: 0,
+            height: 0
+          });
+        }
+      }
+    }
+
+    void resolveMedia();
+
+    return () => {
+      cancelled = true;
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [immediateSrc, item?.id, variant]);
+
+  return resolvedMedia;
+}
+
 function getItemPresentationAspectRatio(item, metricsOverride = null) {
   const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, "preview"));
   const cachedMetrics = metricsOverride ?? getStoredImageMetrics(item) ?? (resolvedImageUrl ? imageMetricsCache.get(resolvedImageUrl) : null);
@@ -1222,9 +1340,18 @@ const ManagedItemImage = memo(function ManagedItemImage({
   decodingStrategy = "async"
 }) {
   const safeModeEnabled = isSafeModeEnabled();
-  const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, variant));
+  const deferredMedia = useDeferredItemMedia(item, variant);
+  const resolvedImageUrl = resolveImageUrl(deferredMedia.src);
   const seedMetrics = useMemo(() => getStoredImageMetrics(item), [item]);
-  const metrics = useImageMetrics(resolvedImageUrl, seedMetrics);
+  const metrics = useImageMetrics(
+    resolvedImageUrl,
+    deferredMedia.width && deferredMedia.height
+      ? {
+          naturalWidth: deferredMedia.width,
+          naturalHeight: deferredMedia.height
+        }
+      : seedMetrics
+  );
   const displayImageUrl = metrics?.resolvedSrc || resolveImageUrlCandidates(resolvedImageUrl)[0] || "";
   const [isLoaded, setIsLoaded] = useState(() => Boolean(seedMetrics) || Boolean(metrics?.resolvedSrc));
   const frameStyle = useMemo(
@@ -1255,7 +1382,15 @@ const ManagedItemImage = memo(function ManagedItemImage({
   }
 
   if (!displayImageUrl) {
-    return null;
+    return (
+      <span
+        ref={frameRef}
+        className={`managed-image managed-image-placeholder ${className}`.trim()}
+        data-item-id={dataItemId || item?.id || ""}
+      >
+        <span className="managed-image-placeholder-label">{buildDisplayName(item) || "Reference"}</span>
+      </span>
+    );
   }
 
   if (!usePresentation) {
@@ -1310,9 +1445,18 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   onMetrics
 }) {
   const safeModeEnabled = isSafeModeEnabled();
-  const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, "preview"));
+  const deferredMedia = useDeferredItemMedia(item, "preview");
+  const resolvedImageUrl = resolveImageUrl(deferredMedia.src);
   const seedMetrics = useMemo(() => getStoredImageMetrics(item), [item]);
-  const metrics = useImageMetrics(resolvedImageUrl, seedMetrics);
+  const metrics = useImageMetrics(
+    resolvedImageUrl,
+    deferredMedia.width && deferredMedia.height
+      ? {
+          naturalWidth: deferredMedia.width,
+          naturalHeight: deferredMedia.height
+        }
+      : seedMetrics
+  );
   const lastMetricsKeyRef = useRef("");
   const renderMetadata = useMemo(
     () => buildBoardRenderMetadata({ ...item, rotation: image.rotation }, metrics),
@@ -3090,10 +3234,6 @@ async function copyTextToClipboard(text) {
   }
 }
 
-function buildBackupExportData(items, appState) {
-  return createLightweightBackupData(items, appState);
-}
-
 function createBackupExportBlob(backup) {
   const parts = [
     "{",
@@ -3263,6 +3403,7 @@ export default function App() {
 function MainApp() {
   const safeMode = isSafeModeEnabled();
   const recoverNormal = isRecoverNormalEnabled();
+  const debugStartup = isStartupDebugEnabled();
   const editorRef = useRef(null);
   const importBackupRef = useRef(null);
   const outfitStageRef = useRef(null);
@@ -4953,19 +5094,28 @@ function MainApp() {
       let fallbackItems = [];
 
       try {
-        const [storedItems, storedAppState] = await Promise.all([loadItems(), loadAppState()]);
-        const { items: effectiveItems } = await prepareLoadedItems(
-          storedItems,
-          storedAppState,
-          getItemRepositoryDependencies(),
-          {
-            includeWeightMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
-            includeTagMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
-            includeStyleWeightMappingMigration: true,
-            disableAutoMigrations: safeMode || recoverNormal
-          }
-        );
+        logStartupDebug(debugStartup, "before IndexedDB open");
+        const [storedAppState, startupItems] = await Promise.all([
+          loadStartupAppState(),
+          loadStartupItemMetadata()
+        ]);
+
+        logStartupDebug(debugStartup, "after returning metadata to App.jsx", startupItems, {
+          appStatePresent: Boolean(storedAppState)
+        });
+
+        logStartupDebug(debugStartup, "after metadata read", startupItems, {
+          appStatePresent: Boolean(storedAppState)
+        });
+
+        const effectiveItems = startupItems.length
+          ? startupItems.map((item) => normalizeItem(item))
+          : [];
         fallbackItems = effectiveItems;
+
+        logStartupDebug(debugStartup, "after item normalization", effectiveItems, {
+          startupItemCount: startupItems.length
+        });
 
         if (cancelled) {
           return;
@@ -4985,6 +5135,12 @@ function MainApp() {
           const normalizedOutfitFilters = normalizeOutfitFilters(storedAppState.outfitFilters);
           const normalizedOutfitAffinity = normalizeOutfitAffinity(storedAppState.outfitAffinity);
           const normalizedRecentOutfits = normalizeRecentOutfits(storedAppState.recentOutfits);
+
+          logStartupDebug(debugStartup, "after app state hydration", effectiveItems, {
+            savedOutfitCount: Array.isArray(storedAppState.savedOutfits) ? storedAppState.savedOutfits.length : 0,
+            hasBoard: Boolean(storedAppState.board)
+          });
+
           setLayering(Boolean(storedAppState.layering));
           setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
           setLocked(storedAppState.locked ?? {});
@@ -5009,6 +5165,9 @@ function MainApp() {
                 recentOutfits: normalizedRecentOutfits
               }).board
             : restoredBoard;
+          logStartupDebug(debugStartup, "after board restore", effectiveItems, {
+            restoredBoardImageCount: Array.isArray(nextBoard?.images) ? nextBoard.images.length : 0
+          });
           pendingRestoredBoardFitRef.current = !safeMode && !recoverNormal && Boolean(nextBoard?.images?.length);
           setBoard(nextBoard);
           setImageCount(resolvedImageCount);
@@ -5198,6 +5357,18 @@ function MainApp() {
       setPersistenceReady(true);
     }
   }, [loading, persistenceReady, recoverNormal]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    logStartupDebug(debugStartup, "after first render", items, {
+      activePanel,
+      savedOutfitCount: savedOutfits.length,
+      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0
+    });
+  }, [activePanel, board, debugStartup, items, loading, savedOutfits.length]);
 
   useEffect(() => {
     if (recoverNormal || loading || !persistenceReady) {
@@ -5864,10 +6035,9 @@ function MainApp() {
   }
 
   async function applyLoadedData(nextItems, nextAppState) {
-    const { items: effectiveItems } = await prepareLoadedItems(nextItems, nextAppState, getItemRepositoryDependencies(), {
-      includeImageAssetMigration: true,
-      disableAutoMigrations: safeMode || recoverNormal
-    });
+    const effectiveItems = (Array.isArray(nextItems) ? nextItems : [])
+      .map((item) => stripItemMediaPayloads(item))
+      .map((item) => normalizeItem(item));
 
     setItems(effectiveItems);
     setLayering(Boolean(nextAppState?.layering));
@@ -5952,7 +6122,7 @@ function MainApp() {
 
   async function handleExportBackup() {
     try {
-      const backup = buildBackupExportData(items, currentPersistedAppState);
+      const backup = await exportBackup();
       const blob = createBackupExportBlob(backup);
       const date = new Date().toISOString().slice(0, 10);
       const downloadStatus = await downloadBlobFile(blob, `moodboard-app-backup-${date}.json`, {
@@ -5971,7 +6141,7 @@ function MainApp() {
 
       setBackupExportStatus("Backup download attempted.");
     } catch {
-      const fallbackBackup = buildBackupExportData(items, currentPersistedAppState);
+      const fallbackBackup = await exportBackup();
       const copied = await copyTextToClipboard(JSON.stringify({
         source: fallbackBackup.source,
         version: fallbackBackup.version,

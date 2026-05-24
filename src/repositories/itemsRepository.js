@@ -1,11 +1,21 @@
 import {
   deleteItem as deleteStoredItem,
+  loadItemMediaAssetById as loadStoredItemMediaAssetById,
+  loadStartupItemMetadata as loadStoredStartupItemMetadata,
   loadItems as loadStoredItems,
   saveItem as saveStoredItem
 } from "../lib/storage.js";
 
 export async function loadItems() {
   return loadStoredItems();
+}
+
+export async function loadStartupItemMetadata(options = {}) {
+  return loadStoredStartupItemMetadata(options);
+}
+
+export async function loadItemMediaAssetById(itemId, variant = "preview") {
+  return loadStoredItemMediaAssetById(itemId, variant);
 }
 
 export async function saveItem(item) {

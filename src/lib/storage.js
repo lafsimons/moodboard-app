@@ -9,6 +9,8 @@ import {
 } from "./appIdentity.js";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./boardIdentity.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
+import { createImageAsset, normalizeItemImages } from "./itemImages.js";
+import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
 const DB_VERSION = 3;
 export const BACKUP_VERSION = 2;
@@ -22,9 +24,104 @@ const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 
 let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
+const STARTUP_DEBUG_LIMIT_VALUES = new Set([100, 250, 500, 1000]);
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function getStartupDebugConfig() {
+  if (typeof window === "undefined") {
+    return {
+      enabled: false,
+      limit: null
+    };
+  }
+
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    const enabled = searchParams.get("debugStartup") === "1";
+    const rawLimit = Number(searchParams.get("debugStartupLimit"));
+    const limit = STARTUP_DEBUG_LIMIT_VALUES.has(rawLimit) ? rawLimit : null;
+
+    return {
+      enabled,
+      limit
+    };
+  } catch {
+    return {
+      enabled: false,
+      limit: null
+    };
+  }
+}
+
+function getStartupDebugMemorySnapshot() {
+  const usedBytes = Number(globalThis.performance?.memory?.usedJSHeapSize);
+  return Number.isFinite(usedBytes) && usedBytes > 0 ? Math.round(usedBytes / (1024 * 1024)) : null;
+}
+
+function formatStartupDebugEntry(label, extra = {}) {
+  const payload = {
+    label,
+    at: new Date().toISOString(),
+    heapMB: getStartupDebugMemorySnapshot(),
+    ...extra
+  };
+
+  return payload;
+}
+
+function appendStartupDebugDomLine(entry) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  let node = document.getElementById("startup-debug-log");
+
+  if (!node) {
+    node = document.createElement("pre");
+    node.id = "startup-debug-log";
+    node.setAttribute(
+      "style",
+      [
+        "position:fixed",
+        "left:0",
+        "right:0",
+        "bottom:0",
+        "z-index:2147483647",
+        "max-height:40vh",
+        "margin:0",
+        "padding:8px 10px",
+        "overflow:auto",
+        "background:rgba(18,18,18,0.94)",
+        "color:#9ef7b5",
+        "font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace",
+        "pointer-events:none",
+        "white-space:pre-wrap"
+      ].join(";")
+    );
+    document.body.append(node);
+  }
+
+  node.textContent += `[startup] ${JSON.stringify(entry)}\n`;
+}
+
+function emitStartupDebug(label, extra = {}) {
+  const { enabled } = getStartupDebugConfig();
+
+  if (!enabled) {
+    return;
+  }
+
+  const entry = formatStartupDebugEntry(label, extra);
+  console.log("[startup]", entry);
+  appendStartupDebugDomLine(entry);
+}
+
+function getStartupDebugLimitValue(limit = null) {
+  const configuredLimit = limit ?? getStartupDebugConfig().limit;
+  return STARTUP_DEBUG_LIMIT_VALUES.has(configuredLimit) ? configuredLimit : null;
 }
 
 function createDeviceId() {
@@ -256,9 +353,16 @@ function getIndexedDb() {
 
 function openDatabaseByName(name) {
   return new Promise((resolve, reject) => {
+    emitStartupDebug("before opening DB", {
+      databaseName: name,
+      version: DB_VERSION
+    });
     const request = getIndexedDb().open(name, DB_VERSION);
 
     request.onupgradeneeded = () => {
+      emitStartupDebug("during DB upgrade", {
+        databaseName: name
+      });
       const db = request.result;
 
       if (!db.objectStoreNames.contains(ITEM_STORE)) {
@@ -282,8 +386,20 @@ function openDatabaseByName(name) {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      emitStartupDebug("after DB open success", {
+        databaseName: name,
+        objectStoreCount: request.result?.objectStoreNames?.length ?? 0
+      });
+      resolve(request.result);
+    };
+    request.onerror = () => {
+      emitStartupDebug("DB open error", {
+        databaseName: name,
+        message: request.error?.message ?? String(request.error ?? "Unknown IndexedDB open error")
+      });
+      reject(request.error);
+    };
   });
 }
 
@@ -296,13 +412,38 @@ function transactionToPromise(transaction) {
 }
 
 async function readAllStoreRecords(database, storeNames) {
+  emitStartupDebug("before opening transaction/store", {
+    databaseName: database.name,
+    storeNames,
+    mode: "readonly",
+    source: "readAllStoreRecords"
+  });
   const transaction = database.transaction(storeNames, "readonly");
   const transactionDone = transactionToPromise(transaction);
   const stores = Object.fromEntries(storeNames.map((storeName) => [storeName, transaction.objectStore(storeName)]));
   const recordsByStore = await Promise.all(
-    storeNames.map(async (storeName) => [storeName, await requestToPromise(stores[storeName].getAll())])
+    storeNames.map(async (storeName) => {
+      emitStartupDebug("before opening each transaction/store", {
+        databaseName: database.name,
+        storeName,
+        mode: "readonly",
+        source: "readAllStoreRecords.getAll"
+      });
+      const records = await requestToPromise(stores[storeName].getAll());
+      emitStartupDebug("after full-store read", {
+        databaseName: database.name,
+        storeName,
+        recordCount: Array.isArray(records) ? records.length : 0
+      });
+      return [storeName, records];
+    })
   );
   await transactionDone;
+  emitStartupDebug("after cursor complete", {
+    databaseName: database.name,
+    storeNames,
+    source: "readAllStoreRecords"
+  });
   return Object.fromEntries(recordsByStore);
 }
 
@@ -323,25 +464,57 @@ async function copyStoreRecords(database, recordsByStore) {
 }
 
 async function migrateLegacyDataIfNeeded() {
+  emitStartupDebug("before migration check", {
+    databaseName: INDEXED_DB_NAME
+  });
   const currentDatabase = await openDatabaseByName(INDEXED_DB_NAME);
 
   try {
+    emitStartupDebug("before current store scan", {
+      databaseName: currentDatabase.name
+    });
     const currentRecords = await readAllStoreRecords(currentDatabase, MIGRATED_STORES);
+    emitStartupDebug("after current store scan", {
+      databaseName: currentDatabase.name,
+      itemCount: Array.isArray(currentRecords[ITEM_STORE]) ? currentRecords[ITEM_STORE].length : 0
+    });
 
     if (hasAnyMigratableData(currentRecords)) {
+      emitStartupDebug("migration skipped because current DB has data", {
+        databaseName: currentDatabase.name
+      });
       return;
     }
 
+    emitStartupDebug("before opening legacy DB", {
+      databaseName: LEGACY_INDEXED_DB_NAME
+    });
     const legacyDatabase = await openDatabaseByName(LEGACY_INDEXED_DB_NAME);
 
     try {
+      emitStartupDebug("before legacy store scan", {
+        databaseName: legacyDatabase.name
+      });
       const legacyRecords = await readAllStoreRecords(legacyDatabase, MIGRATED_STORES);
+      emitStartupDebug("after legacy store scan", {
+        databaseName: legacyDatabase.name,
+        itemCount: Array.isArray(legacyRecords[ITEM_STORE]) ? legacyRecords[ITEM_STORE].length : 0
+      });
 
       if (!hasAnyMigratableData(legacyRecords)) {
+        emitStartupDebug("migration skipped because legacy DB is empty", {
+          databaseName: legacyDatabase.name
+        });
         return;
       }
 
+      emitStartupDebug("before copying legacy records", {
+        databaseName: currentDatabase.name
+      });
       await copyStoreRecords(currentDatabase, legacyRecords);
+      emitStartupDebug("after copying legacy records", {
+        databaseName: currentDatabase.name
+      });
     } finally {
       legacyDatabase.close();
     }
@@ -374,6 +547,12 @@ async function withStore(storeName, mode, run) {
   const db = await openDatabase();
 
   return new Promise((resolve, reject) => {
+    emitStartupDebug("before opening each transaction/store", {
+      databaseName: db.name,
+      storeName,
+      mode,
+      source: "withStore"
+    });
     const transaction = db.transaction(storeName, mode);
     const store = transaction.objectStore(storeName);
 
@@ -409,6 +588,12 @@ async function withStoreWithoutMigration(storeName, mode, run) {
   const db = await openDatabaseWithoutMigration();
 
   return new Promise((resolve, reject) => {
+    emitStartupDebug("before opening each transaction/store", {
+      databaseName: db.name,
+      storeName,
+      mode,
+      source: "withStoreWithoutMigration"
+    });
     const transaction = db.transaction(storeName, mode);
     const store = transaction.objectStore(storeName);
 
@@ -444,6 +629,12 @@ async function withStores(storeNames, mode, run) {
   const db = await openDatabase();
 
   return new Promise((resolve, reject) => {
+    emitStartupDebug("before opening each transaction/store", {
+      databaseName: db.name,
+      storeNames,
+      mode,
+      source: "withStores"
+    });
     const transaction = db.transaction(storeNames, mode);
     const stores = Object.fromEntries(storeNames.map((storeName) => [storeName, transaction.objectStore(storeName)]));
     let resultPromise;
@@ -652,6 +843,226 @@ export async function deleteSafeModeItems(ids = []) {
   await withStoreWithoutMigration(ITEM_STORE, "readwrite", (store) => {
     normalizedIds.forEach((id) => store.delete(id));
   });
+}
+
+async function readStartupItemMetadataBatch(startAfterKey = undefined, batchSize = 50) {
+  const db = await openDatabaseWithoutMigration();
+
+  return new Promise((resolve, reject) => {
+    emitStartupDebug("before opening each transaction/store", {
+      databaseName: db.name,
+      storeName: ITEM_STORE,
+      mode: "readonly",
+      source: "readStartupItemMetadataBatch"
+    });
+    const transaction = db.transaction(ITEM_STORE, "readonly");
+    const store = transaction.objectStore(ITEM_STORE);
+    const keyRange =
+      startAfterKey === undefined ? undefined : IDBKeyRange.lowerBound(startAfterKey, true);
+    const request = store.openCursor(keyRange);
+    const batch = [];
+    let lastKey = startAfterKey;
+    let debugOffset = 0;
+    let remainingLimit = null;
+
+    if (typeof batchSize === "object" && batchSize !== null) {
+      debugOffset = Math.max(0, Math.round(Number(batchSize.debugOffset) || 0));
+      remainingLimit = getStartupDebugLimitValue(batchSize.remainingLimit);
+      batchSize = batchSize.batchSize;
+    }
+
+    const normalizedBatchSize = Math.max(1, Math.round(Number(batchSize) || 50));
+
+    emitStartupDebug("before cursor starts", {
+      databaseName: db.name,
+      storeName: ITEM_STORE,
+      startAfterKey: startAfterKey ?? null,
+      batchSize: normalizedBatchSize,
+      remainingLimit
+    });
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+
+      if (!cursor) {
+        emitStartupDebug("after cursor complete", {
+          databaseName: db.name,
+          storeName: ITEM_STORE,
+          batchCount: batch.length,
+          totalRead: debugOffset + batch.length,
+          reason: "cursor_exhausted"
+        });
+        resolve({
+          items: batch,
+          lastKey,
+          hasMore: false
+        });
+        db.close();
+        return;
+      }
+
+      lastKey = cursor.primaryKey;
+      batch.push(stripItemMediaPayloads(cursor.value));
+
+       if ((debugOffset + batch.length) % 100 === 0) {
+        emitStartupDebug("every 100 cursor records read", {
+          databaseName: db.name,
+          storeName: ITEM_STORE,
+          totalRead: debugOffset + batch.length,
+          lastKey
+        });
+      }
+
+      if (remainingLimit !== null && debugOffset + batch.length >= remainingLimit) {
+        emitStartupDebug("after cursor complete", {
+          databaseName: db.name,
+          storeName: ITEM_STORE,
+          batchCount: batch.length,
+          totalRead: debugOffset + batch.length,
+          reason: "debug_limit_reached",
+          limit: remainingLimit
+        });
+        resolve({
+          items: batch,
+          lastKey,
+          hasMore: false
+        });
+        db.close();
+        return;
+      }
+
+      if (batch.length >= normalizedBatchSize) {
+        emitStartupDebug("after cursor complete", {
+          databaseName: db.name,
+          storeName: ITEM_STORE,
+          batchCount: batch.length,
+          totalRead: debugOffset + batch.length,
+          reason: "batch_complete"
+        });
+        resolve({
+          items: batch,
+          lastKey,
+          hasMore: true
+        });
+        db.close();
+        return;
+      }
+
+      cursor.continue();
+    };
+
+    request.onerror = () => {
+      reject(request.error);
+      db.close();
+    };
+
+    transaction.onerror = () => {
+      reject(transaction.error);
+      db.close();
+    };
+  });
+}
+
+export async function loadStartupItemMetadata({
+  batchSize = 50,
+  onBatch = null,
+  limit = null
+} = {}) {
+  const normalizedBatchSize = Math.max(1, Math.round(Number(batchSize) || 50));
+  const debugLimit = getStartupDebugLimitValue(limit);
+  const items = [];
+  let lastKey;
+  let hasMore = true;
+
+  while (hasMore) {
+    const batchResult = await readStartupItemMetadataBatch(lastKey, {
+      batchSize: normalizedBatchSize,
+      debugOffset: items.length,
+      remainingLimit: debugLimit
+    });
+    const batchItems = batchResult.items.filter((item) => item.id);
+
+    items.push(...batchItems);
+    lastKey = batchResult.lastKey;
+    hasMore = batchResult.hasMore && (debugLimit === null || items.length < debugLimit);
+
+    if (batchItems.length) {
+      await Promise.resolve(
+        onBatch?.({
+          items: batchItems,
+          loaded: items.length,
+          hasMore
+        })
+      );
+    }
+
+    if (hasMore) {
+      await yieldToBrowser();
+    }
+  }
+
+  emitStartupDebug("before returning metadata to App.jsx", {
+    itemCount: items.length,
+    limit: debugLimit
+  });
+  return items;
+}
+
+export async function loadStartupAppState() {
+  emitStartupDebug("before startup app-state read", {
+    storeName: APP_STORE
+  });
+  const entry = await withStoreWithoutMigration(APP_STORE, "readonly", (store) => store.get("state"));
+  emitStartupDebug("after startup app-state read", {
+    storeName: APP_STORE,
+    appStatePresent: Boolean(entry?.value)
+  });
+  return entry?.value ?? null;
+}
+
+export async function loadItemMediaAssetById(itemId, variant = "preview") {
+  if (typeof itemId !== "string" || !itemId.trim()) {
+    return null;
+  }
+
+  const item = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(itemId.trim()));
+
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const normalizedImages = normalizeItemImages(item);
+  const selectedAsset =
+    variant === "original"
+      ? normalizedImages.original
+      : variant === "thumbnail"
+        ? normalizedImages.thumbnail
+        : normalizedImages.preview;
+
+  if (selectedAsset?.src) {
+    return {
+      ...createImageAsset(selectedAsset),
+      blob: null
+    };
+  }
+
+  if (variant === "original" && normalizedImages.originalPreserved && item.itemUuid) {
+    const blobEntry = await loadOriginalImageBlobEntry(item.itemUuid);
+
+    if (blobEntry?.blob instanceof Blob) {
+      return {
+        src: "",
+        mimeType: blobEntry.mimeType ?? "",
+        width: Math.max(0, Math.round(Number(blobEntry.width) || 0)),
+        height: Math.max(0, Math.round(Number(blobEntry.height) || 0)),
+        fileSize: Math.max(0, Math.round(Number(blobEntry.fileSize) || 0)),
+        originalFilename: typeof blobEntry.originalFilename === "string" ? blobEntry.originalFilename.trim() : "",
+        blob: blobEntry.blob
+      };
+    }
+  }
+
+  return null;
 }
 
 export async function loadItems() {
