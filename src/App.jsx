@@ -301,6 +301,18 @@ function isSafeModeEnabled() {
   }
 }
 
+function isRecoverNormalEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return new URLSearchParams(window.location.search).get("recoverNormal") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function createLibraryPerfSession(enabled) {
   if (!enabled || typeof performance === "undefined") {
     return null;
@@ -3250,6 +3262,7 @@ export default function App() {
 
 function MainApp() {
   const safeMode = isSafeModeEnabled();
+  const recoverNormal = isRecoverNormalEnabled();
   const editorRef = useRef(null);
   const importBackupRef = useRef(null);
   const outfitStageRef = useRef(null);
@@ -4815,7 +4828,7 @@ function MainApp() {
     let cancelled = false;
 
     async function updateOutfitPalette() {
-      if (safeMode) {
+      if (safeMode || recoverNormal) {
         setOutfitPalette([]);
         return;
       }
@@ -4849,7 +4862,7 @@ function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [currentBoardItems, safeMode]);
+  }, [currentBoardItems, recoverNormal, safeMode]);
 
   useEffect(() => {
     if (!board) {
@@ -4860,13 +4873,13 @@ function MainApp() {
   }, [board]);
 
   useEffect(() => {
-    if (safeMode || !pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
+    if (safeMode || recoverNormal || !pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
       return;
     }
 
     pendingRestoredBoardFitRef.current = false;
     setBoardView(getFittedBoardView(board));
-  }, [board, loading, safeMode]);
+  }, [board, loading, recoverNormal, safeMode]);
 
   useEffect(() => {
     setImageCountDraft(String(imageCount));
@@ -4880,7 +4893,7 @@ function MainApp() {
       const defaultState = appStateOverride ?? defaultData.appState;
       const normalizedPanelLayoutState = normalizePanelLayoutState(defaultState.panelLayoutState, getViewportWidth());
       const normalizedItems = sourceItems.length ? sourceItems : defaultData.items.map(normalizeItem);
-      const generatedBoard = safeMode
+      const generatedBoard = safeMode || recoverNormal
         ? null
         : buildGeneratedBoard(normalizedItems, {
             imageCount: normalizeImageCount(defaultState.imageCount),
@@ -4900,8 +4913,8 @@ function MainApp() {
       setExcluded(defaultState.excluded ?? {});
       setBoard(generatedBoard?.board ?? null);
       setImageCount(resolvePersistedImageCount(defaultState.imageCount));
-      setOutfit(generatedBoard?.syntheticOutfit ?? defaultState.outfit ?? {});
-      setBoardView(generatedBoard?.board && !safeMode ? getFittedBoardView(generatedBoard.board) : { x: 0, y: 0, zoom: 1 });
+      setOutfit(recoverNormal ? {} : (generatedBoard?.syntheticOutfit ?? defaultState.outfit ?? {}));
+      setBoardView(generatedBoard?.board && !safeMode && !recoverNormal ? getFittedBoardView(generatedBoard.board) : { x: 0, y: 0, zoom: 1 });
       setGuidedDebugPayload([]);
       setIgnoredImportImages(defaultState.ignoredImportImages ?? []);
       setSavedOutfits([]);
@@ -4918,14 +4931,22 @@ function MainApp() {
       setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
       setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
       const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
-      setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
+      setActivePanel(recoverNormal ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
       setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-      setWardrobeSavedOpen(normalizedLibraryUiState.wardrobeSavedOpen);
+      setWardrobeSavedOpen(recoverNormal ? false : normalizedLibraryUiState.wardrobeSavedOpen);
       setOutfitFilters(normalizeOutfitFilters(defaultState.outfitFilters));
       setWeatherSettings(normalizeWeatherSettings(defaultState.weatherSettings));
       setWeatherLocationDraft(defaultState.weatherSettings?.locationName ?? "");
       setWeatherData(defaultState.weatherData ?? null);
       setFitpics(defaultState.fitpics ?? []);
+      setReferencePreview(null);
+      setSelectionEditorActive(false);
+      setSelectedReferenceSelection({
+        ids: {},
+        anchorId: null
+      });
+      setEditingId(null);
+      setEditorReturnTarget(null);
     }
 
     async function bootstrap() {
@@ -4941,7 +4962,7 @@ function MainApp() {
             includeWeightMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
             includeTagMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
             includeStyleWeightMappingMigration: true,
-            disableAutoMigrations: safeMode
+            disableAutoMigrations: safeMode || recoverNormal
           }
         );
         fallbackItems = effectiveItems;
@@ -4968,12 +4989,14 @@ function MainApp() {
           setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
           setLocked(storedAppState.locked ?? {});
           setExcluded(storedAppState.excluded ?? {});
-          const restoredBoard = resolveBoardFromAppState(
-            storedAppState,
-            effectiveItems,
-            getBoardRepositoryDependencies()
-          );
-          const nextBoard = !safeMode && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
+          const restoredBoard = recoverNormal
+            ? null
+            : resolveBoardFromAppState(
+                storedAppState,
+                effectiveItems,
+                getBoardRepositoryDependencies()
+              );
+          const nextBoard = !safeMode && !recoverNormal && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
             ? buildGeneratedBoard(effectiveItems, {
                 imageCount: resolvedImageCount,
                 metadataFilters: normalizedMetadataFilters,
@@ -4986,11 +5009,11 @@ function MainApp() {
                 recentOutfits: normalizedRecentOutfits
               }).board
             : restoredBoard;
-          pendingRestoredBoardFitRef.current = !safeMode && Boolean(nextBoard?.images?.length);
+          pendingRestoredBoardFitRef.current = !safeMode && !recoverNormal && Boolean(nextBoard?.images?.length);
           setBoard(nextBoard);
           setImageCount(resolvedImageCount);
-          setOutfit(boardToSyntheticOutfit(nextBoard));
-          setBoardView(nextBoard && !safeMode ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+          setOutfit(recoverNormal ? {} : boardToSyntheticOutfit(nextBoard));
+          setBoardView(nextBoard && !safeMode && !recoverNormal ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
           setGuidedDebugPayload([]);
           setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
           const hydratedSavedBoards = hydrateSavedBoards(
@@ -5011,27 +5034,31 @@ function MainApp() {
           setWardrobeSort(normalizedWardrobeSort);
           setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
           setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
-          setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
+          setActivePanel(recoverNormal ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
           setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-          setWardrobeSavedOpen(normalizedLibraryUiState.wardrobeSavedOpen);
+          setWardrobeSavedOpen(recoverNormal ? false : normalizedLibraryUiState.wardrobeSavedOpen);
           setOutfitFilters(normalizedOutfitFilters);
           setWeatherSettings(normalizeWeatherSettings(storedAppState.weatherSettings));
           setWeatherLocationDraft(storedAppState.weatherSettings?.locationName ?? "");
           setWeatherData(storedAppState.weatherData ?? null);
           setFitpics(storedAppState.fitpics ?? []);
 
-          try {
-            await backfillLocalSyncMetadata(effectiveItems, hydratedSavedBoards);
-          } catch (syncMetadataError) {
-            console.error("Failed to initialize local sync metadata.", syncMetadataError);
+          if (!recoverNormal) {
+            try {
+              await backfillLocalSyncMetadata(effectiveItems, hydratedSavedBoards);
+            } catch (syncMetadataError) {
+              console.error("Failed to initialize local sync metadata.", syncMetadataError);
+            }
           }
         } else {
           applyDefaultBootstrapState(effectiveItems);
 
-          try {
-            await backfillLocalSyncMetadata(effectiveItems, []);
-          } catch (syncMetadataError) {
-            console.error("Failed to initialize local sync metadata.", syncMetadataError);
+          if (!recoverNormal) {
+            try {
+              await backfillLocalSyncMetadata(effectiveItems, []);
+            } catch (syncMetadataError) {
+              console.error("Failed to initialize local sync metadata.", syncMetadataError);
+            }
           }
         }
       } catch (error) {
@@ -5062,7 +5089,7 @@ function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [safeMode]);
+  }, [recoverNormal, safeMode]);
 
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
 
@@ -5162,14 +5189,18 @@ function MainApp() {
   }, [currentPersistedAppState]);
 
   useEffect(() => {
+    if (recoverNormal) {
+      return;
+    }
+
     if (!loading && !persistenceReady && pendingPersistenceReadyRef.current) {
       pendingPersistenceReadyRef.current = false;
       setPersistenceReady(true);
     }
-  }, [loading, persistenceReady]);
+  }, [loading, persistenceReady, recoverNormal]);
 
   useEffect(() => {
-    if (loading || !persistenceReady) {
+    if (recoverNormal || loading || !persistenceReady) {
       return;
     }
 
@@ -5240,7 +5271,7 @@ function MainApp() {
         runSave();
       }, 120);
     }
-  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, sideEditorWidth, libraryAddWidth, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady]);
+  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, sideEditorWidth, libraryAddWidth, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady, recoverNormal]);
 
   useEffect(() => () => {
     if (saveAppStateTimeoutRef.current) {
@@ -5255,7 +5286,7 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
-    if (loading || !persistenceReady) {
+    if (recoverNormal || loading || !persistenceReady) {
       return undefined;
     }
 
@@ -5280,7 +5311,7 @@ function MainApp() {
       window.removeEventListener("pagehide", flushAppState);
       document.removeEventListener("visibilitychange", flushOnHide);
     };
-  }, [loading, persistenceReady]);
+  }, [loading, persistenceReady, recoverNormal]);
 
   useEffect(() => {
     if (loading || !persistenceReady) {
@@ -5835,7 +5866,7 @@ function MainApp() {
   async function applyLoadedData(nextItems, nextAppState) {
     const { items: effectiveItems } = await prepareLoadedItems(nextItems, nextAppState, getItemRepositoryDependencies(), {
       includeImageAssetMigration: true,
-      disableAutoMigrations: safeMode
+      disableAutoMigrations: safeMode || recoverNormal
     });
 
     setItems(effectiveItems);
@@ -5854,8 +5885,10 @@ function MainApp() {
     const normalizedOutfitFilters = normalizeOutfitFilters(nextAppState?.outfitFilters);
     const normalizedOutfitAffinity = normalizeOutfitAffinity(nextAppState?.outfitAffinity);
     const normalizedRecentOutfits = normalizeRecentOutfits(nextAppState?.recentOutfits);
-    const restoredBoard = resolveBoardFromAppState(nextAppState, effectiveItems, getBoardRepositoryDependencies());
-    const nextBoard = !safeMode && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
+    const restoredBoard = recoverNormal
+      ? null
+      : resolveBoardFromAppState(nextAppState, effectiveItems, getBoardRepositoryDependencies());
+    const nextBoard = !safeMode && !recoverNormal && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
       ? buildGeneratedBoard(effectiveItems, {
           imageCount: resolvedImageCount,
           metadataFilters: normalizedMetadataFilters,
@@ -5868,11 +5901,11 @@ function MainApp() {
           recentOutfits: normalizedRecentOutfits
         }).board
       : restoredBoard;
-    pendingRestoredBoardFitRef.current = !safeMode && Boolean(nextBoard?.images?.length);
+    pendingRestoredBoardFitRef.current = !safeMode && !recoverNormal && Boolean(nextBoard?.images?.length);
     setBoard(nextBoard);
     setImageCount(resolvedImageCount);
-    setOutfit(boardToSyntheticOutfit(nextBoard));
-    setBoardView(nextBoard && !safeMode ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+    setOutfit(recoverNormal ? {} : boardToSyntheticOutfit(nextBoard));
+    setBoardView(nextBoard && !safeMode && !recoverNormal ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
     setGuidedDebugPayload([]);
     setIgnoredImportImages(nextAppState?.ignoredImportImages ?? []);
     setSavedOutfits(hydrateSavedBoards(nextAppState?.savedOutfits, effectiveItems, getBoardRepositoryDependencies()));
@@ -5895,9 +5928,9 @@ function MainApp() {
     setEditingId(null);
     setEditorReturnTarget(null);
     setDraft(emptyForm);
-    setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
+    setActivePanel(recoverNormal ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
     setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-    setWardrobeSavedOpen(normalizedLibraryUiState.wardrobeSavedOpen);
+    setWardrobeSavedOpen(recoverNormal ? false : normalizedLibraryUiState.wardrobeSavedOpen);
     setControlsOpen(true);
     setActiveBoardImageId(null);
     setPickerBoardImageId(null);
@@ -5905,6 +5938,12 @@ function MainApp() {
     setActiveOutfitSlot(null);
     setPickerAnchorSlot(null);
     setFitpicPreview(null);
+    setReferencePreview(null);
+    setSelectionEditorActive(false);
+    setSelectedReferenceSelection({
+      ids: {},
+      anchorId: null
+    });
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
@@ -8397,6 +8436,14 @@ function MainApp() {
   }
 
   function renderSavedOutfitPreview(savedOutfit) {
+    if (recoverNormal) {
+      return (
+        <div className="saved-preview saved-preview-board saved-preview-recover-placeholder" aria-hidden="true">
+          <span>Preview hidden during recovery boot</span>
+        </div>
+      );
+    }
+
     const previewBoard = savedOutfit.board;
 
     if (!previewBoard?.images?.length) {
@@ -9288,13 +9335,13 @@ function MainApp() {
           >
             Zoom out
           </button>
-          <button
-            type="button"
-            className="ghost-button"
-            onClick={() => setBoardView(board ? getFittedBoardView(board) : { x: 0, y: 0, zoom: 1 })}
-          >
-            Reset view
-          </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setBoardView(board && !recoverNormal ? getFittedBoardView(board) : { x: 0, y: 0, zoom: 1 })}
+              >
+                Reset view
+              </button>
           <span className="board-canvas-zoom-readout">{Math.round(boardView.zoom * 100)}%</span>
           {showBoardGenerationBusy ? <span className="board-canvas-generation-status">Generating...</span> : null}
         </div>
@@ -9983,6 +10030,12 @@ function MainApp() {
         <div className="safe-mode-banner" role="status" aria-live="polite">
           <strong>Safe Mode</strong>
           <span>Image rendering is disabled. You can export a backup, inspect metadata, select references, and delete them without clearing IndexedDB.</span>
+        </div>
+      ) : null}
+      {recoverNormal ? (
+        <div className="safe-mode-banner recover-normal-banner" role="status" aria-live="polite">
+          <strong>Recovery Boot</strong>
+          <span>Normal UI loaded with library collapsed, board restore disabled, palette extraction disabled, and automatic persistence suspended for this session.</span>
         </div>
       ) : null}
       <section className="content-grid">

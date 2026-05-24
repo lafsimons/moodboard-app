@@ -108,6 +108,11 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+.recover-normal-banner {
+  border-color: #58739a;
+  background: rgba(227, 238, 252, 0.96);
+}
+
 .safe-mode-recovery-shell {
   min-height: 100vh;
   padding: 20px;
