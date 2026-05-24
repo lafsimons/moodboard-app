@@ -366,8 +366,47 @@ async function openDatabase() {
   return openDatabaseByName(INDEXED_DB_NAME);
 }
 
+async function openDatabaseWithoutMigration() {
+  return openDatabaseByName(INDEXED_DB_NAME);
+}
+
 async function withStore(storeName, mode, run) {
   const db = await openDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, mode);
+    const store = transaction.objectStore(storeName);
+
+    let resultPromise;
+
+    try {
+      const result = run(store);
+      const isIdbRequest = typeof IDBRequest !== "undefined" && result instanceof IDBRequest;
+      resultPromise = isIdbRequest ? requestToPromise(result) : Promise.resolve(result);
+    } catch (error) {
+      reject(error);
+      db.close();
+      return;
+    }
+
+    transaction.oncomplete = () => {
+      resultPromise
+        .then(resolve)
+        .catch(reject)
+        .finally(() => {
+          db.close();
+        });
+    };
+
+    transaction.onerror = () => {
+      reject(transaction.error);
+      db.close();
+    };
+  });
+}
+
+async function withStoreWithoutMigration(storeName, mode, run) {
+  const db = await openDatabaseWithoutMigration();
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
@@ -430,6 +469,188 @@ async function withStores(storeNames, mode, run) {
       reject(transaction.error);
       db.close();
     };
+  });
+}
+
+function normalizeSafeModeText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeSafeModeNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
+}
+
+function normalizeSafeModeTimestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.round(value);
+  }
+
+  if (typeof value === "string") {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      return 0;
+    }
+
+    const numericValue = Number(trimmedValue);
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      return Math.round(numericValue);
+    }
+
+    const parsedDate = Date.parse(trimmedValue);
+    return Number.isFinite(parsedDate) ? parsedDate : 0;
+  }
+
+  return 0;
+}
+
+function normalizeSafeModeTags(value) {
+  return Array.isArray(value)
+    ? value
+        .map((tag) => normalizeSafeModeText(tag))
+        .filter(Boolean)
+    : [];
+}
+
+function createSafeModeItemMetadata(record, excludedById = {}) {
+  const id = normalizeSafeModeText(record?.id);
+
+  return {
+    id,
+    name: normalizeSafeModeText(record?.name || record?.title),
+    tags: normalizeSafeModeTags(record?.tags),
+    favorite: Boolean(record?.favorite),
+    excluded: Boolean(id && excludedById[id]),
+    originalFilename: normalizeSafeModeText(record?.originalFilename),
+    importedAt: normalizeSafeModeTimestamp(record?.importedAt),
+    createdAt: normalizeSafeModeTimestamp(record?.createdAt),
+    updatedAt: normalizeSafeModeTimestamp(record?.updatedAt),
+    fileSize: normalizeSafeModeNumber(record?.fileSize),
+    mimeType: normalizeSafeModeText(record?.mimeType),
+    imageWidth: normalizeSafeModeNumber(record?.imageWidth),
+    imageHeight: normalizeSafeModeNumber(record?.imageHeight)
+  };
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 0);
+  });
+}
+
+async function readSafeModeItemMetadataBatch(startAfterKey = undefined, batchSize = 50, excludedById = {}) {
+  const db = await openDatabaseWithoutMigration();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(ITEM_STORE, "readonly");
+    const store = transaction.objectStore(ITEM_STORE);
+    const keyRange =
+      startAfterKey === undefined ? undefined : IDBKeyRange.lowerBound(startAfterKey, true);
+    const request = store.openCursor(keyRange);
+    const batch = [];
+    let lastKey = startAfterKey;
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+
+      if (!cursor) {
+        resolve({
+          items: batch,
+          lastKey,
+          hasMore: false
+        });
+        db.close();
+        return;
+      }
+
+      lastKey = cursor.primaryKey;
+      batch.push(createSafeModeItemMetadata(cursor.value, excludedById));
+
+      if (batch.length >= batchSize) {
+        resolve({
+          items: batch,
+          lastKey,
+          hasMore: true
+        });
+        db.close();
+        return;
+      }
+
+      cursor.continue();
+    };
+
+    request.onerror = () => {
+      reject(request.error);
+      db.close();
+    };
+
+    transaction.onerror = () => {
+      reject(transaction.error);
+      db.close();
+    };
+  });
+}
+
+export async function loadSafeModeItemMetadata({
+  batchSize = 50,
+  excludedById = {},
+  onBatch = null
+} = {}) {
+  const normalizedBatchSize = Math.max(1, Math.round(Number(batchSize) || 50));
+  const items = [];
+  let lastKey;
+  let hasMore = true;
+
+  while (hasMore) {
+    const batchResult = await readSafeModeItemMetadataBatch(lastKey, normalizedBatchSize, excludedById);
+    const batchItems = batchResult.items.filter((item) => item.id);
+
+    items.push(...batchItems);
+    lastKey = batchResult.lastKey;
+    hasMore = batchResult.hasMore;
+
+    if (batchItems.length) {
+      await Promise.resolve(
+        onBatch?.({
+          items: batchItems,
+          loaded: items.length,
+          hasMore
+        })
+      );
+    }
+
+    if (hasMore) {
+      await yieldToBrowser();
+    }
+  }
+
+  return items;
+}
+
+export async function loadSafeModeAppState() {
+  const entry = await withStoreWithoutMigration(APP_STORE, "readonly", (store) => store.get("state"));
+  return entry?.value ?? null;
+}
+
+export async function saveSafeModeAppState(value) {
+  await withStoreWithoutMigration(APP_STORE, "readwrite", (store) =>
+    store.put({
+      key: "state",
+      value
+    })
+  );
+}
+
+export async function deleteSafeModeItems(ids = []) {
+  const normalizedIds = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))];
+
+  if (!normalizedIds.length) {
+    return;
+  }
+
+  await withStoreWithoutMigration(ITEM_STORE, "readwrite", (store) => {
+    normalizedIds.forEach((id) => store.delete(id));
   });
 }
 

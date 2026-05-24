@@ -88,6 +88,7 @@ import {
 import { normalizeItemSourceIdentity } from "./lib/itemIdentity";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
 import TagInput from "./components/TagInput";
+import SafeModeRecovery from "./components/SafeModeRecovery";
 import {
   getAllTags,
   migrateReferenceMetadataToTags,
@@ -3244,6 +3245,10 @@ async function fetchWeatherForSavedLocation(settings) {
 }
 
 export default function App() {
+  return isSafeModeEnabled() ? <SafeModeRecovery /> : <MainApp />;
+}
+
+function MainApp() {
   const safeMode = isSafeModeEnabled();
   const editorRef = useRef(null);
   const importBackupRef = useRef(null);
