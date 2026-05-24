@@ -60,14 +60,20 @@ function getMigrationPredicate(originalItem, normalizedItem, options, dependenci
 
 export async function prepareLoadedItems(items, appState, dependencies, options = {}) {
   const normalizedItems = Array.isArray(items) ? items : [];
-  const migrationState = getMigrationState(appState, dependencies);
   const normalizedOptions = {
     includeWeightMigration: true,
     includeTagMigration: true,
     includeImageAssetMigration: false,
     includeStyleWeightMappingMigration: false,
+    disableAutoMigrations: false,
     ...options
   };
+  const migrationState = normalizedOptions.disableAutoMigrations
+    ? {
+        shouldApplyStyleWeightMigration: false,
+        shouldApplyImagePresentationMigration: false
+      }
+    : getMigrationState(appState, dependencies);
 
   const itemsAfterNormalization = normalizedItems
     .map(dependencies.normalizeItem)
@@ -85,7 +91,7 @@ export async function prepareLoadedItems(items, appState, dependencies, options 
     getMigrationPredicate(normalizedItems[index], item, normalizedOptions, dependencies, migrationState)
   );
 
-  if (migratedItems.length) {
+  if (migratedItems.length && !normalizedOptions.disableAutoMigrations) {
     await saveItems(migratedItems);
   }
 

@@ -288,6 +288,18 @@ function isLibraryPerfDebugEnabled() {
   }
 }
 
+function isSafeModeEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return new URLSearchParams(window.location.search).get("safeMode") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function createLibraryPerfSession(enabled) {
   if (!enabled || typeof performance === "undefined") {
     return null;
@@ -1003,6 +1015,7 @@ function getStoredImageMetrics(item) {
 }
 
 function useImageMetrics(imageUrl, initialMetrics = null) {
+  const safeModeEnabled = isSafeModeEnabled();
   const imageUrlCandidates = useMemo(
     () => resolveImageUrlCandidates(imageUrl),
     [imageUrl]
@@ -1013,6 +1026,17 @@ function useImageMetrics(imageUrl, initialMetrics = null) {
   useEffect(() => {
     if (!imageUrlCandidates.length) {
       setMetrics(null);
+      return undefined;
+    }
+
+    if (safeModeEnabled) {
+      const fallbackMetrics = {
+        ...(initialMetrics ?? {}),
+        naturalWidth: Math.max(initialMetrics?.naturalWidth ?? 1, 1),
+        naturalHeight: Math.max(initialMetrics?.naturalHeight ?? 1, 1),
+        resolvedSrc: imageUrlCandidates[0] ?? ""
+      };
+      setMetrics(fallbackMetrics);
       return undefined;
     }
 
@@ -1075,7 +1099,7 @@ function useImageMetrics(imageUrl, initialMetrics = null) {
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, imageUrlCandidates, initialMetrics]);
+  }, [cacheKey, imageUrlCandidates, initialMetrics, safeModeEnabled]);
 
   return metrics ?? { naturalWidth: 1, naturalHeight: 1, resolvedSrc: imageUrlCandidates[0] ?? "" };
 }
@@ -1184,6 +1208,7 @@ const ManagedItemImage = memo(function ManagedItemImage({
   loadingStrategy = "lazy",
   decodingStrategy = "async"
 }) {
+  const safeModeEnabled = isSafeModeEnabled();
   const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, variant));
   const seedMetrics = useMemo(() => getStoredImageMetrics(item), [item]);
   const metrics = useImageMetrics(resolvedImageUrl, seedMetrics);
@@ -1203,6 +1228,18 @@ const ManagedItemImage = memo(function ManagedItemImage({
   useEffect(() => {
     setIsLoaded(Boolean(seedMetrics) || Boolean(metrics?.resolvedSrc));
   }, [displayImageUrl, metrics?.resolvedSrc, seedMetrics]);
+
+  if (safeModeEnabled) {
+    return (
+      <span
+        ref={frameRef}
+        className={`managed-image managed-image-placeholder ${className}`.trim()}
+        data-item-id={dataItemId || item?.id || ""}
+      >
+        <span className="managed-image-placeholder-label">{buildDisplayName(item) || "Reference"}</span>
+      </span>
+    );
+  }
 
   if (!displayImageUrl) {
     return null;
@@ -1259,6 +1296,7 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   onCloseSelect,
   onMetrics
 }) {
+  const safeModeEnabled = isSafeModeEnabled();
   const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, "preview"));
   const seedMetrics = useMemo(() => getStoredImageMetrics(item), [item]);
   const metrics = useImageMetrics(resolvedImageUrl, seedMetrics);
@@ -1330,14 +1368,21 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
           className={`board-image-visual ${isActive ? "is-active" : ""}`}
           style={imageVisualStyle}
         >
-          <ManagedItemImage
-            item={item}
-            alt={item.name}
-            className="board-image-managed"
-            dataItemId={item.id}
-            useCrop
-            usePresentation
-          />
+          {safeModeEnabled ? (
+            <div className="board-image-safe-card" aria-hidden="true">
+              <span className="board-image-safe-name">{buildDisplayName(item)}</span>
+              <span className="board-image-safe-meta">{uniqueTags(item?.tags).slice(0, 2).map(getLeafTagLabel).join(" · ") || "Image hidden in Safe Mode"}</span>
+            </div>
+          ) : (
+            <ManagedItemImage
+              item={item}
+              alt={item.name}
+              className="board-image-managed"
+              dataItemId={item.id}
+              useCrop
+              usePresentation
+            />
+          )}
         </span>
       </button>
       <div className="board-image-actions">
@@ -3199,6 +3244,7 @@ async function fetchWeatherForSavedLocation(settings) {
 }
 
 export default function App() {
+  const safeMode = isSafeModeEnabled();
   const editorRef = useRef(null);
   const importBackupRef = useRef(null);
   const outfitStageRef = useRef(null);
@@ -4764,6 +4810,11 @@ export default function App() {
     let cancelled = false;
 
     async function updateOutfitPalette() {
+      if (safeMode) {
+        setOutfitPalette([]);
+        return;
+      }
+
       if (!currentBoardItems.length) {
         setOutfitPalette([]);
         return;
@@ -4793,7 +4844,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentBoardItems]);
+  }, [currentBoardItems, safeMode]);
 
   useEffect(() => {
     if (!board) {
@@ -4804,13 +4855,13 @@ export default function App() {
   }, [board]);
 
   useEffect(() => {
-    if (!pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
+    if (safeMode || !pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
       return;
     }
 
     pendingRestoredBoardFitRef.current = false;
     setBoardView(getFittedBoardView(board));
-  }, [board, loading]);
+  }, [board, loading, safeMode]);
 
   useEffect(() => {
     setImageCountDraft(String(imageCount));
@@ -4824,15 +4875,17 @@ export default function App() {
       const defaultState = appStateOverride ?? defaultData.appState;
       const normalizedPanelLayoutState = normalizePanelLayoutState(defaultState.panelLayoutState, getViewportWidth());
       const normalizedItems = sourceItems.length ? sourceItems : defaultData.items.map(normalizeItem);
-      const generatedBoard = buildGeneratedBoard(normalizedItems, {
-        imageCount: normalizeImageCount(defaultState.imageCount),
-        excluded: {},
-        generationLists: defaultGenerationLists,
-        outfitFilters: emptyOutfitFilters,
-        generationMode: defaultGenerationMode,
-        outfitAffinity: normalizeOutfitAffinity(defaultState.outfitAffinity),
-        recentOutfits: normalizeRecentOutfits(defaultState.recentOutfits)
-      });
+      const generatedBoard = safeMode
+        ? null
+        : buildGeneratedBoard(normalizedItems, {
+            imageCount: normalizeImageCount(defaultState.imageCount),
+            excluded: {},
+            generationLists: defaultGenerationLists,
+            outfitFilters: emptyOutfitFilters,
+            generationMode: defaultGenerationMode,
+            outfitAffinity: normalizeOutfitAffinity(defaultState.outfitAffinity),
+            recentOutfits: normalizeRecentOutfits(defaultState.recentOutfits)
+          });
 
       pendingRestoredBoardFitRef.current = false;
       setItems(normalizedItems);
@@ -4840,10 +4893,10 @@ export default function App() {
       setAccessoriesEnabled(defaultState.accessoriesEnabled ?? true);
       setLocked(defaultState.locked ?? {});
       setExcluded(defaultState.excluded ?? {});
-      setBoard(generatedBoard.board);
+      setBoard(generatedBoard?.board ?? null);
       setImageCount(resolvePersistedImageCount(defaultState.imageCount));
-      setOutfit(generatedBoard.syntheticOutfit);
-      setBoardView(getFittedBoardView(generatedBoard.board));
+      setOutfit(generatedBoard?.syntheticOutfit ?? defaultState.outfit ?? {});
+      setBoardView(generatedBoard?.board && !safeMode ? getFittedBoardView(generatedBoard.board) : { x: 0, y: 0, zoom: 1 });
       setGuidedDebugPayload([]);
       setIgnoredImportImages(defaultState.ignoredImportImages ?? []);
       setSavedOutfits([]);
@@ -4882,7 +4935,8 @@ export default function App() {
           {
             includeWeightMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
             includeTagMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
-            includeStyleWeightMappingMigration: true
+            includeStyleWeightMappingMigration: true,
+            disableAutoMigrations: safeMode
           }
         );
         fallbackItems = effectiveItems;
@@ -4914,7 +4968,7 @@ export default function App() {
             effectiveItems,
             getBoardRepositoryDependencies()
           );
-          const nextBoard = shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
+          const nextBoard = !safeMode && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
             ? buildGeneratedBoard(effectiveItems, {
                 imageCount: resolvedImageCount,
                 metadataFilters: normalizedMetadataFilters,
@@ -4927,11 +4981,11 @@ export default function App() {
                 recentOutfits: normalizedRecentOutfits
               }).board
             : restoredBoard;
-          pendingRestoredBoardFitRef.current = Boolean(nextBoard?.images?.length);
+          pendingRestoredBoardFitRef.current = !safeMode && Boolean(nextBoard?.images?.length);
           setBoard(nextBoard);
           setImageCount(resolvedImageCount);
           setOutfit(boardToSyntheticOutfit(nextBoard));
-          setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+          setBoardView(nextBoard && !safeMode ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
           setGuidedDebugPayload([]);
           setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
           const hydratedSavedBoards = hydrateSavedBoards(
@@ -4983,10 +5037,12 @@ export default function App() {
         console.error("Failed to restore library state. Falling back to defaults.", error);
         applyDefaultBootstrapState(fallbackItems);
 
-        try {
-          await resetToDefaults();
-        } catch (resetError) {
-          console.error("Failed to reset persisted library state after bootstrap error.", resetError);
+        if (!safeMode) {
+          try {
+            await resetToDefaults();
+          } catch (resetError) {
+            console.error("Failed to reset persisted library state after bootstrap error.", resetError);
+          }
         }
       }
 
@@ -5001,7 +5057,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [safeMode]);
 
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
 
@@ -5773,7 +5829,8 @@ export default function App() {
 
   async function applyLoadedData(nextItems, nextAppState) {
     const { items: effectiveItems } = await prepareLoadedItems(nextItems, nextAppState, getItemRepositoryDependencies(), {
-      includeImageAssetMigration: true
+      includeImageAssetMigration: true,
+      disableAutoMigrations: safeMode
     });
 
     setItems(effectiveItems);
@@ -5793,7 +5850,7 @@ export default function App() {
     const normalizedOutfitAffinity = normalizeOutfitAffinity(nextAppState?.outfitAffinity);
     const normalizedRecentOutfits = normalizeRecentOutfits(nextAppState?.recentOutfits);
     const restoredBoard = resolveBoardFromAppState(nextAppState, effectiveItems, getBoardRepositoryDependencies());
-    const nextBoard = shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
+    const nextBoard = !safeMode && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
       ? buildGeneratedBoard(effectiveItems, {
           imageCount: resolvedImageCount,
           metadataFilters: normalizedMetadataFilters,
@@ -5806,11 +5863,11 @@ export default function App() {
           recentOutfits: normalizedRecentOutfits
         }).board
       : restoredBoard;
-    pendingRestoredBoardFitRef.current = Boolean(nextBoard?.images?.length);
+    pendingRestoredBoardFitRef.current = !safeMode && Boolean(nextBoard?.images?.length);
     setBoard(nextBoard);
     setImageCount(resolvedImageCount);
     setOutfit(boardToSyntheticOutfit(nextBoard));
-    setBoardView(nextBoard ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+    setBoardView(nextBoard && !safeMode ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
     setGuidedDebugPayload([]);
     setIgnoredImportImages(nextAppState?.ignoredImportImages ?? []);
     setSavedOutfits(hydrateSavedBoards(nextAppState?.savedOutfits, effectiveItems, getBoardRepositoryDependencies()));
@@ -5928,6 +5985,11 @@ export default function App() {
   }
 
   async function handleExportOutfitImage() {
+    if (safeMode) {
+      window.alert("Moodboard image export is disabled in Safe Mode.");
+      return;
+    }
+
     if (!board?.images?.length) {
       return;
     }
@@ -6032,6 +6094,11 @@ export default function App() {
   }
 
   async function handleExportWardrobeImage() {
+    if (safeMode) {
+      window.alert("Library image export is disabled in Safe Mode.");
+      return;
+    }
+
     const exportItems = visibleWardrobeItems.filter((item) => !excluded[item.id]);
 
     if (!exportItems.length) {
@@ -8353,7 +8420,13 @@ export default function App() {
                 zIndex: image.zIndex
               }}
             >
-              <ManagedItemImage item={item} alt="" dataItemId={item.id} />
+              {safeMode ? (
+                <span className="saved-preview-safe-card" aria-hidden="true">
+                  {buildDisplayName(item)}
+                </span>
+              ) : (
+                <ManagedItemImage item={item} alt="" dataItemId={item.id} />
+              )}
             </div>
           );
         })}
@@ -9251,7 +9324,7 @@ export default function App() {
             </div>
           ) : (
             <div className="board-canvas-empty">
-              <p>No board yet. Generate a board to start.</p>
+              <p>{safeMode ? "No restored board. Safe Mode does not auto-generate a new board." : "No board yet. Generate a board to start."}</p>
             </div>
           )}
         </div>
@@ -9677,7 +9750,7 @@ export default function App() {
               <input type="file" accept="image/*" multiple onChange={handleItemImageUpload} disabled={imageProcessing || itemImporting} />
             </label>
             {draftImageUrl ? (
-              <button type="button" className="editor-image-button" onClick={openCropEditor} disabled={imageProcessing || itemImporting}>
+              <button type="button" className="editor-image-button" onClick={openCropEditor} disabled={safeMode || imageProcessing || itemImporting}>
                 Crop
               </button>
             ) : null}
@@ -9685,7 +9758,7 @@ export default function App() {
               type="button"
               className="editor-image-button"
               onClick={removeDraftBackground}
-              disabled={!canRemoveDraftBackground || imageProcessing || itemImporting}
+              disabled={safeMode || !canRemoveDraftBackground || imageProcessing || itemImporting}
             >
               {imageProcessing ? "Removing..." : "Remove background"}
             </button>
@@ -9733,6 +9806,7 @@ export default function App() {
           ) : null}
         </div>
         {imageUploadError ? <p className="form-error">{imageUploadError}</p> : null}
+        {safeMode ? <p className="image-preservation-note">Image previews and image editing tools are disabled in Safe Mode.</p> : null}
       </div>
 
       <div className="editor-core-fields">
@@ -9900,6 +9974,12 @@ export default function App() {
           <div className="crop-editor-overlay">{cropEditorBody}</div>
         </>
       ) : null}
+      {safeMode ? (
+        <div className="safe-mode-banner" role="status" aria-live="polite">
+          <strong>Safe Mode</strong>
+          <span>Image rendering is disabled. You can export a backup, inspect metadata, select references, and delete them without clearing IndexedDB.</span>
+        </div>
+      ) : null}
       <section className="content-grid">
         <div className="current-outfit-panel">
           <div ref={outfitStageRef} className="outfit-stage">
@@ -10048,8 +10128,8 @@ export default function App() {
               >
                 {isCurrentOutfitSaved ? "Saved board" : "Save board"}
               </button>
-              <button type="button" className="ghost-button" onClick={handleExportOutfitImage}>
-                Export moodboard image
+              <button type="button" className="ghost-button" onClick={handleExportOutfitImage} disabled={safeMode}>
+                {safeMode ? "Moodboard export unavailable" : "Export moodboard image"}
               </button>
             </div>
 
@@ -10278,8 +10358,8 @@ export default function App() {
                           className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`}
                           aria-label="Library management"
                         >
-                          <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportWardrobeImage}>
-                            Export library image
+                          <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportWardrobeImage} disabled={safeMode}>
+                            {safeMode ? "Library image export unavailable" : "Export library image"}
                           </button>
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportBackup}>
                             Export backup
@@ -10938,14 +11018,22 @@ export default function App() {
                 );
               })()}
               <div className="reference-preview-stage">
-                <ManagedItemImage
-                  item={referencePreview}
-                  alt={buildDisplayName(referencePreview)}
-                  dataItemId={referencePreview.id}
-                  variant="original"
-                  useCrop
-                  usePresentation
-                />
+                {safeMode ? (
+                  <div className="reference-preview-safe-card">
+                    <strong>{buildDisplayName(referencePreview)}</strong>
+                    <span>{referencePreview.imageWidth && referencePreview.imageHeight ? `${referencePreview.imageWidth} × ${referencePreview.imageHeight}` : "Dimensions unavailable"}</span>
+                    <span>{referencePreview.originalFilename || referencePreview.mimeType || "Preview hidden in Safe Mode"}</span>
+                  </div>
+                ) : (
+                  <ManagedItemImage
+                    item={referencePreview}
+                    alt={buildDisplayName(referencePreview)}
+                    dataItemId={referencePreview.id}
+                    variant="original"
+                    useCrop
+                    usePresentation
+                  />
+                )}
               </div>
             </div>
           </div>

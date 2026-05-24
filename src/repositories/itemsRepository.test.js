@@ -241,3 +241,46 @@ test("prepareLoadedItems can persist import-time image asset migrations without 
   assert.equal(persistedItem.assetState, "fixed");
   assert.equal(persistedItem.mapped, undefined);
 });
+
+test("prepareLoadedItems disables automatic migrations when requested", async () => {
+  installFakeIndexedDb();
+  await saveItem({ id: "item-3", mapped: false });
+
+  let bakedCallCount = 0;
+
+  const result = await prepareLoadedItems(
+    [{ id: "item-3", mapped: false }],
+    {
+      itemDefaultsMigrationVersion: 0,
+      imagePresentationMigrationVersion: 0
+    },
+    createDependencies({
+      restoreLegacyBakedImageScale: (item) => ({ ...item, restored: true }),
+      applyMappedStyleWeightDefaults: (item) => ({ ...item, mapped: true }),
+      bakeItemImagePresentation: async (item) => {
+        bakedCallCount += 1;
+        return { ...item, baked: true };
+      },
+      itemNeedsImageFrameScaleMigration: () => true
+    }),
+    {
+      disableAutoMigrations: true,
+      includeStyleWeightMappingMigration: true,
+      includeImageAssetMigration: true
+    }
+  );
+
+  assert.deepEqual(result.items[0], {
+    id: "item-3",
+    mapped: false,
+    normalized: true
+  });
+  assert.equal(result.migratedItems.length, 1);
+  assert.equal(bakedCallCount, 0);
+
+  const [persistedItem] = await loadItems();
+  assert.equal(persistedItem.id, "item-3");
+  assert.equal(persistedItem.mapped, false);
+  assert.equal(persistedItem.baked, undefined);
+  assert.equal(persistedItem.restored, undefined);
+});
