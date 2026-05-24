@@ -329,6 +329,18 @@ function isStartupDebugEnabled() {
   }
 }
 
+function hasUrlFlag(name) {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return new URLSearchParams(window.location.search).get(name) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function getStartupDebugMemory() {
   if (typeof performance === "undefined" || !performance.memory) {
     return null;
@@ -354,6 +366,20 @@ function logStartupDebug(enabled, label, items = [], extra = {}) {
     memory: getStartupDebugMemory(),
     ...extra
   });
+}
+
+function getStartupBehaviorFlags() {
+  return {
+    noBoardRestore: hasUrlFlag("noBoardRestore"),
+    noSavedBoardPreviews: hasUrlFlag("noSavedBoardPreviews"),
+    noAutoGenerate: hasUrlFlag("noAutoGenerate"),
+    noAutoFit: hasUrlFlag("noAutoFit"),
+    noPalette: hasUrlFlag("noPalette"),
+    noImageMigration: hasUrlFlag("noImageMigration"),
+    noSyncBackfill: hasUrlFlag("noSyncBackfill"),
+    startLibraryClosed: hasUrlFlag("startLibraryClosed"),
+    noInitialMedia: hasUrlFlag("noInitialMedia")
+  };
 }
 
 function createLibraryPerfSession(enabled) {
@@ -1162,13 +1188,23 @@ function useImageMetrics(imageUrl, initialMetrics = null) {
 
 function useDeferredItemMedia(item, variant = "preview") {
   const immediateSrc = getManagedItemImageSrc(item, variant);
+  const startupFlags = useMemo(() => getStartupBehaviorFlags(), []);
   const [resolvedMedia, setResolvedMedia] = useState(() => ({
-    src: immediateSrc,
+    src: startupFlags.noInitialMedia ? "" : immediateSrc,
     width: 0,
     height: 0
   }));
 
   useEffect(() => {
+    if (startupFlags.noInitialMedia) {
+      setResolvedMedia({
+        src: "",
+        width: 0,
+        height: 0
+      });
+      return undefined;
+    }
+
     if (immediateSrc) {
       setResolvedMedia({
         src: immediateSrc,
@@ -1230,7 +1266,7 @@ function useDeferredItemMedia(item, variant = "preview") {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [immediateSrc, item?.id, variant]);
+  }, [immediateSrc, item?.id, startupFlags.noInitialMedia, variant]);
 
   return resolvedMedia;
 }
@@ -3404,6 +3440,18 @@ function MainApp() {
   const safeMode = isSafeModeEnabled();
   const recoverNormal = isRecoverNormalEnabled();
   const debugStartup = isStartupDebugEnabled();
+  const startupFlags = useMemo(() => getStartupBehaviorFlags(), []);
+  const {
+    noBoardRestore,
+    noSavedBoardPreviews,
+    noAutoGenerate,
+    noAutoFit,
+    noPalette,
+    noImageMigration,
+    noSyncBackfill,
+    startLibraryClosed,
+    noInitialMedia
+  } = startupFlags;
   const editorRef = useRef(null);
   const importBackupRef = useRef(null);
   const outfitStageRef = useRef(null);
@@ -3430,6 +3478,10 @@ function MainApp() {
   const pendingAppStateSaveRef = useRef(null);
   const appStateSaveInFlightRef = useRef(false);
   const pendingPersistenceReadyRef = useRef(false);
+  const loadedMigrationVersionsRef = useRef({
+    itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
+    imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION
+  });
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
@@ -4969,7 +5021,7 @@ function MainApp() {
     let cancelled = false;
 
     async function updateOutfitPalette() {
-      if (safeMode || recoverNormal) {
+      if (safeMode || recoverNormal || noPalette || noInitialMedia) {
         setOutfitPalette([]);
         return;
       }
@@ -5003,7 +5055,7 @@ function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [currentBoardItems, recoverNormal, safeMode]);
+  }, [currentBoardItems, noInitialMedia, noPalette, recoverNormal, safeMode]);
 
   useEffect(() => {
     if (!board) {
@@ -5014,13 +5066,21 @@ function MainApp() {
   }, [board]);
 
   useEffect(() => {
-    if (safeMode || recoverNormal || !pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
+    if (
+      safeMode ||
+      recoverNormal ||
+      noAutoFit ||
+      !pendingRestoredBoardFitRef.current ||
+      loading ||
+      !board?.images?.length ||
+      !boardViewportRef.current
+    ) {
       return;
     }
 
     pendingRestoredBoardFitRef.current = false;
     setBoardView(getFittedBoardView(board));
-  }, [board, loading, recoverNormal, safeMode]);
+  }, [board, loading, noAutoFit, recoverNormal, safeMode]);
 
   useEffect(() => {
     setImageCountDraft(String(imageCount));
@@ -5072,9 +5132,9 @@ function MainApp() {
       setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
       setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
       const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
-      setActivePanel(recoverNormal ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
+      setActivePanel(recoverNormal || startLibraryClosed ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
       setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-      setWardrobeSavedOpen(recoverNormal ? false : normalizedLibraryUiState.wardrobeSavedOpen);
+      setWardrobeSavedOpen(recoverNormal || startLibraryClosed ? false : normalizedLibraryUiState.wardrobeSavedOpen);
       setOutfitFilters(normalizeOutfitFilters(defaultState.outfitFilters));
       setWeatherSettings(normalizeWeatherSettings(defaultState.weatherSettings));
       setWeatherLocationDraft(defaultState.weatherSettings?.locationName ?? "");
@@ -5124,6 +5184,12 @@ function MainApp() {
         setItems(effectiveItems);
 
         if (storedAppState) {
+          loadedMigrationVersionsRef.current = {
+            itemDefaultsMigrationVersion:
+              Math.max(0, Math.round(Number(storedAppState.itemDefaultsMigrationVersion) || 0)),
+            imagePresentationMigrationVersion:
+              Math.max(0, Math.round(Number(storedAppState.imagePresentationMigrationVersion) || 0))
+          };
           const resolvedImageCount = resolvePersistedImageCount(storedAppState.imageCount);
           const normalizedGenerationLists = normalizeGenerationLists(storedAppState.generationLists);
           const normalizedGenerationMode = normalizeGenerationMode(storedAppState.generationMode);
@@ -5145,14 +5211,15 @@ function MainApp() {
           setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
           setLocked(storedAppState.locked ?? {});
           setExcluded(storedAppState.excluded ?? {});
-          const restoredBoard = recoverNormal
+          const shouldSkipBoardRestore = recoverNormal || noBoardRestore;
+          const restoredBoard = shouldSkipBoardRestore
             ? null
             : resolveBoardFromAppState(
                 storedAppState,
                 effectiveItems,
                 getBoardRepositoryDependencies()
               );
-          const nextBoard = !safeMode && !recoverNormal && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
+          const nextBoard = !safeMode && !recoverNormal && !noBoardRestore && !noAutoGenerate && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
             ? buildGeneratedBoard(effectiveItems, {
                 imageCount: resolvedImageCount,
                 metadataFilters: normalizedMetadataFilters,
@@ -5168,11 +5235,14 @@ function MainApp() {
           logStartupDebug(debugStartup, "after board restore", effectiveItems, {
             restoredBoardImageCount: Array.isArray(nextBoard?.images) ? nextBoard.images.length : 0
           });
-          pendingRestoredBoardFitRef.current = !safeMode && !recoverNormal && Boolean(nextBoard?.images?.length);
+          pendingRestoredBoardFitRef.current =
+            !safeMode && !recoverNormal && !noAutoFit && Boolean(nextBoard?.images?.length);
           setBoard(nextBoard);
           setImageCount(resolvedImageCount);
-          setOutfit(recoverNormal ? {} : boardToSyntheticOutfit(nextBoard));
-          setBoardView(nextBoard && !safeMode && !recoverNormal ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+          setOutfit(recoverNormal || noBoardRestore ? {} : boardToSyntheticOutfit(nextBoard));
+          setBoardView(
+            nextBoard && !safeMode && !recoverNormal && !noAutoFit ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 }
+          );
           setGuidedDebugPayload([]);
           setIgnoredImportImages(storedAppState.ignoredImportImages ?? []);
           const hydratedSavedBoards = hydrateSavedBoards(
@@ -5193,16 +5263,16 @@ function MainApp() {
           setWardrobeSort(normalizedWardrobeSort);
           setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
           setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
-          setActivePanel(recoverNormal ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
+          setActivePanel(recoverNormal || startLibraryClosed ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
           setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-          setWardrobeSavedOpen(recoverNormal ? false : normalizedLibraryUiState.wardrobeSavedOpen);
+          setWardrobeSavedOpen(recoverNormal || startLibraryClosed ? false : normalizedLibraryUiState.wardrobeSavedOpen);
           setOutfitFilters(normalizedOutfitFilters);
           setWeatherSettings(normalizeWeatherSettings(storedAppState.weatherSettings));
           setWeatherLocationDraft(storedAppState.weatherSettings?.locationName ?? "");
           setWeatherData(storedAppState.weatherData ?? null);
           setFitpics(storedAppState.fitpics ?? []);
 
-          if (!recoverNormal) {
+          if (!recoverNormal && !noSyncBackfill) {
             try {
               await backfillLocalSyncMetadata(effectiveItems, hydratedSavedBoards);
             } catch (syncMetadataError) {
@@ -5210,9 +5280,13 @@ function MainApp() {
             }
           }
         } else {
+          loadedMigrationVersionsRef.current = {
+            itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
+            imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION
+          };
           applyDefaultBootstrapState(effectiveItems);
 
-          if (!recoverNormal) {
+          if (!recoverNormal && !noSyncBackfill) {
             try {
               await backfillLocalSyncMetadata(effectiveItems, []);
             } catch (syncMetadataError) {
@@ -5227,14 +5301,7 @@ function MainApp() {
 
         console.error("Failed to restore library state. Falling back to defaults.", error);
         applyDefaultBootstrapState(fallbackItems);
-
-        if (!safeMode) {
-          try {
-            await resetToDefaults();
-          } catch (resetError) {
-            console.error("Failed to reset persisted library state after bootstrap error.", resetError);
-          }
-        }
+        console.warn("Bootstrap fallback left IndexedDB unchanged. No automatic reset was performed.");
       }
 
       if (!cancelled) {
@@ -5248,7 +5315,7 @@ function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [recoverNormal, safeMode]);
+  }, [debugStartup, noAutoFit, noAutoGenerate, noSyncBackfill, noBoardRestore, recoverNormal, safeMode, startLibraryClosed]);
 
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
 
@@ -5276,8 +5343,12 @@ function MainApp() {
 
   const currentPersistedAppState = useMemo(
     () => ({
-      itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
-      imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION,
+      itemDefaultsMigrationVersion: noImageMigration
+        ? loadedMigrationVersionsRef.current.itemDefaultsMigrationVersion
+        : ITEM_DEFAULTS_MIGRATION_VERSION,
+      imagePresentationMigrationVersion: noImageMigration
+        ? loadedMigrationVersionsRef.current.imagePresentationMigrationVersion
+        : IMAGE_PRESENTATION_MIGRATION_VERSION,
       layering,
       accessoriesEnabled,
       locked,
@@ -5312,6 +5383,7 @@ function MainApp() {
       fitpics
     }),
     [
+      noImageMigration,
       layering,
       accessoriesEnabled,
       locked,
@@ -5376,8 +5448,12 @@ function MainApp() {
     }
 
     const nextAppState = {
-      itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
-      imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION,
+      itemDefaultsMigrationVersion: noImageMigration
+        ? loadedMigrationVersionsRef.current.itemDefaultsMigrationVersion
+        : ITEM_DEFAULTS_MIGRATION_VERSION,
+      imagePresentationMigrationVersion: noImageMigration
+        ? loadedMigrationVersionsRef.current.imagePresentationMigrationVersion
+        : IMAGE_PRESENTATION_MIGRATION_VERSION,
       layering,
       accessoriesEnabled,
       locked,
@@ -5442,7 +5518,7 @@ function MainApp() {
         runSave();
       }, 120);
     }
-  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, sideEditorWidth, libraryAddWidth, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady, recoverNormal]);
+  }, [layering, accessoriesEnabled, locked, excluded, noImageMigration, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, sideEditorWidth, libraryAddWidth, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady, recoverNormal]);
 
   useEffect(() => () => {
     if (saveAppStateTimeoutRef.current) {
@@ -6055,10 +6131,11 @@ function MainApp() {
     const normalizedOutfitFilters = normalizeOutfitFilters(nextAppState?.outfitFilters);
     const normalizedOutfitAffinity = normalizeOutfitAffinity(nextAppState?.outfitAffinity);
     const normalizedRecentOutfits = normalizeRecentOutfits(nextAppState?.recentOutfits);
-    const restoredBoard = recoverNormal
+    const shouldSkipBoardRestore = recoverNormal || noBoardRestore;
+    const restoredBoard = shouldSkipBoardRestore
       ? null
       : resolveBoardFromAppState(nextAppState, effectiveItems, getBoardRepositoryDependencies());
-    const nextBoard = !safeMode && !recoverNormal && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
+    const nextBoard = !safeMode && !recoverNormal && !noBoardRestore && !noAutoGenerate && shouldRegenerateLegacyBoardForImageCount(restoredBoard, resolvedImageCount)
       ? buildGeneratedBoard(effectiveItems, {
           imageCount: resolvedImageCount,
           metadataFilters: normalizedMetadataFilters,
@@ -6071,11 +6148,12 @@ function MainApp() {
           recentOutfits: normalizedRecentOutfits
         }).board
       : restoredBoard;
-    pendingRestoredBoardFitRef.current = !safeMode && !recoverNormal && Boolean(nextBoard?.images?.length);
+    pendingRestoredBoardFitRef.current =
+      !safeMode && !recoverNormal && !noAutoFit && Boolean(nextBoard?.images?.length);
     setBoard(nextBoard);
     setImageCount(resolvedImageCount);
-    setOutfit(recoverNormal ? {} : boardToSyntheticOutfit(nextBoard));
-    setBoardView(nextBoard && !safeMode && !recoverNormal ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
+    setOutfit(recoverNormal || noBoardRestore ? {} : boardToSyntheticOutfit(nextBoard));
+    setBoardView(nextBoard && !safeMode && !recoverNormal && !noAutoFit ? getFittedBoardView(nextBoard) : { x: 0, y: 0, zoom: 1 });
     setGuidedDebugPayload([]);
     setIgnoredImportImages(nextAppState?.ignoredImportImages ?? []);
     setSavedOutfits(hydrateSavedBoards(nextAppState?.savedOutfits, effectiveItems, getBoardRepositoryDependencies()));
@@ -6098,9 +6176,9 @@ function MainApp() {
     setEditingId(null);
     setEditorReturnTarget(null);
     setDraft(emptyForm);
-    setActivePanel(recoverNormal ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
+    setActivePanel(recoverNormal || startLibraryClosed ? null : (normalizedLibraryUiState.libraryOpen ? "wardrobe" : null));
     setWardrobeFiltersOpen(normalizedLibraryUiState.wardrobeFiltersOpen);
-    setWardrobeSavedOpen(recoverNormal ? false : normalizedLibraryUiState.wardrobeSavedOpen);
+    setWardrobeSavedOpen(recoverNormal || startLibraryClosed ? false : normalizedLibraryUiState.wardrobeSavedOpen);
     setControlsOpen(true);
     setActiveBoardImageId(null);
     setPickerBoardImageId(null);
@@ -8606,10 +8684,10 @@ function MainApp() {
   }
 
   function renderSavedOutfitPreview(savedOutfit) {
-    if (recoverNormal) {
+    if (recoverNormal || noSavedBoardPreviews || noInitialMedia) {
       return (
         <div className="saved-preview saved-preview-board saved-preview-recover-placeholder" aria-hidden="true">
-          <span>Preview hidden during recovery boot</span>
+          <span>Preview hidden during startup diagnostics</span>
         </div>
       );
     }
@@ -10188,6 +10266,18 @@ function MainApp() {
     );
   }
 
+  const activeStartupFlagLabels = [
+    noBoardRestore ? "noBoardRestore" : "",
+    noSavedBoardPreviews ? "noSavedBoardPreviews" : "",
+    noAutoGenerate ? "noAutoGenerate" : "",
+    noAutoFit ? "noAutoFit" : "",
+    noPalette ? "noPalette" : "",
+    noImageMigration ? "noImageMigration" : "",
+    noSyncBackfill ? "noSyncBackfill" : "",
+    startLibraryClosed ? "startLibraryClosed" : "",
+    noInitialMedia ? "noInitialMedia" : ""
+  ].filter(Boolean);
+
   return (
     <main className="app-shell">
       {cropEditorBody ? (
@@ -10206,6 +10296,12 @@ function MainApp() {
         <div className="safe-mode-banner recover-normal-banner" role="status" aria-live="polite">
           <strong>Recovery Boot</strong>
           <span>Normal UI loaded with library collapsed, board restore disabled, palette extraction disabled, and automatic persistence suspended for this session.</span>
+        </div>
+      ) : null}
+      {!safeMode && !recoverNormal && activeStartupFlagLabels.length ? (
+        <div className="safe-mode-banner recover-normal-banner" role="status" aria-live="polite">
+          <strong>Startup Diagnostics</strong>
+          <span>{activeStartupFlagLabels.join(", ")}</span>
         </div>
       ) : null}
       <section className="content-grid">
