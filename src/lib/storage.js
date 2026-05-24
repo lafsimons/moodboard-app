@@ -56,6 +56,31 @@ function getStartupDebugConfig() {
   }
 }
 
+function getEffectsDebugConfig() {
+  if (typeof window === "undefined") {
+    return {
+      enabled: false,
+      freezePostStartup: false,
+      postStartupReady: false
+    };
+  }
+
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    return {
+      enabled: searchParams.get("debugEffects") === "1",
+      freezePostStartup: searchParams.get("freezePostStartup") === "1",
+      postStartupReady: Boolean(globalThis.__MBA_POST_STARTUP_READY__)
+    };
+  } catch {
+    return {
+      enabled: false,
+      freezePostStartup: false,
+      postStartupReady: false
+    };
+  }
+}
+
 function getStartupDebugMemorySnapshot() {
   const usedBytes = Number(globalThis.performance?.memory?.usedJSHeapSize);
   return Number.isFinite(usedBytes) && usedBytes > 0 ? Math.round(usedBytes / (1024 * 1024)) : null;
@@ -117,6 +142,21 @@ function emitStartupDebug(label, extra = {}) {
   const entry = formatStartupDebugEntry(label, extra);
   console.log("[startup]", entry);
   appendStartupDebugDomLine(entry);
+}
+
+function emitEffectsStorageDebug(label, extra = {}) {
+  const { enabled } = getEffectsDebugConfig();
+
+  if (!enabled) {
+    return;
+  }
+
+  console.log("[effects:idb]", {
+    label,
+    at: new Date().toISOString(),
+    heapMB: getStartupDebugMemorySnapshot(),
+    ...extra
+  });
 }
 
 function getStartupDebugLimitValue(limit = null) {
@@ -1025,6 +1065,12 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
     return null;
   }
 
+  emitEffectsStorageDebug("before IndexedDB read after first render", {
+    operation: "loadItemMediaAssetById",
+    itemId: itemId.trim(),
+    variant
+  });
+
   const item = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(itemId.trim()));
 
   if (!item || typeof item !== "object") {
@@ -1040,6 +1086,12 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
         : normalizedImages.preview;
 
   if (selectedAsset?.src) {
+    emitEffectsStorageDebug("after IndexedDB read after first render", {
+      operation: "loadItemMediaAssetById",
+      itemId: itemId.trim(),
+      variant,
+      source: "inline_asset"
+    });
     return {
       ...createImageAsset(selectedAsset),
       blob: null
@@ -1050,6 +1102,12 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
     const blobEntry = await loadOriginalImageBlobEntry(item.itemUuid);
 
     if (blobEntry?.blob instanceof Blob) {
+      emitEffectsStorageDebug("after IndexedDB read after first render", {
+        operation: "loadItemMediaAssetById",
+        itemId: itemId.trim(),
+        variant,
+        source: "original_blob"
+      });
       return {
         src: "",
         mimeType: blobEntry.mimeType ?? "",
@@ -1062,6 +1120,12 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
     }
   }
 
+  emitEffectsStorageDebug("after IndexedDB read after first render", {
+    operation: "loadItemMediaAssetById",
+    itemId: itemId.trim(),
+    variant,
+    source: "missing"
+  });
   return null;
 }
 
@@ -1080,6 +1144,10 @@ export async function loadItems() {
 }
 
 export async function saveItem(item) {
+  emitEffectsStorageDebug("before IndexedDB write after first render", {
+    operation: "saveItem",
+    itemId: normalizeSyncText(item?.id)
+  });
   await withStore(ITEM_STORE, "readwrite", (store) => store.put(item));
 
   const stableKey = normalizeSyncText(item?.itemUuid);
@@ -1144,11 +1212,23 @@ export async function deleteItem(id) {
 }
 
 export async function loadAppState() {
+  emitEffectsStorageDebug("before IndexedDB read after first render", {
+    operation: "loadAppState"
+  });
   const entry = await withStore(APP_STORE, "readonly", (store) => store.get("state"));
+  emitEffectsStorageDebug("after IndexedDB read after first render", {
+    operation: "loadAppState",
+    appStatePresent: Boolean(entry?.value)
+  });
   return entry?.value ?? null;
 }
 
 export async function saveAppState(value) {
+  emitEffectsStorageDebug("before IndexedDB write after first render", {
+    operation: "saveAppState",
+    savedOutfitCount: Array.isArray(value?.savedOutfits) ? value.savedOutfits.length : 0,
+    boardImageCount: Array.isArray(value?.board?.images) ? value.board.images.length : 0
+  });
   const previousAppState = await loadAppState();
 
   await withStore(APP_STORE, "readwrite", (store) =>
@@ -1247,6 +1327,10 @@ export async function getSyncMetadata(key = null) {
 
 export async function upsertSyncMetadata(record) {
   const normalizedRecord = normalizeSyncMetadataRecord(record);
+  emitEffectsStorageDebug("before IndexedDB write after first render", {
+    operation: "upsertSyncMetadata",
+    key: normalizedRecord.key
+  });
   await withStore(SYNC_METADATA_STORE, "readwrite", (store) => store.put(normalizedRecord));
   return normalizedRecord;
 }

@@ -382,6 +382,75 @@ function getStartupBehaviorFlags() {
   };
 }
 
+function isDebugEffectsEnabled() {
+  return hasUrlFlag("debugEffects");
+}
+
+function isFreezePostStartupEnabled() {
+  return hasUrlFlag("freezePostStartup");
+}
+
+function getEffectsDebugMemory() {
+  if (typeof performance === "undefined" || !performance.memory) {
+    return null;
+  }
+
+  return {
+    usedMB: Math.round((performance.memory.usedJSHeapSize || 0) / (1024 * 1024)),
+    totalMB: Math.round((performance.memory.totalJSHeapSize || 0) / (1024 * 1024))
+  };
+}
+
+function appendEffectsDebugDomLine(entry) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  let node = document.getElementById("effects-debug-log");
+
+  if (!node) {
+    node = document.createElement("pre");
+    node.id = "effects-debug-log";
+    node.setAttribute(
+      "style",
+      [
+        "position:fixed",
+        "left:0",
+        "right:0",
+        "top:0",
+        "z-index:2147483647",
+        "max-height:35vh",
+        "margin:0",
+        "padding:8px 10px",
+        "overflow:auto",
+        "background:rgba(10,22,38,0.94)",
+        "color:#b7e3ff",
+        "font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace",
+        "pointer-events:none",
+        "white-space:pre-wrap"
+      ].join(";")
+    );
+    document.body.append(node);
+  }
+
+  node.textContent += `[effects] ${JSON.stringify(entry)}\n`;
+}
+
+function logEffectsDebug(enabled, label, extra = {}) {
+  if (!enabled) {
+    return;
+  }
+
+  const entry = {
+    label,
+    at: new Date().toISOString(),
+    memory: getEffectsDebugMemory(),
+    ...extra
+  };
+  console.log("[effects]", entry);
+  appendEffectsDebugDomLine(entry);
+}
+
 function createLibraryPerfSession(enabled) {
   if (!enabled || typeof performance === "undefined") {
     return null;
@@ -1189,6 +1258,8 @@ function useImageMetrics(imageUrl, initialMetrics = null) {
 function useDeferredItemMedia(item, variant = "preview") {
   const immediateSrc = getManagedItemImageSrc(item, variant);
   const startupFlags = useMemo(() => getStartupBehaviorFlags(), []);
+  const debugEffects = useMemo(() => isDebugEffectsEnabled(), []);
+  const freezePostStartup = useMemo(() => isFreezePostStartupEnabled(), []);
   const [resolvedMedia, setResolvedMedia] = useState(() => ({
     src: startupFlags.noInitialMedia ? "" : immediateSrc,
     width: 0,
@@ -1196,7 +1267,26 @@ function useDeferredItemMedia(item, variant = "preview") {
   }));
 
   useEffect(() => {
+    if (freezePostStartup && globalThis.__MBA_POST_STARTUP_READY__) {
+      logEffectsDebug(debugEffects, "media resolution skipped", {
+        reason: "freezePostStartup",
+        itemId: item?.id ?? "",
+        variant
+      });
+      setResolvedMedia({
+        src: "",
+        width: 0,
+        height: 0
+      });
+      return undefined;
+    }
+
     if (startupFlags.noInitialMedia) {
+      logEffectsDebug(debugEffects, "media resolution skipped", {
+        reason: "noInitialMedia",
+        itemId: item?.id ?? "",
+        variant
+      });
       setResolvedMedia({
         src: "",
         width: 0,
@@ -1228,6 +1318,11 @@ function useDeferredItemMedia(item, variant = "preview") {
 
     async function resolveMedia() {
       try {
+        logEffectsDebug(debugEffects, "before media resolution", {
+          itemId: item.id,
+          variant,
+          immediateSrcPresent: Boolean(immediateSrc)
+        });
         const asset = await loadItemMediaAssetById(item.id, variant);
 
         if (cancelled) {
@@ -1246,8 +1341,18 @@ function useDeferredItemMedia(item, variant = "preview") {
           width: Math.max(Number(asset?.width) || 0, 0),
           height: Math.max(Number(asset?.height) || 0, 0)
         });
+        logEffectsDebug(debugEffects, "after media resolution", {
+          itemId: item.id,
+          variant,
+          hasBlob: asset?.blob instanceof Blob,
+          srcPresent: Boolean(nextSrc)
+        });
       } catch {
         if (!cancelled) {
+          logEffectsDebug(debugEffects, "media resolution failed", {
+            itemId: item?.id ?? "",
+            variant
+          });
           setResolvedMedia({
             src: "",
             width: 0,
@@ -1266,7 +1371,7 @@ function useDeferredItemMedia(item, variant = "preview") {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [immediateSrc, item?.id, startupFlags.noInitialMedia, variant]);
+  }, [debugEffects, freezePostStartup, immediateSrc, item?.id, startupFlags.noInitialMedia, variant]);
 
   return resolvedMedia;
 }
@@ -3440,6 +3545,8 @@ function MainApp() {
   const safeMode = isSafeModeEnabled();
   const recoverNormal = isRecoverNormalEnabled();
   const debugStartup = isStartupDebugEnabled();
+  const debugEffects = isDebugEffectsEnabled();
+  const freezePostStartup = isFreezePostStartupEnabled();
   const startupFlags = useMemo(() => getStartupBehaviorFlags(), []);
   const {
     noBoardRestore,
@@ -3478,6 +3585,7 @@ function MainApp() {
   const pendingAppStateSaveRef = useRef(null);
   const appStateSaveInFlightRef = useRef(false);
   const pendingPersistenceReadyRef = useRef(false);
+  const postStartupReadyRef = useRef(false);
   const loadedMigrationVersionsRef = useRef({
     itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
     imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION
@@ -4609,6 +4717,17 @@ function MainApp() {
   }, [boardPickerViewport.height, boardPickerViewport.scrollTop, shouldVirtualizeBoardPicker, visibleBoardPickerItems]);
 
   useEffect(() => {
+    logEffectsDebug(debugEffects, "library virtualization measurement effect", {
+      activePanel,
+      wardrobeSavedOpen,
+      visibleItemCount: visibleWardrobeItems.length,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return undefined;
+    }
+
     if (activePanel !== "wardrobe" || wardrobeSavedOpen) {
       return undefined;
     }
@@ -4677,7 +4796,7 @@ function MainApp() {
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [activePanel, visibleWardrobeItems.length, wardrobeSavedOpen]);
+  }, [activePanel, debugEffects, freezePostStartup, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   useEffect(() => {
     if (!pickerBoardImageId) {
@@ -4746,6 +4865,17 @@ function MainApp() {
   }, [pickerBoardImageId]);
 
   useEffect(() => {
+    logEffectsDebug(debugEffects, "library virtualization render effect", {
+      activePanel,
+      visibleItemCount: visibleWardrobeItems.length,
+      virtualItemCount: virtualizedWardrobeGrid.virtualItems.length,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return undefined;
+    }
+
     if (activePanel !== "wardrobe" || wardrobeSavedOpen || !virtualizedWardrobeGrid.virtualItems.length) {
       return undefined;
     }
@@ -4774,7 +4904,7 @@ function MainApp() {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activePanel, shouldVirtualizeWardrobeGrid, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
+  }, [activePanel, debugEffects, freezePostStartup, shouldVirtualizeWardrobeGrid, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   const handleLibraryReferenceSelect = useCallback((itemId, event) => {
     selectReference(itemId, event);
@@ -4808,12 +4938,15 @@ function MainApp() {
     )
   }), [boardLayoutMetadataByReferenceId]);
   const boardRenderLayoutSignature = useMemo(
-    () =>
-      JSON.stringify(
-        (board?.images ?? []).map((image) => ({
-          ...getBoardLayoutSignatureEntry(image, itemsById[image.referenceId])
-        })).filter(Boolean)
-      ),
+    () => {
+      const signatureEntries = (board?.images ?? []).map((image) => ({
+        ...getBoardLayoutSignatureEntry(image, itemsById[image.referenceId])
+      })).filter(Boolean);
+      logEffectsDebug(debugEffects, "JSON.stringify board signature", {
+        entryCount: signatureEntries.length
+      });
+      return JSON.stringify(signatureEntries);
+    },
     [board?.images, itemsById]
   );
   const tagManagerEntries = useMemo(() => {
@@ -5021,6 +5154,16 @@ function MainApp() {
     let cancelled = false;
 
     async function updateOutfitPalette() {
+      logEffectsDebug(debugEffects, "palette extraction effect", {
+        boardItemCount: currentBoardItems.length,
+        frozen: freezePostStartup && postStartupReadyRef.current
+      });
+
+      if (freezePostStartup && postStartupReadyRef.current) {
+        setOutfitPalette([]);
+        return;
+      }
+
       if (safeMode || recoverNormal || noPalette || noInitialMedia) {
         setOutfitPalette([]);
         return;
@@ -5055,7 +5198,7 @@ function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [currentBoardItems, noInitialMedia, noPalette, recoverNormal, safeMode]);
+  }, [currentBoardItems, debugEffects, freezePostStartup, noInitialMedia, noPalette, recoverNormal, safeMode]);
 
   useEffect(() => {
     if (!board) {
@@ -5066,6 +5209,17 @@ function MainApp() {
   }, [board]);
 
   useEffect(() => {
+    logEffectsDebug(debugEffects, "board fit effect", {
+      pending: pendingRestoredBoardFitRef.current,
+      loading,
+      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return;
+    }
+
     if (
       safeMode ||
       recoverNormal ||
@@ -5080,7 +5234,7 @@ function MainApp() {
 
     pendingRestoredBoardFitRef.current = false;
     setBoardView(getFittedBoardView(board));
-  }, [board, loading, noAutoFit, recoverNormal, safeMode]);
+  }, [board, debugEffects, freezePostStartup, loading, noAutoFit, recoverNormal, safeMode]);
 
   useEffect(() => {
     setImageCountDraft(String(imageCount));
@@ -5235,6 +5389,10 @@ function MainApp() {
           logStartupDebug(debugStartup, "after board restore", effectiveItems, {
             restoredBoardImageCount: Array.isArray(nextBoard?.images) ? nextBoard.images.length : 0
           });
+          logEffectsDebug(debugEffects, "board restore", {
+            restoredBoardImageCount: Array.isArray(nextBoard?.images) ? nextBoard.images.length : 0,
+            skipped: shouldSkipBoardRestore
+          });
           pendingRestoredBoardFitRef.current =
             !safeMode && !recoverNormal && !noAutoFit && Boolean(nextBoard?.images?.length);
           setBoard(nextBoard);
@@ -5274,7 +5432,15 @@ function MainApp() {
 
           if (!recoverNormal && !noSyncBackfill) {
             try {
+              logEffectsDebug(debugEffects, "before sync backfill", {
+                itemCount: effectiveItems.length,
+                savedOutfitCount: hydratedSavedBoards.length
+              });
               await backfillLocalSyncMetadata(effectiveItems, hydratedSavedBoards);
+              logEffectsDebug(debugEffects, "after sync backfill", {
+                itemCount: effectiveItems.length,
+                savedOutfitCount: hydratedSavedBoards.length
+              });
             } catch (syncMetadataError) {
               console.error("Failed to initialize local sync metadata.", syncMetadataError);
             }
@@ -5288,7 +5454,15 @@ function MainApp() {
 
           if (!recoverNormal && !noSyncBackfill) {
             try {
+              logEffectsDebug(debugEffects, "before sync backfill", {
+                itemCount: effectiveItems.length,
+                savedOutfitCount: 0
+              });
               await backfillLocalSyncMetadata(effectiveItems, []);
+              logEffectsDebug(debugEffects, "after sync backfill", {
+                itemCount: effectiveItems.length,
+                savedOutfitCount: 0
+              });
             } catch (syncMetadataError) {
               console.error("Failed to initialize local sync metadata.", syncMetadataError);
             }
@@ -5315,25 +5489,45 @@ function MainApp() {
     return () => {
       cancelled = true;
     };
-  }, [debugStartup, noAutoFit, noAutoGenerate, noSyncBackfill, noBoardRestore, recoverNormal, safeMode, startLibraryClosed]);
+  }, [debugEffects, debugStartup, noAutoFit, noAutoGenerate, noSyncBackfill, noBoardRestore, recoverNormal, safeMode, startLibraryClosed]);
 
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
 
   useEffect(() => {
+    logEffectsDebug(debugEffects, "metadata migration/writeback effect", {
+      target: "boardUuid",
+      frozen: freezePostStartup && postStartupReadyRef.current,
+      hasBoard: Boolean(board)
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return;
+    }
+
     if (!board?.images?.length || (typeof board.boardUuid === "string" && board.boardUuid.trim())) {
       return;
     }
 
     setBoard((current) => ensureBoardUuid(current));
-  }, [board]);
+  }, [board, debugEffects, freezePostStartup]);
 
   useEffect(() => {
+    logEffectsDebug(debugEffects, "metadata migration/writeback effect", {
+      target: "savedBoardUuid",
+      frozen: freezePostStartup && postStartupReadyRef.current,
+      savedOutfitCount: savedOutfits.length
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return;
+    }
+
     if (!savedOutfits.some((savedOutfit) => savedOutfit?.board && !(typeof savedOutfit.board.boardUuid === "string" && savedOutfit.board.boardUuid.trim()))) {
       return;
     }
 
     setSavedOutfits((current) => current.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)));
-  }, [savedOutfits]);
+  }, [debugEffects, freezePostStartup, savedOutfits]);
 
   useEffect(() => () => {
     if (boardRelayoutFrameRef.current) {
@@ -5435,15 +5629,30 @@ function MainApp() {
       return;
     }
 
+    if (!postStartupReadyRef.current) {
+      postStartupReadyRef.current = true;
+      globalThis.__MBA_POST_STARTUP_READY__ = true;
+      logEffectsDebug(debugEffects, "post-startup latch armed", {
+        freezePostStartup
+      });
+    }
+
     logStartupDebug(debugStartup, "after first render", items, {
       activePanel,
       savedOutfitCount: savedOutfits.length,
       boardImageCount: Array.isArray(board?.images) ? board.images.length : 0
     });
-  }, [activePanel, board, debugStartup, items, loading, savedOutfits.length]);
+  }, [activePanel, board, debugEffects, debugStartup, freezePostStartup, items, loading, savedOutfits.length]);
 
   useEffect(() => {
-    if (recoverNormal || loading || !persistenceReady) {
+    logEffectsDebug(debugEffects, "app-state persistence effect", {
+      recoverNormal,
+      loading,
+      persistenceReady,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
+
+    if (recoverNormal || loading || !persistenceReady || (freezePostStartup && postStartupReadyRef.current)) {
       return;
     }
 
@@ -5498,6 +5707,11 @@ function MainApp() {
     }
 
     const runSave = () => {
+      logEffectsDebug(debugEffects, "before saveAppState enqueue", {
+        reason: "debounced",
+        savedOutfitCount: nextAppState.savedOutfits.length,
+        boardImageCount: Array.isArray(nextAppState.board?.images) ? nextAppState.board.images.length : 0
+      });
       enqueueAppStateSave(nextAppState, "debounced").then(() => {
         if (isGeneratePerfDebug) {
           boardGenerationPerfRef.current?.mark("persistence done", {
@@ -5518,7 +5732,7 @@ function MainApp() {
         runSave();
       }, 120);
     }
-  }, [layering, accessoriesEnabled, locked, excluded, noImageMigration, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, sideEditorWidth, libraryAddWidth, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady, recoverNormal]);
+  }, [activePanel, accessoriesEnabled, board, debugEffects, excluded, fitpics, freezePostStartup, generateCount, generationLists, generationMetadataFilters, generationMode, ignoredImportImages, imageCount, isGeneratePerfDebug, layering, libraryAddWidth, librarySearch, likedOutfitKeys, loading, locked, noImageMigration, outfit, outfitAffinity, outfitFilters, persistenceReady, recentOutfits, recoverNormal, savedOutfits, sideEditorWidth, wardrobeFilters, wardrobeFiltersOpen, wardrobeSavedOpen, wardrobeSort, weatherData, weatherSettings]);
 
   useEffect(() => () => {
     if (saveAppStateTimeoutRef.current) {
@@ -5533,7 +5747,14 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
-    if (recoverNormal || loading || !persistenceReady) {
+    logEffectsDebug(debugEffects, "pagehide persistence effect", {
+      recoverNormal,
+      loading,
+      persistenceReady,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
+
+    if (recoverNormal || loading || !persistenceReady || (freezePostStartup && postStartupReadyRef.current)) {
       return undefined;
     }
 
@@ -5558,18 +5779,35 @@ function MainApp() {
       window.removeEventListener("pagehide", flushAppState);
       document.removeEventListener("visibilitychange", flushOnHide);
     };
-  }, [loading, persistenceReady, recoverNormal]);
+  }, [debugEffects, freezePostStartup, loading, persistenceReady, recoverNormal]);
 
   useEffect(() => {
-    if (loading || !persistenceReady) {
+    logEffectsDebug(debugEffects, "savedOutfits persistence effect", {
+      loading,
+      persistenceReady,
+      frozen: freezePostStartup && postStartupReadyRef.current,
+      savedOutfitCount: savedOutfits.length
+    });
+
+    if (loading || !persistenceReady || (freezePostStartup && postStartupReadyRef.current)) {
       return;
     }
 
     void enqueueAppStateSave(currentPersistedAppState, "savedOutfitsEffect");
-  }, [currentPersistedAppState, loading, persistenceReady, savedOutfits]);
+  }, [currentPersistedAppState, debugEffects, freezePostStartup, loading, persistenceReady, savedOutfits]);
 
   function enqueueAppStateSave(nextState, reason = "unknown") {
     if (!nextState) {
+      return Promise.resolve();
+    }
+
+    logEffectsDebug(debugEffects, "enqueueAppStateSave", {
+      reason,
+      frozen: freezePostStartup && postStartupReadyRef.current,
+      savedOutfitCount: Array.isArray(nextState.savedOutfits) ? nextState.savedOutfits.length : 0
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
       return Promise.resolve();
     }
 
@@ -5586,6 +5824,11 @@ function MainApp() {
         while (pendingAppStateSaveRef.current) {
           const stateToSave = pendingAppStateSaveRef.current;
           pendingAppStateSaveRef.current = null;
+          logEffectsDebug(debugEffects, "before saveAppState", {
+            reason,
+            boardImageCount: Array.isArray(stateToSave.board?.images) ? stateToSave.board.images.length : 0,
+            savedOutfitCount: Array.isArray(stateToSave.savedOutfits) ? stateToSave.savedOutfits.length : 0
+          });
           await saveAppState(stateToSave);
         }
       } finally {
@@ -5637,12 +5880,27 @@ function MainApp() {
   }, [board, clearBoardGenerationFeedback]);
 
   useEffect(() => {
+    logEffectsDebug(debugEffects, "auto board generation effect", {
+      loading,
+      itemCount: items.length,
+      frozen: freezePostStartup && postStartupReadyRef.current,
+      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return;
+    }
+
     if (loading || !items.length) {
       return;
     }
 
     setBoard((current) => {
       if (!current?.images?.length) {
+        logEffectsDebug(debugEffects, "before board generation", {
+          reason: "missing_board",
+          itemCount: items.length
+        });
         const generatedBoard = buildGeneratedBoard(items, {
           imageCount,
           metadataFilters: generationMetadataFilters,
@@ -5667,6 +5925,10 @@ function MainApp() {
       }
 
       if (!nextImages.length) {
+        logEffectsDebug(debugEffects, "before board generation", {
+          reason: "board_images_missing_items",
+          itemCount: items.length
+        });
         const generatedBoard = buildGeneratedBoard(items, {
           imageCount,
           metadataFilters: generationMetadataFilters,
@@ -5695,9 +5957,19 @@ function MainApp() {
       setGuidedDebugPayload([]);
       return nextBoard;
     });
-  }, [items, itemsById, excluded, imageCount, generationLists, generationMode, generationMetadataFilters, outfitFilters, weatherData, outfitAffinity, recentOutfits, loading]);
+  }, [board?.images, debugEffects, excluded, freezePostStartup, generationLists, generationMetadataFilters, generationMode, imageCount, items, itemsById, loading, outfitAffinity, outfitFilters, recentOutfits, weatherData]);
 
   useEffect(() => {
+    logEffectsDebug(debugEffects, "board fit / measurement effect", {
+      loading,
+      boardImageCount: Array.isArray(board?.images) ? board.images.length : 0,
+      frozen: freezePostStartup && postStartupReadyRef.current
+    });
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return;
+    }
+
     if (loading || !board?.images?.length) {
       boardRenderLayoutSignatureRef.current = boardRenderLayoutSignature;
       return;
@@ -5729,7 +6001,7 @@ function MainApp() {
       boardRelayoutFrameRef.current = null;
       setBoard((current) => (current?.images?.length ? relayoutBoardStateImages(current.images) : current));
     });
-  }, [board?.images?.length, boardRenderLayoutSignature, loading]);
+  }, [board?.images?.length, boardRenderLayoutSignature, debugEffects, freezePostStartup, loading]);
 
   useEffect(() => {
     if (!pickerBoardImageId) {
@@ -8684,10 +8956,24 @@ function MainApp() {
   }
 
   function renderSavedOutfitPreview(savedOutfit) {
+    logEffectsDebug(debugEffects, "saved board preview computation", {
+      savedOutfitId: savedOutfit?.id ?? "",
+      imageCount: Array.isArray(savedOutfit?.board?.images) ? savedOutfit.board.images.length : 0,
+      hidden: recoverNormal || noSavedBoardPreviews || noInitialMedia || freezePostStartup
+    });
+
     if (recoverNormal || noSavedBoardPreviews || noInitialMedia) {
       return (
         <div className="saved-preview saved-preview-board saved-preview-recover-placeholder" aria-hidden="true">
           <span>Preview hidden during startup diagnostics</span>
+        </div>
+      );
+    }
+
+    if (freezePostStartup && postStartupReadyRef.current) {
+      return (
+        <div className="saved-preview saved-preview-board saved-preview-recover-placeholder" aria-hidden="true">
+          <span>Preview frozen after startup</span>
         </div>
       );
     }
@@ -10275,7 +10561,9 @@ function MainApp() {
     noImageMigration ? "noImageMigration" : "",
     noSyncBackfill ? "noSyncBackfill" : "",
     startLibraryClosed ? "startLibraryClosed" : "",
-    noInitialMedia ? "noInitialMedia" : ""
+    noInitialMedia ? "noInitialMedia" : "",
+    freezePostStartup ? "freezePostStartup" : "",
+    debugEffects ? "debugEffects" : ""
   ].filter(Boolean);
 
   return (
