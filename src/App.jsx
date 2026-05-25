@@ -117,6 +117,11 @@ import {
   normalizeWardrobeFilterState,
   normalizeWardrobeSort
 } from "./lib/appStateModel.js";
+import {
+  pruneBoardForDeletedReferences,
+  pruneOutfitForDeletedReferences,
+  pruneSavedOutfitsForDeletedReferences
+} from "./lib/deleteStatePruning.js";
 import { getVirtualizedGridLayout } from "./lib/libraryVirtualization.js";
 import {
   DEFAULT_LIBRARY_ADD_WIDTH,
@@ -5407,42 +5412,6 @@ export default function App() {
       return;
     }
 
-    const nextAppState = {
-      itemDefaultsMigrationVersion: ITEM_DEFAULTS_MIGRATION_VERSION,
-      imagePresentationMigrationVersion: IMAGE_PRESENTATION_MIGRATION_VERSION,
-      layering,
-      accessoriesEnabled,
-      locked,
-      excluded,
-      outfit,
-      board: ensureBoardUuid(board),
-      ignoredImportImages,
-      savedOutfits: savedOutfits.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)),
-      likedOutfitKeys,
-      outfitAffinity,
-      recentOutfits,
-      generateCount,
-      imageCount,
-      generationLists,
-      generationMode,
-      generationMetadataFilters,
-      wardrobeFilters,
-      librarySearch,
-      wardrobeSort,
-      libraryUiState: {
-        libraryOpen: activePanel === "wardrobe",
-        wardrobeFiltersOpen,
-        wardrobeSavedOpen
-      },
-      panelLayoutState: {
-        sideEditorWidth,
-        libraryAddWidth
-      },
-      outfitFilters,
-      weatherSettings,
-      weatherData,
-      fitpics
-    };
     const saveStartedAt = isGeneratePerfDebug ? performance.now() : 0;
     if (saveAppStateTimeoutRef.current) {
       clearTimeout(saveAppStateTimeoutRef.current);
@@ -5454,7 +5423,7 @@ export default function App() {
     }
 
     const runSave = () => {
-      enqueueAppStateSave(nextAppState, "debounced").then(() => {
+      enqueueAppStateSave(currentPersistedAppState, "debounced").then(() => {
         if (isGeneratePerfDebug) {
           boardGenerationPerfRef.current?.mark("persistence done", {
             durationMs: Math.round((performance.now() - saveStartedAt) * 100) / 100
@@ -5474,7 +5443,7 @@ export default function App() {
         runSave();
       }, 120);
     }
-  }, [layering, accessoriesEnabled, locked, excluded, outfit, board, ignoredImportImages, savedOutfits, likedOutfitKeys, outfitAffinity, recentOutfits, generateCount, imageCount, generationLists, generationMode, generationMetadataFilters, wardrobeFilters, librarySearch, wardrobeSort, activePanel, wardrobeFiltersOpen, wardrobeSavedOpen, sideEditorWidth, libraryAddWidth, outfitFilters, weatherSettings, weatherData, fitpics, isGeneratePerfDebug, loading, persistenceReady]);
+  }, [currentPersistedAppState, isGeneratePerfDebug, loading, persistenceReady]);
 
   useEffect(() => () => {
     if (saveAppStateTimeoutRef.current) {
@@ -8233,35 +8202,9 @@ async function handleExportBackup() {
       ),
       anchorId: current.anchorId && deletedReferenceIdSet.has(current.anchorId) ? null : current.anchorId
     }));
-    setOutfit((current) =>
-      Object.fromEntries(
-        Object.entries(current ?? {}).map(([slot, equippedId]) => [
-          slot,
-          deletedReferenceIdSet.has(equippedId) ? null : equippedId
-        ])
-      )
-    );
-    setBoard((current) => current ? {
-      ...current,
-      images: current.images.filter((image) => !deletedReferenceIdSet.has(image.referenceId))
-    } : current);
-    setSavedOutfits((current) =>
-      current.map((savedOutfit) => ({
-        ...savedOutfit,
-        outfit: Object.fromEntries(
-          Object.entries(savedOutfit.outfit ?? {}).map(([slot, equippedId]) => [
-            slot,
-            deletedReferenceIdSet.has(equippedId) ? null : equippedId
-          ])
-        ),
-        board: savedOutfit.board
-          ? {
-              ...savedOutfit.board,
-              images: savedOutfit.board.images.filter((image) => !deletedReferenceIdSet.has(image.referenceId))
-            }
-          : savedOutfit.board
-      }))
-    );
+    setOutfit((current) => pruneOutfitForDeletedReferences(current, deletedReferenceIdSet));
+    setBoard((current) => pruneBoardForDeletedReferences(current, deletedReferenceIdSet));
+    setSavedOutfits((current) => pruneSavedOutfitsForDeletedReferences(current, deletedReferenceIdSet));
 
     if (
       (editingId && deletedReferenceIdSet.has(editingId)) ||
