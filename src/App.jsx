@@ -110,6 +110,7 @@ import {
   buildBoardRenderMetadata,
   getBoardItemRenderedBounds
 } from "./lib/boardBounds.js";
+import { getBackupExportMaterializationPlan } from "./lib/backupExportPolicy.js";
 import {
   normalizeLibrarySearch,
   normalizeLibraryUiState,
@@ -3259,27 +3260,17 @@ async function materializeItemsForBackupExport(items) {
   return Promise.all(
     (Array.isArray(items) ? items : []).map(async (item) => {
       const normalizedImages = normalizeItemImages(item);
-      const [previewAsset, thumbnailAsset, originalAsset] = await Promise.all([
-        normalizedImages.preview?.src ? normalizedImages.preview : loadItemMediaAssetById(item.id, "preview"),
-        normalizedImages.thumbnail?.src ? normalizedImages.thumbnail : loadItemMediaAssetById(item.id, "thumbnail"),
-        normalizedImages.original?.src || !normalizedImages.originalPreserved
-          ? normalizedImages.original
-          : loadItemMediaAssetById(item.id, "original")
-      ]);
-      const originalSrc =
-        originalAsset?.src
-        || (originalAsset?.blob instanceof Blob ? await readFileAsDataUrl(originalAsset.blob) : "");
+      const materializationPlan = getBackupExportMaterializationPlan(item);
+      const previewAsset = materializationPlan.needsPreview
+        ? await loadItemMediaAssetById(item.id, "preview")
+        : normalizedImages.preview;
 
       return {
         ...item,
         images: {
-          original: createImageAsset({
-            ...normalizedImages.original,
-            ...originalAsset,
-            src: originalSrc
-          }),
+          original: createImageAsset(normalizedImages.original),
           preview: createImageAsset(previewAsset),
-          thumbnail: createImageAsset(thumbnailAsset)
+          thumbnail: createImageAsset(normalizedImages.thumbnail)
         }
       };
     })
