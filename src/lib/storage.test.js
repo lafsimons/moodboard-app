@@ -10,6 +10,7 @@ import {
   createMetadataOnlyBackupData,
   createLightweightBackupData,
   deleteOriginalImageBlob,
+  exportBackup,
   getOrCreateDeviceId,
   getSyncMetadata,
   hasOriginalImageBlob,
@@ -380,7 +381,8 @@ test("db upgrade creates sync stores", async () => {
   await getOrCreateDeviceId();
 
   const database = indexedDb.getDatabase("moodboard-app-db");
-  assert.equal(database.version, 3);
+  assert.equal(database.version, 4);
+  assert.equal(database.stores.has("itemMediaAssets"), true);
   assert.equal(database.stores.has("syncState"), true);
   assert.equal(database.stores.has("syncMetadata"), true);
 });
@@ -1070,6 +1072,188 @@ test("loadItemMediaAssetById returns persisted media for metadata-only startup i
   assert.equal(asset.mimeType, "image/webp");
   assert.equal(asset.width, 400);
   assert.equal(asset.height, 300);
+});
+
+test("saveItem stores new image payloads out-of-line while keeping the item record metadata-only", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-split",
+    itemUuid: "uuid-split",
+    imageUrl: "data:image/webp;base64,preview-inline",
+    imageWidth: 1200,
+    imageHeight: 800,
+    mimeType: "image/webp",
+    fileSize: 1111,
+    originalFilename: "split.png",
+    images: {
+      original: {
+        src: "data:image/png;base64,b3JpZ2luYWwtaW5saW5l",
+        mimeType: "image/png",
+        width: 2400,
+        height: 1600,
+        fileSize: 3333,
+        originalFilename: "split.png"
+      },
+      preview: {
+        src: "data:image/webp;base64,preview-inline",
+        mimeType: "image/webp",
+        width: 1200,
+        height: 800,
+        fileSize: 1111,
+        originalFilename: "split.png"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,thumb-inline",
+        mimeType: "image/webp",
+        width: 320,
+        height: 213,
+        fileSize: 222,
+        originalFilename: "split.png"
+      }
+    },
+    originalPreserved: true
+  });
+
+  const database = indexedDb.getDatabase("moodboard-app-db");
+  const storedItem = database.stores.get("items").records.get("item-split");
+  const previewRecord = database.stores.get("itemMediaAssets").records.get("item-split:preview");
+  const thumbnailRecord = database.stores.get("itemMediaAssets").records.get("item-split:thumbnail");
+  const originalRecord = database.stores.get("originalImageBlobs").records.get("uuid-split");
+
+  assert.equal(storedItem.imageUrl, "");
+  assert.equal(storedItem.images.preview.src, "");
+  assert.equal(storedItem.images.thumbnail.src, "");
+  assert.equal(storedItem.images.original.src, "");
+  assert.equal(previewRecord.asset.src, "data:image/webp;base64,preview-inline");
+  assert.equal(thumbnailRecord.asset.src, "data:image/webp;base64,thumb-inline");
+  assert.equal(originalRecord.mimeType, "image/png");
+  assert.equal(await originalRecord.blob.text(), "original-inline");
+});
+
+test("legacy inline-media records still resolve through loadItemMediaAssetById", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  seedStore(indexedDb, "moodboard-app-db", "items", "id", [
+    {
+      id: "legacy-inline",
+      itemUuid: "legacy-inline-uuid",
+      imageUrl: "data:image/webp;base64,legacy-preview",
+      images: {
+        preview: {
+          src: "data:image/webp;base64,legacy-preview",
+          mimeType: "image/webp",
+          width: 900,
+          height: 600
+        }
+      }
+    }
+  ]);
+
+  const asset = await loadItemMediaAssetById("legacy-inline", "preview");
+
+  assert.equal(asset.src, "data:image/webp;base64,legacy-preview");
+  assert.equal(asset.mimeType, "image/webp");
+  assert.equal(asset.width, 900);
+  assert.equal(asset.height, 600);
+});
+
+test("metadata-only edits preserve out-of-line media assets", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-preserve",
+    itemUuid: "uuid-preserve",
+    name: "Before",
+    imageUrl: "data:image/webp;base64,preview-preserve",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-preserve",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480
+      }
+    }
+  });
+
+  await saveItem({
+    id: "item-preserve",
+    itemUuid: "uuid-preserve",
+    name: "After",
+    imageUrl: "",
+    images: {
+      preview: {
+        src: "",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480
+      }
+    }
+  });
+
+  const [persistedItem] = await loadItems();
+  const asset = await loadItemMediaAssetById("item-preserve", "preview");
+
+  assert.equal(persistedItem.name, "After");
+  assert.equal(persistedItem.imageUrl, "");
+  assert.equal(persistedItem.images.preview.src, "");
+  assert.equal(asset.src, "data:image/webp;base64,preview-preserve");
+  assert.equal(asset.width, 640);
+});
+
+test("loadItems keeps visible-card records metadata-only while media resolves through the helper", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-visible",
+    itemUuid: "uuid-visible",
+    name: "Visible",
+    imageUrl: "data:image/webp;base64,visible-preview",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,visible-preview",
+        mimeType: "image/webp",
+        width: 500,
+        height: 400
+      }
+    }
+  });
+
+  const [item] = await loadItems();
+  const asset = await loadItemMediaAssetById(item.id, "preview");
+
+  assert.equal(item.imageUrl, "");
+  assert.equal(item.images.preview.src, "");
+  assert.equal(asset.src, "data:image/webp;base64,visible-preview");
+  assert.equal(asset.width, 500);
+  assert.equal(asset.height, 400);
+});
+
+test("exportBackup materializes out-of-line preview media for new records", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-export",
+    itemUuid: "uuid-export",
+    name: "Export",
+    imageUrl: "data:image/webp;base64,export-preview",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,export-preview",
+        mimeType: "image/webp",
+        width: 720,
+        height: 540
+      }
+    }
+  });
+
+  await saveAppState({
+    savedOutfits: []
+  });
+
+  const backup = await exportBackup();
+
+  assert.equal(backup.items[0].images.preview.src, "data:image/webp;base64,export-preview");
 });
 
 test("prepareBackupImport normalizes legacy backups and fills source identity defaults", () => {
