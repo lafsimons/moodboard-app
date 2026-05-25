@@ -3567,6 +3567,7 @@ export default function App() {
   const [draft, setDraft] = useState(emptyForm);
   const [cropEditorState, setCropEditorState] = useState(null);
   const [imageUploadError, setImageUploadError] = useState("");
+  const [freshImportSession, setFreshImportSession] = useState(null);
   const [imageProcessing, setImageProcessing] = useState(false);
   const [itemImporting, setItemImporting] = useState(false);
   const [replaceOriginalShouldRegenerate, setReplaceOriginalShouldRegenerate] = useState(false);
@@ -6704,9 +6705,8 @@ async function handleExportBackup() {
     setWardrobeAddOpen(true);
     setReferencePreview(null);
     setSelectionEditorActive(false);
-    setImageUploadError("");
     setImageProcessing(false);
-    setItemImporting(false);
+    setItemImporting(Boolean(freshImportSession?.active));
     setItemImageDragActive(false);
     closeCropEditor();
     setEditingId(null);
@@ -7857,13 +7857,33 @@ async function handleExportBackup() {
     try {
       setItemImporting(true);
       setImageUploadError("");
+      setFreshImportSession({
+        active: true,
+        total: selectedFiles.length,
+        completed: 0,
+        succeeded: 0,
+        failed: 0,
+        ignored: 0,
+        currentFile: ""
+      });
       const result = await importReferenceFiles(selectedFiles, items, {
         bakeItemImagePresentation,
         createOriginalImageAsset,
         createPreviewImageAsset,
         createThumbnailImageAsset,
         createUniqueItemId,
-        saveItem
+        saveItem,
+        onProgress: ({ file, total, completed, succeeded, failed, ignored }) => {
+          setFreshImportSession({
+            active: completed < total,
+            total,
+            completed,
+            succeeded,
+            failed,
+            ignored,
+            currentFile: file?.name ?? ""
+          });
+        }
       });
 
       result.failedFiles.forEach(({ file, error }) => {
@@ -7877,6 +7897,10 @@ async function handleExportBackup() {
       setImageUploadError(getReferenceImportMessage(result));
     } finally {
       setItemImporting(false);
+      setFreshImportSession((current) => current ? {
+        ...current,
+        active: false
+      } : current);
     }
   }
 
@@ -8902,9 +8926,7 @@ async function handleExportBackup() {
 
   function closeWardrobeAdd(event = null) {
     setWardrobeAddOpen(false);
-    setImageUploadError("");
     setItemImageDragActive(false);
-    setItemImporting(false);
 
     if (event) {
       blurPointerActivatedControl(event);
@@ -9047,6 +9069,15 @@ async function handleExportBackup() {
     }
 
     return "";
+  }
+
+  function getFreshImportProgressLabel(session) {
+    if (!session) {
+      return "";
+    }
+
+    const currentFile = session.currentFile ? `Current: ${session.currentFile}` : "Current: finishing";
+    return `Imported ${session.completed} / ${session.total}. Success ${session.succeeded}. Failed ${session.failed}. Ignored ${session.ignored}. ${currentFile}`;
   }
 
   function toggleWorkspacePanel(panel, event = null) {
@@ -10940,6 +10971,7 @@ async function handleExportBackup() {
                                   />
                                 </label>
                               </div>
+                              {freshImportSession ? <p className="wardrobe-add-feedback">{getFreshImportProgressLabel(freshImportSession)}</p> : null}
                               {imageUploadError ? <p className="form-success wardrobe-add-feedback">{imageUploadError}</p> : null}
                             </div>
                           </div>

@@ -30,3 +30,13 @@ test("editor image controls key off resolver-backed draft preview state", () => 
 test("debounced persistence reuses the memoized persisted app state snapshot", () => {
   assert.match(appSource, /enqueueAppStateSave\(currentPersistedAppState, "debounced"\)/);
 });
+
+test("fresh import progress is owned at app level and survives add-window reopen", () => {
+  assert.match(appSource, /const \[freshImportSession, setFreshImportSession\] = useState\(null\)/);
+  assert.match(appSource, /setFreshImportSession\(\{\s*active: true,\s*total: selectedFiles.length/);
+  assert.match(appSource, /onProgress: \(\{ file, total, completed, succeeded, failed, ignored \}\) => \{/);
+  assert.match(appSource, /function closeWardrobeAdd\(event = null\) \{[\s\S]*setWardrobeAddOpen\(false\);[\s\S]*setItemImageDragActive\(false\);[\s\S]*\}/);
+  assert.doesNotMatch(appSource, /function closeWardrobeAdd\(event = null\) \{[\s\S]*setItemImporting\(false\)/);
+  assert.match(appSource, /function getFreshImportProgressLabel\(session\) \{/);
+  assert.match(appSource, /freshImportSession \? <p className="wardrobe-add-feedback">\{getFreshImportProgressLabel\(freshImportSession\)\}<\/p> : null/);
+});

@@ -1257,7 +1257,7 @@ export async function saveItem(item) {
   const stableKey = normalizeSyncText(storedItem?.itemUuid);
 
   if (!stableKey) {
-    return;
+    return mergedItem;
   }
 
   const [deviceId, existingRecord] = await Promise.all([
@@ -1276,6 +1276,8 @@ export async function saveItem(item) {
       pendingDelete: false
     })
   );
+
+  return mergedItem;
 }
 
 export async function deleteItemsByIds(ids) {
