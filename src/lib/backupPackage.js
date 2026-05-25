@@ -1,6 +1,7 @@
 import { createMetadataOnlyBackupData } from "./storage.js";
-import { sanitizeBackupReference } from "./metadata.js";
+import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 import { createImageAsset, normalizeItemImages } from "./itemImages.js";
+import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
 export const PACKAGE_SOURCE = "moodboard-app-package";
 export const PACKAGE_VERSION = 1;
@@ -102,6 +103,291 @@ function createJsonBlob(value) {
 
 function createTextBlob(value) {
   return new Blob([value], { type: "application/x-ndjson" });
+}
+
+async function readJsonFile(fileHandle, errorMessage) {
+  if (!fileHandle || typeof fileHandle.getFile !== "function") {
+    throw new Error(errorMessage);
+  }
+
+  const file = await fileHandle.getFile();
+
+  try {
+    return JSON.parse(await file.text());
+  } catch {
+    throw new Error(errorMessage);
+  }
+}
+
+async function readManifestFile(rootHandle) {
+  try {
+    const fileHandle = await rootHandle.getFileHandle(PACKAGE_MANIFEST_FILE);
+    return validateBackupPackageManifest(await readJsonFile(fileHandle, "Backup package manifest is invalid."));
+  } catch (error) {
+    if (error?.message === "Backup package manifest is invalid.") {
+      throw error;
+    }
+
+    throw new Error("Backup package manifest is missing.");
+  }
+}
+
+async function readAppStateFile(rootHandle) {
+  try {
+    const fileHandle = await rootHandle.getFileHandle(PACKAGE_APP_STATE_FILE);
+    return buildBackupPackageAppState(await readJsonFile(fileHandle, "Backup package app state is invalid."));
+  } catch (error) {
+    if (error?.message === "Backup package app state is invalid.") {
+      throw error;
+    }
+
+    throw new Error("Backup package app state is missing.");
+  }
+}
+
+function containsEmbeddedDataImagePayload(record) {
+  const normalizedImages = normalizeItemImages(record);
+
+  return [
+    record?.imageUrl,
+    normalizedImages.original?.src,
+    normalizedImages.preview?.src,
+    normalizedImages.thumbnail?.src
+  ].some((value) => typeof value === "string" && value.startsWith("data:image/"));
+}
+
+function validatePreviewPackagePath(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+
+  if (!normalized) {
+    throw new Error("Backup package item preview path is invalid.");
+  }
+
+  if (!/^media\/previews\/[^/]+$/.test(normalized)) {
+    throw new Error(`Backup package preview path "${normalized}" is invalid.`);
+  }
+
+  return normalized;
+}
+
+function createPreparedPackageItem(record) {
+  const migratedRecord = migrateReferenceMetadataToTags(record);
+  const metadataOnlyRecord = stripItemMediaPayloads(migratedRecord);
+  const normalizedImages = normalizeItemImages(migratedRecord);
+  const previewAsset = {
+    ...createImageAsset(normalizedImages.preview),
+    src: ""
+  };
+  const originalAsset = {
+    ...createImageAsset(normalizedImages.original),
+    src: ""
+  };
+  const thumbnailAsset = {
+    ...createImageAsset(normalizedImages.thumbnail),
+    src: ""
+  };
+
+  delete previewAsset.packagePath;
+
+  return {
+    ...migratedRecord,
+    ...metadataOnlyRecord,
+    imageUrl: "",
+    originalPreserved: false,
+    images: {
+      original: originalAsset,
+      preview: previewAsset,
+      thumbnail: thumbnailAsset
+    }
+  };
+}
+
+async function streamNdjsonFileLines(file, onLine) {
+  if (!file || typeof file.stream !== "function") {
+    throw new Error("Backup package items file is invalid.");
+  }
+
+  const reader = file.stream().getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  let lineNumber = 0;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+
+      buffered += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+      const lines = buffered.split(/\r?\n/);
+      buffered = lines.pop() ?? "";
+
+      for (const line of lines) {
+        lineNumber += 1;
+        await onLine(line, lineNumber);
+      }
+
+      if (done) {
+        break;
+      }
+    }
+
+    buffered += decoder.decode();
+
+    if (buffered.length > 0) {
+      lineNumber += 1;
+      await onLine(buffered, lineNumber);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+async function getPreviewsDirectoryHandle(rootHandle) {
+  try {
+    const mediaDirectoryHandle = await rootHandle.getDirectoryHandle(PACKAGE_MEDIA_DIR);
+    return await mediaDirectoryHandle.getDirectoryHandle("previews");
+  } catch {
+    throw new Error("Backup package previews directory is missing.");
+  }
+}
+
+async function readItemsFile(rootHandle) {
+  try {
+    const itemsFileHandle = await rootHandle.getFileHandle(PACKAGE_ITEMS_FILE);
+    return itemsFileHandle.getFile();
+  } catch {
+    throw new Error("Backup package items file is missing.");
+  }
+}
+
+function publishPackageImportProgress(onProgress, nextProgress) {
+  if (typeof onProgress === "function") {
+    onProgress(nextProgress);
+  }
+}
+
+export async function prepareBackupPackageImportFromDirectory(rootHandle, options = {}) {
+  if (!rootHandle || typeof rootHandle.getDirectoryHandle !== "function" || typeof rootHandle.getFileHandle !== "function") {
+    throw new Error("Backup package import requires a readable directory handle.");
+  }
+
+  const { onProgress } = options;
+  publishPackageImportProgress(onProgress, { phase: "reading-manifest", completed: 0, total: 0 });
+  const manifest = await readManifestFile(rootHandle);
+
+  publishPackageImportProgress(onProgress, { phase: "reading-app-state", completed: 0, total: 0 });
+  const appState = await readAppStateFile(rootHandle);
+
+  publishPackageImportProgress(onProgress, {
+    phase: "validating-items",
+    completed: 0,
+    total: manifest.itemCount
+  });
+
+  const [itemsFile, previewsDirectoryHandle] = await Promise.all([
+    readItemsFile(rootHandle),
+    getPreviewsDirectoryHandle(rootHandle)
+  ]);
+
+  const stagedItems = [];
+  const stagedPreviewFiles = [];
+  const seenIds = new Set();
+
+  await streamNdjsonFileLines(itemsFile, async (line, lineNumber) => {
+    const trimmedLine = line.trim();
+
+    if (!trimmedLine) {
+      return;
+    }
+
+    let record;
+
+    try {
+      record = JSON.parse(trimmedLine);
+    } catch {
+      throw new Error(`Backup package item line ${lineNumber} is invalid JSON.`);
+    }
+
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      throw new Error(`Backup package item line ${lineNumber} is invalid.`);
+    }
+
+    const itemId = typeof record.id === "string" ? record.id.trim() : "";
+
+    if (!itemId) {
+      throw new Error(`Backup package item line ${lineNumber} is missing an id.`);
+    }
+
+    if (seenIds.has(itemId)) {
+      throw new Error(`Backup package item id "${itemId}" is duplicated.`);
+    }
+
+    if (containsEmbeddedDataImagePayload(record)) {
+      throw new Error(`Backup package item "${itemId}" contains embedded image data.`);
+    }
+
+    const previewPackagePath = validatePreviewPackagePath(record?.images?.preview?.packagePath);
+    const previewFileName = previewPackagePath.slice(`${PACKAGE_PREVIEWS_DIR}/`.length);
+    let previewFileHandle;
+
+    try {
+      previewFileHandle = await previewsDirectoryHandle.getFileHandle(previewFileName);
+    } catch {
+      throw new Error(`Backup package preview file "${previewFileName}" is missing.`);
+    }
+
+    const previewFile = await previewFileHandle.getFile();
+    const normalizedImages = normalizeItemImages(record);
+    const previewImage = createImageAsset(normalizedImages.preview);
+
+    seenIds.add(itemId);
+    stagedItems.push(createPreparedPackageItem(record));
+    stagedPreviewFiles.push({
+      itemId,
+      variant: "preview",
+      asset: {
+        ...previewImage,
+        src: "",
+        blob: previewFile,
+        fileSize: previewImage.fileSize || previewFile.size || 0,
+        mimeType: previewImage.mimeType || previewFile.type || ""
+      }
+    });
+
+    publishPackageImportProgress(onProgress, {
+      phase: "validating-items",
+      completed: stagedItems.length,
+      total: manifest.itemCount
+    });
+  });
+
+  if (stagedItems.length !== manifest.itemCount) {
+    throw new Error("Backup package item count does not match the manifest.");
+  }
+
+  publishPackageImportProgress(onProgress, {
+    phase: "verifying-previews",
+    completed: stagedPreviewFiles.length,
+    total: manifest.previewFileCount
+  });
+
+  if (stagedPreviewFiles.length !== manifest.previewFileCount) {
+    throw new Error("Backup package preview file count does not match the manifest.");
+  }
+
+  publishPackageImportProgress(onProgress, {
+    phase: "preparing-import",
+    completed: stagedItems.length,
+    total: stagedItems.length
+  });
+
+  return {
+    source: manifest.source,
+    version: manifest.version,
+    exportedAt: manifest.exportedAt,
+    appState,
+    items: stagedItems,
+    itemMediaAssets: stagedPreviewFiles
+  };
 }
 
 function dataUrlToBlob(dataUrl) {

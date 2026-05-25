@@ -11,9 +11,13 @@ import {
   getDefaultData,
   prepareBackupImport,
   replaceWithBackup,
+  replaceWithPreparedBackupPackage,
   replaceWithPreparedBackup,
   resetToDefaults
 } from "../lib/storage.js";
+import {
+  prepareBackupPackageImportFromDirectory
+} from "../lib/backupPackage.js";
 
 export {
   analyzeBackupData,
@@ -25,7 +29,9 @@ export {
   exportBackup,
   getDefaultData,
   prepareBackupImport,
+  prepareBackupPackageImportFromDirectory,
   replaceWithBackup,
+  replaceWithPreparedBackupPackage,
   replaceWithPreparedBackup,
   resetToDefaults
 };

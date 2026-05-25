@@ -15,6 +15,7 @@ import {
   exportBackupPackageToDirectory,
   getBackupPackagePreviewFileName,
   isFileSystemAccessSupported,
+  prepareBackupPackageImportFromDirectory,
   serializeBackupPackageItemRecord,
   validateBackupPackageManifest
 } from "./backupPackage.js";
@@ -45,6 +46,10 @@ class FakeFileHandle {
 
   async createWritable() {
     return new FakeWritable(this, this.closeLog);
+  }
+
+  async getFile() {
+    return this.readBlob();
   }
 
   async readText() {
@@ -513,4 +518,154 @@ test("exportBackupPackageToDirectory reports package export progress by phase", 
     { phase: "writing-previews", completed: 2, total: 2 },
     { phase: "finalizing", completed: 2, total: 2 }
   ]);
+});
+
+async function seedPackageFile(directoryHandle, fileName, value, type = "application/json") {
+  const fileHandle = await directoryHandle.getFileHandle(fileName, { create: true });
+  fileHandle.chunks = [];
+  fileHandle.closed = false;
+  const writable = await fileHandle.createWritable();
+  await writable.write(new Blob([value], { type }));
+  await writable.close();
+}
+
+async function createValidImportPackageRoot() {
+  const rootHandle = new FakeDirectoryHandle();
+  const manifest = buildBackupPackageManifest({
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    itemCount: 1,
+    previewFileCount: 1
+  });
+  const appState = buildBackupPackageAppState({
+    savedOutfits: []
+  });
+  const mediaDirectory = await rootHandle.getDirectoryHandle("media", { create: true });
+  const previewsDirectory = await mediaDirectory.getDirectoryHandle("previews", { create: true });
+  await seedPackageFile(rootHandle, PACKAGE_MANIFEST_FILE, JSON.stringify(manifest, null, 2));
+  await seedPackageFile(rootHandle, PACKAGE_APP_STATE_FILE, JSON.stringify(appState, null, 2));
+  await seedPackageFile(
+    rootHandle,
+    PACKAGE_ITEMS_FILE,
+    `${JSON.stringify({
+      id: "item-1",
+      itemUuid: "uuid-1",
+      originalPreserved: false,
+      images: {
+        preview: {
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          fileSize: 1234,
+          originalFilename: "preview.webp",
+          packagePath: "media/previews/item-1.webp"
+        }
+      }
+    })}\n`,
+    "application/x-ndjson"
+  );
+  await seedPackageFile(previewsDirectory, "item-1.webp", "preview-binary", "image/webp");
+
+  return rootHandle;
+}
+
+test("prepareBackupPackageImportFromDirectory stages metadata-only items and preview blobs", async () => {
+  const rootHandle = await createValidImportPackageRoot();
+  const progressEvents = [];
+
+  const prepared = await prepareBackupPackageImportFromDirectory(rootHandle, {
+    onProgress: (event) => {
+      progressEvents.push(event);
+    }
+  });
+
+  assert.equal(prepared.items.length, 1);
+  assert.equal(prepared.items[0].id, "item-1");
+  assert.equal(prepared.items[0].imageUrl, "");
+  assert.equal(prepared.items[0].images.preview.src, "");
+  assert.equal("packagePath" in prepared.items[0].images.preview, false);
+  assert.equal(prepared.itemMediaAssets.length, 1);
+  assert.equal(prepared.itemMediaAssets[0].itemId, "item-1");
+  assert.equal(prepared.itemMediaAssets[0].variant, "preview");
+  assert.equal(prepared.itemMediaAssets[0].asset.blob instanceof Blob, true);
+  assert.deepEqual(progressEvents, [
+    { phase: "reading-manifest", completed: 0, total: 0 },
+    { phase: "reading-app-state", completed: 0, total: 0 },
+    { phase: "validating-items", completed: 0, total: 1 },
+    { phase: "validating-items", completed: 1, total: 1 },
+    { phase: "verifying-previews", completed: 1, total: 1 },
+    { phase: "preparing-import", completed: 1, total: 1 }
+  ]);
+});
+
+test("prepareBackupPackageImportFromDirectory rejects duplicate item ids", async () => {
+  const rootHandle = await createValidImportPackageRoot();
+  await seedPackageFile(
+    rootHandle,
+    PACKAGE_ITEMS_FILE,
+    `${JSON.stringify({ id: "item-1", images: { preview: { packagePath: "media/previews/item-1.webp" } } })}\n${JSON.stringify({ id: "item-1", images: { preview: { packagePath: "media/previews/item-1.webp" } } })}\n`,
+    "application/x-ndjson"
+  );
+  await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /duplicated/i);
+});
+
+test("prepareBackupPackageImportFromDirectory rejects embedded image data payloads", async () => {
+  const rootHandle = await createValidImportPackageRoot();
+  await seedPackageFile(
+    rootHandle,
+    PACKAGE_ITEMS_FILE,
+    `${JSON.stringify({
+      id: "item-1",
+      imageUrl: "data:image/webp;base64,cHJldmlldw==",
+      images: { preview: { packagePath: "media/previews/item-1.webp" } }
+    })}\n`,
+    "application/x-ndjson"
+  );
+  await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /embedded image data/i);
+});
+
+test("prepareBackupPackageImportFromDirectory rejects invalid preview package paths", async () => {
+  const rootHandle = await createValidImportPackageRoot();
+  await seedPackageFile(
+    rootHandle,
+    PACKAGE_ITEMS_FILE,
+    `${JSON.stringify({
+      id: "item-1",
+      images: { preview: { packagePath: "media/previews/nested/item-1.webp" } }
+    })}\n`,
+    "application/x-ndjson"
+  );
+  await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /preview path/i);
+});
+
+test("prepareBackupPackageImportFromDirectory rejects missing preview files", async () => {
+  const rootHandle = await createValidImportPackageRoot();
+  const mediaDirectory = rootHandle.directories.get("media");
+  const previewsDirectory = mediaDirectory.directories.get("previews");
+  previewsDirectory.files.delete("item-1.webp");
+
+  await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /missing/i);
+});
+
+test("prepareBackupPackageImportFromDirectory rejects manifest item count mismatches", async () => {
+  const rootHandle = await createValidImportPackageRoot();
+  const mismatchedManifest = buildBackupPackageManifest({
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    itemCount: 2,
+    previewFileCount: 1
+  });
+  await seedPackageFile(rootHandle, PACKAGE_MANIFEST_FILE, JSON.stringify(mismatchedManifest, null, 2));
+
+  await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /item count/i);
+});
+
+test("prepareBackupPackageImportFromDirectory rejects manifest preview count mismatches", async () => {
+  const rootHandle = await createValidImportPackageRoot();
+  const mismatchedManifest = buildBackupPackageManifest({
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    itemCount: 1,
+    previewFileCount: 2
+  });
+  await seedPackageFile(rootHandle, PACKAGE_MANIFEST_FILE, JSON.stringify(mismatchedManifest, null, 2));
+
+  await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /preview file count/i);
 });
