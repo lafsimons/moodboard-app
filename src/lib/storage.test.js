@@ -13,9 +13,12 @@ import {
   getSyncMetadata,
   hasOriginalImageBlob,
   loadAppState,
+  loadItemMediaAssetById,
   loadItems,
   loadOriginalImageBlob,
   loadOriginalImageBlobEntry,
+  loadStartupAppState,
+  loadStartupItemMetadata,
   prepareBackupImport,
   replaceWithBackup,
   replaceWithPreparedBackup,
@@ -834,6 +837,156 @@ test("current working board changes stay unsynced", async () => {
   });
 
   assert.deepEqual(await getSyncMetadata(), []);
+});
+
+test("saveAppState sanitizes embedded board payloads before persisting", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    board: {
+      id: "board-1",
+      boardUuid: "board-uuid-1",
+      width: 1600,
+      height: 1200,
+      images: [
+        {
+          id: "board-image-1",
+          referenceId: "item-1",
+          referenceItemUuid: "uuid-1",
+          x: 10,
+          y: 20,
+          width: 220,
+          height: 260,
+          rotation: 12.34,
+          zIndex: 0,
+          embeddedItem: {
+            id: "item-1",
+            imageUrl: "data:image/png;base64,large"
+          }
+        }
+      ]
+    },
+    savedOutfits: [
+      {
+        id: "saved-1",
+        board: {
+          id: "saved-board-1",
+          boardUuid: "saved-board-uuid-1",
+          images: [
+            {
+              referenceId: "item-1",
+              imageUrl: "data:image/png;base64,large"
+            }
+          ]
+        }
+      }
+    ]
+  });
+
+  const persistedAppState = await loadAppState();
+
+  assert.deepEqual(persistedAppState.board.images[0], {
+    id: "board-image-1",
+    referenceId: "item-1",
+    referenceItemUuid: "uuid-1",
+    x: 10,
+    y: 20,
+    width: 220,
+    height: 260,
+    rotation: 12.3,
+    zIndex: 1,
+    generationSlot: ""
+  });
+  assert.equal("embeddedItem" in persistedAppState.board.images[0], false);
+  assert.equal("imageUrl" in persistedAppState.savedOutfits[0].board.images[0], false);
+});
+
+test("saveAppState skips oversized persisted payloads", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    savedOutfits: []
+  });
+
+  const saved = await saveAppState({
+    notes: "x".repeat(1_200_000),
+    savedOutfits: []
+  });
+
+  assert.equal(saved, false);
+  assert.deepEqual(await loadAppState(), {
+    savedOutfits: [],
+    itemDefaultsMigrationVersion: 0,
+    imagePresentationMigrationVersion: 0,
+    outfit: {},
+    board: null
+  });
+});
+
+test("loadStartupAppState bypasses migration gating and returns persisted state", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    savedOutfits: [],
+    librarySearch: "coat"
+  });
+
+  const appState = await loadStartupAppState();
+
+  assert.equal(appState.librarySearch, "coat");
+});
+
+test("loadStartupItemMetadata strips inline image payloads but preserves metadata", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-startup",
+    itemUuid: "uuid-startup",
+    imageUrl: "data:image/png;base64,preview",
+    imageWidth: 1024,
+    imageHeight: 768,
+    originalFilename: "startup.png",
+    images: {
+      preview: {
+        src: "data:image/png;base64,preview",
+        width: 1024,
+        height: 768
+      }
+    }
+  });
+
+  const [item] = await loadStartupItemMetadata();
+
+  assert.equal(item.id, "item-startup");
+  assert.equal(item.imageUrl, "");
+  assert.equal(item.images.preview.src, "");
+  assert.equal(item.imageWidth, 1024);
+  assert.equal(item.imageHeight, 768);
+  assert.equal(item.originalFilename, "startup.png");
+});
+
+test("loadItemMediaAssetById returns persisted media for metadata-only startup items", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-media",
+    itemUuid: "uuid-media",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview",
+        mimeType: "image/webp",
+        width: 400,
+        height: 300
+      }
+    }
+  });
+
+  const asset = await loadItemMediaAssetById("item-media");
+
+  assert.equal(asset.src, "data:image/webp;base64,preview");
+  assert.equal(asset.mimeType, "image/webp");
+  assert.equal(asset.width, 400);
+  assert.equal(asset.height, 300);
 });
 
 test("prepareBackupImport normalizes legacy backups and fills source identity defaults", () => {

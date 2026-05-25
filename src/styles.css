@@ -81,6 +81,120 @@ button:disabled {
   overflow: hidden;
 }
 
+.safe-mode-recovery-shell {
+  min-height: 100vh;
+  padding: 20px;
+  overflow: auto;
+  background:
+    linear-gradient(180deg, rgba(247, 247, 247, 0.96), rgba(238, 238, 238, 0.96));
+}
+
+.safe-mode-recovery-panel {
+  width: min(1400px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 14px;
+}
+
+.safe-mode-recovery-header,
+.safe-mode-recovery-status,
+.safe-mode-recovery-search {
+  display: grid;
+  gap: 6px;
+}
+
+.safe-mode-recovery-status strong {
+  font-size: 0.9rem;
+}
+
+.safe-mode-recovery-status span,
+.safe-mode-recovery-subtle,
+.safe-mode-recovery-feedback {
+  color: var(--muted-strong);
+  font-size: 0.72rem;
+}
+
+.safe-mode-recovery-summary,
+.safe-mode-recovery-actions,
+.safe-mode-recovery-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.safe-mode-recovery-summary span {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid);
+  font-size: 0.72rem;
+}
+
+.safe-mode-recovery-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  justify-content: space-between;
+}
+
+.safe-mode-recovery-search {
+  min-width: min(420px, 100%);
+}
+
+.safe-mode-recovery-search input {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-solid);
+  padding: 7px 9px;
+}
+
+.safe-mode-recovery-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-solid);
+}
+
+.safe-mode-recovery-table {
+  width: 100%;
+  min-width: 960px;
+  border-collapse: collapse;
+}
+
+.safe-mode-recovery-table th,
+.safe-mode-recovery-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  text-align: left;
+  vertical-align: top;
+  font-size: 0.72rem;
+}
+
+.safe-mode-recovery-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f1f1f1;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.64rem;
+}
+
+.safe-mode-recovery-table td strong,
+.safe-mode-recovery-table td span {
+  display: block;
+}
+
+.safe-mode-recovery-table td strong {
+  margin-bottom: 3px;
+}
+
+.safe-mode-recovery-empty {
+  padding: 16px;
+}
+
 .mini-header {
   margin-bottom: 14px;
 }

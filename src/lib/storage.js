@@ -8,7 +8,9 @@ import {
   SUPPORTED_BACKUP_VERSIONS
 } from "./appIdentity.js";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./boardIdentity.js";
+import { createImageAsset, normalizeItemImages } from "./itemImages.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
+import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
 const DB_VERSION = 3;
 export const BACKUP_VERSION = 2;
@@ -19,12 +21,123 @@ const SYNC_STATE_STORE = "syncState";
 const SYNC_METADATA_STORE = "syncMetadata";
 const SYNC_STATE_KEY = "state";
 const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
+const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
+const SYNC_BACKFILL_BATCH_SIZE = 100;
 
 let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function normalizePersistedId(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function sanitizePersistedBoardImage(image, index = 0) {
+  if (!image || typeof image !== "object" || Array.isArray(image)) {
+    return null;
+  }
+
+  const sanitizedImage = {
+    id: normalizePersistedId(image.id) || `board_image_${index}`,
+    referenceId: normalizePersistedId(image.referenceId),
+    referenceItemUuid: normalizePersistedId(image.referenceItemUuid),
+    x: Math.round(Number(image.x) || 0),
+    y: Math.round(Number(image.y) || 0),
+    width: Math.max(0, Math.round(Number(image.width) || 0)),
+    height: Math.max(0, Math.round(Number(image.height) || 0)),
+    rotation: Math.round((Number(image.rotation) || 0) * 10) / 10,
+    zIndex: Math.max(1, Math.round(Number(image.zIndex) || index + 1)),
+    generationSlot: normalizePersistedId(image.generationSlot)
+  };
+  const referenceSourceKey = normalizePersistedId(image.referenceSourceKey).toLowerCase();
+
+  if (referenceSourceKey) {
+    sanitizedImage.referenceSourceKey = referenceSourceKey;
+  }
+
+  return sanitizedImage.referenceId ? sanitizedImage : null;
+}
+
+function sanitizePersistedBoard(board) {
+  if (!board || typeof board !== "object" || Array.isArray(board)) {
+    return null;
+  }
+
+  const images = (Array.isArray(board.images) ? board.images : [])
+    .map((image, index) => sanitizePersistedBoardImage(image, index))
+    .filter(Boolean);
+
+  if (!images.length) {
+    return null;
+  }
+
+  return {
+    id: normalizePersistedId(board.id) || `board_${Date.now()}`,
+    boardUuid: normalizePersistedId(board.boardUuid),
+    width: Math.max(0, Math.round(Number(board.width) || 0)),
+    height: Math.max(0, Math.round(Number(board.height) || 0)),
+    images
+  };
+}
+
+function sanitizePersistedOutfit(outfit) {
+  return Object.fromEntries(
+    Object.entries(outfit && typeof outfit === "object" && !Array.isArray(outfit) ? outfit : {}).map(
+      ([slot, itemId]) => [slot, normalizePersistedId(itemId) || null]
+    )
+  );
+}
+
+function sanitizePersistedSavedOutfit(savedOutfit, index = 0) {
+  if (!savedOutfit || typeof savedOutfit !== "object" || Array.isArray(savedOutfit)) {
+    return null;
+  }
+
+  const sanitizedOutfit = sanitizePersistedOutfit(savedOutfit.outfit);
+  const sanitizedSavedOutfit = {
+    id: normalizePersistedId(savedOutfit.id) || `saved_outfit_${index}`,
+    name: typeof savedOutfit.name === "string" ? savedOutfit.name : "Saved board",
+    description: typeof savedOutfit.description === "string" ? savedOutfit.description : "",
+    board: sanitizePersistedBoard(savedOutfit.board)
+  };
+
+  if (Object.keys(sanitizedOutfit).length) {
+    sanitizedSavedOutfit.outfit = sanitizedOutfit;
+  }
+
+  if (savedOutfit.layering) {
+    sanitizedSavedOutfit.layering = true;
+  }
+
+  return sanitizedSavedOutfit;
+}
+
+function sanitizePersistedAppState(value = {}) {
+  return {
+    ...value,
+    itemDefaultsMigrationVersion: Math.max(0, Math.round(Number(value.itemDefaultsMigrationVersion) || 0)),
+    imagePresentationMigrationVersion: Math.max(0, Math.round(Number(value.imagePresentationMigrationVersion) || 0)),
+    outfit: sanitizePersistedOutfit(value.outfit),
+    board: sanitizePersistedBoard(value.board),
+    savedOutfits: (Array.isArray(value.savedOutfits) ? value.savedOutfits : [])
+      .map((savedOutfit, index) => sanitizePersistedSavedOutfit(savedOutfit, index))
+      .filter(Boolean)
+  };
+}
+
+function getApproxSerializedBytes(value) {
+  const serialized = JSON.stringify(value);
+  const approxBytes = typeof TextEncoder !== "undefined"
+    ? new TextEncoder().encode(serialized).length
+    : serialized.length * 2;
+
+  return {
+    serialized,
+    approxBytes
+  };
 }
 
 function createDeviceId() {
@@ -142,8 +255,7 @@ function createNextDirtySyncMetadataRecord({
 }
 
 function buildReferenceSyncMetadata(item, deviceId, existingRecord = null) {
-  const normalizedItem = migrateReferenceMetadataToTags(item);
-  const stableKey = normalizeSyncText(normalizedItem?.itemUuid);
+  const stableKey = normalizeSyncText(item?.itemUuid);
   const key = createReferenceSyncMetadataKey(stableKey);
 
   if (!key) {
@@ -158,7 +270,7 @@ function buildReferenceSyncMetadata(item, deviceId, existingRecord = null) {
     key,
     entityType: "mbaReference",
     stableKey,
-    localId: normalizeSyncText(normalizedItem?.id),
+    localId: normalizeSyncText(item?.id),
     recordVersion: 0,
     syncStatus: "local_only",
     lastSyncedAt: "",
@@ -366,8 +478,47 @@ async function openDatabase() {
   return openDatabaseByName(INDEXED_DB_NAME);
 }
 
+async function openDatabaseWithoutMigration() {
+  return openDatabaseByName(INDEXED_DB_NAME);
+}
+
 async function withStore(storeName, mode, run) {
   const db = await openDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(storeName, mode);
+    const store = transaction.objectStore(storeName);
+
+    let resultPromise;
+
+    try {
+      const result = run(store);
+      const isIdbRequest = typeof IDBRequest !== "undefined" && result instanceof IDBRequest;
+      resultPromise = isIdbRequest ? requestToPromise(result) : Promise.resolve(result);
+    } catch (error) {
+      reject(error);
+      db.close();
+      return;
+    }
+
+    transaction.oncomplete = () => {
+      resultPromise
+        .then(resolve)
+        .catch(reject)
+        .finally(() => {
+          db.close();
+        });
+    };
+
+    transaction.onerror = () => {
+      reject(transaction.error);
+      db.close();
+    };
+  });
+}
+
+async function withStoreWithoutMigration(storeName, mode, run) {
+  const db = await openDatabaseWithoutMigration();
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
@@ -433,6 +584,276 @@ async function withStores(storeNames, mode, run) {
   });
 }
 
+function normalizeMetadataOnlyText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeMetadataOnlyNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
+}
+
+function normalizeMetadataOnlyTimestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.round(value);
+  }
+
+  if (typeof value === "string") {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      return 0;
+    }
+
+    const numericValue = Number(trimmedValue);
+    if (Number.isFinite(numericValue) && numericValue > 0) {
+      return Math.round(numericValue);
+    }
+
+    const parsedDate = Date.parse(trimmedValue);
+    return Number.isFinite(parsedDate) ? parsedDate : 0;
+  }
+
+  return 0;
+}
+
+function normalizeMetadataOnlyTags(value) {
+  return Array.isArray(value)
+    ? value.map((tag) => normalizeMetadataOnlyText(tag)).filter(Boolean)
+    : [];
+}
+
+function createMetadataOnlyItem(record, excludedById = {}) {
+  const strippedRecord = stripItemMediaPayloads(record);
+  const id = normalizeMetadataOnlyText(strippedRecord?.id);
+
+  return {
+    ...strippedRecord,
+    id,
+    name: normalizeMetadataOnlyText(strippedRecord?.name || strippedRecord?.title),
+    tags: normalizeMetadataOnlyTags(strippedRecord?.tags),
+    favorite: Boolean(strippedRecord?.favorite),
+    excluded: Boolean(id && excludedById[id]),
+    originalFilename: normalizeMetadataOnlyText(strippedRecord?.originalFilename),
+    importedAt: normalizeMetadataOnlyTimestamp(strippedRecord?.importedAt),
+    createdAt: normalizeMetadataOnlyTimestamp(strippedRecord?.createdAt),
+    updatedAt: normalizeMetadataOnlyTimestamp(strippedRecord?.updatedAt),
+    fileSize: normalizeMetadataOnlyNumber(strippedRecord?.fileSize),
+    mimeType: normalizeMetadataOnlyText(strippedRecord?.mimeType),
+    imageWidth: normalizeMetadataOnlyNumber(strippedRecord?.imageWidth),
+    imageHeight: normalizeMetadataOnlyNumber(strippedRecord?.imageHeight)
+  };
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, 0);
+  });
+}
+
+async function readMetadataOnlyItemBatch(startAfterKey = undefined, batchSize = 50, excludedById = {}) {
+  const db = await openDatabaseWithoutMigration();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(ITEM_STORE, "readonly");
+    const store = transaction.objectStore(ITEM_STORE);
+
+    if (typeof store.openCursor !== "function") {
+      requestToPromise(store.getAll())
+        .then((records) => {
+          const normalizedRecords = Array.isArray(records) ? records : [];
+          const startIndex = startAfterKey === undefined
+            ? 0
+            : normalizedRecords.findIndex((record) => record?.id === startAfterKey) + 1;
+          const batchRecords = normalizedRecords.slice(Math.max(0, startIndex), Math.max(0, startIndex) + batchSize);
+          const items = batchRecords.map((record) => createMetadataOnlyItem(record, excludedById)).filter((item) => item.id);
+          const lastRecord = batchRecords.at(-1);
+
+          resolve({
+            items,
+            lastKey: lastRecord?.id ?? startAfterKey,
+            hasMore: startIndex + batchSize < normalizedRecords.length
+          });
+        })
+        .catch(reject)
+        .finally(() => {
+          db.close();
+        });
+      return;
+    }
+
+    const keyRange =
+      startAfterKey === undefined ? undefined : IDBKeyRange.lowerBound(startAfterKey, true);
+    const request = store.openCursor(keyRange);
+    const items = [];
+    let lastKey = startAfterKey;
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+
+      if (!cursor) {
+        resolve({
+          items,
+          lastKey,
+          hasMore: false
+        });
+        db.close();
+        return;
+      }
+
+      lastKey = cursor.primaryKey;
+      const item = createMetadataOnlyItem(cursor.value, excludedById);
+
+      if (item.id) {
+        items.push(item);
+      }
+
+      if (items.length >= batchSize) {
+        resolve({
+          items,
+          lastKey,
+          hasMore: true
+        });
+        db.close();
+        return;
+      }
+
+      cursor.continue();
+    };
+
+    request.onerror = () => {
+      reject(request.error);
+      db.close();
+    };
+
+    transaction.onerror = () => {
+      reject(transaction.error);
+      db.close();
+    };
+  });
+}
+
+async function loadMetadataOnlyItems({
+  batchSize = 50,
+  excludedById = {},
+  onBatch = null
+} = {}) {
+  const normalizedBatchSize = Math.max(1, Math.round(Number(batchSize) || 50));
+  const items = [];
+  let lastKey;
+  let hasMore = true;
+
+  while (hasMore) {
+    const batchResult = await readMetadataOnlyItemBatch(lastKey, normalizedBatchSize, excludedById);
+    const batchItems = batchResult.items;
+
+    items.push(...batchItems);
+    lastKey = batchResult.lastKey;
+    hasMore = batchResult.hasMore;
+
+    if (batchItems.length) {
+      await Promise.resolve(
+        onBatch?.({
+          items: batchItems,
+          loaded: items.length,
+          hasMore
+        })
+      );
+    }
+
+    if (hasMore) {
+      await yieldToBrowser();
+    }
+  }
+
+  return items;
+}
+
+export async function loadStartupItemMetadata(options = {}) {
+  return loadMetadataOnlyItems(options);
+}
+
+export async function loadSafeModeItemMetadata(options = {}) {
+  return loadMetadataOnlyItems(options);
+}
+
+export async function loadStartupAppState() {
+  const entry = await withStoreWithoutMigration(APP_STORE, "readonly", (store) => store.get("state"));
+  return entry?.value ?? null;
+}
+
+export async function loadSafeModeAppState() {
+  return loadStartupAppState();
+}
+
+export async function saveSafeModeAppState(value) {
+  await withStoreWithoutMigration(APP_STORE, "readwrite", (store) =>
+    store.put({
+      key: "state",
+      value
+    })
+  );
+}
+
+export async function deleteSafeModeItems(ids = []) {
+  const normalizedIds = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))];
+
+  if (!normalizedIds.length) {
+    return;
+  }
+
+  await withStoreWithoutMigration(ITEM_STORE, "readwrite", (store) => {
+    normalizedIds.forEach((id) => store.delete(id));
+  });
+}
+
+export async function loadItemMediaAssetById(itemId, variant = "preview") {
+  const normalizedItemId = typeof itemId === "string" ? itemId.trim() : "";
+
+  if (!normalizedItemId) {
+    return null;
+  }
+
+  const item = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(normalizedItemId));
+
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const normalizedImages = normalizeItemImages(item);
+  const selectedAsset =
+    variant === "original"
+      ? normalizedImages.original
+      : variant === "thumbnail"
+        ? normalizedImages.thumbnail
+        : normalizedImages.preview;
+
+  if (selectedAsset?.src) {
+    return {
+      ...createImageAsset(selectedAsset),
+      blob: null
+    };
+  }
+
+  if (variant === "original" && normalizedImages.originalPreserved && item.itemUuid) {
+    const blobEntry = await loadOriginalImageBlobEntry(item.itemUuid);
+
+    if (blobEntry?.blob instanceof Blob) {
+      return {
+        src: "",
+        mimeType: blobEntry.mimeType ?? "",
+        width: Math.max(0, Math.round(Number(blobEntry.width) || 0)),
+        height: Math.max(0, Math.round(Number(blobEntry.height) || 0)),
+        fileSize: Math.max(0, Math.round(Number(blobEntry.fileSize) || 0)),
+        originalFilename: typeof blobEntry.originalFilename === "string" ? blobEntry.originalFilename.trim() : "",
+        blob: blobEntry.blob
+      };
+    }
+  }
+
+  return null;
+}
+
 export async function loadItems() {
   const items = await withStore(ITEM_STORE, "readonly", (store) => store.getAll());
 
@@ -448,9 +869,48 @@ export async function loadItems() {
 }
 
 export async function saveItem(item) {
-  await withStore(ITEM_STORE, "readwrite", (store) => store.put(item));
+  const existingItem = typeof item?.id === "string" && item.id.trim()
+    ? await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(item.id.trim()))
+    : null;
+  const normalizedIncomingImages = normalizeItemImages(item);
+  const hasIncomingMediaPayload = [
+    item?.imageUrl,
+    normalizedIncomingImages.preview?.src,
+    normalizedIncomingImages.thumbnail?.src,
+    normalizedIncomingImages.original?.src
+  ].some((value) => typeof value === "string" && value.trim());
+  const mergedItem =
+    existingItem && !hasIncomingMediaPayload
+      ? {
+          ...existingItem,
+          ...item,
+          imageUrl: item?.imageUrl || existingItem.imageUrl,
+          images: {
+            ...existingItem.images,
+            ...item?.images,
+            original: createImageAsset({
+              ...existingItem?.images?.original,
+              ...item?.images?.original
+            }),
+            preview: createImageAsset({
+              ...existingItem?.images?.preview,
+              ...item?.images?.preview
+            }),
+            thumbnail: createImageAsset({
+              ...existingItem?.images?.thumbnail,
+              ...item?.images?.thumbnail
+            })
+          },
+          originalPreserved:
+            typeof item?.originalPreserved === "boolean"
+              ? item.originalPreserved
+              : existingItem.originalPreserved
+        }
+      : item;
 
-  const stableKey = normalizeSyncText(item?.itemUuid);
+  await withStore(ITEM_STORE, "readwrite", (store) => store.put(mergedItem));
+
+  const stableKey = normalizeSyncText(mergedItem?.itemUuid);
 
   if (!stableKey) {
     return;
@@ -466,7 +926,7 @@ export async function saveItem(item) {
       key: createReferenceSyncMetadataKey(stableKey),
       entityType: "mbaReference",
       stableKey,
-      localId: normalizeSyncText(item?.id),
+      localId: normalizeSyncText(mergedItem?.id),
       existingRecord,
       deviceId,
       pendingDelete: false
@@ -516,25 +976,35 @@ export async function loadAppState() {
   return entry?.value ?? null;
 }
 
-export async function saveAppState(value) {
-  const previousAppState = await loadAppState();
+export async function saveAppState(value, options = {}) {
+  const sanitizedValue = sanitizePersistedAppState(value);
+  const { approxBytes } = getApproxSerializedBytes(sanitizedValue);
+
+  if (approxBytes > PERSISTED_APP_STATE_MAX_BYTES) {
+    return false;
+  }
+
+  const hasPreviousAppStateOverride = Object.prototype.hasOwnProperty.call(options, "previousAppState");
+  const previousAppState = hasPreviousAppStateOverride
+    ? options.previousAppState
+    : await loadAppState();
 
   await withStore(APP_STORE, "readwrite", (store) =>
     store.put({
       key: "state",
-      value
+      value: sanitizedValue
     })
   );
 
   const previousSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(previousAppState?.savedOutfits);
-  const nextSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(value?.savedOutfits);
+  const nextSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(sanitizedValue?.savedOutfits);
   const affectedStableKeys = new Set([
     ...Object.keys(previousSavedBoardsByStableKey),
     ...Object.keys(nextSavedBoardsByStableKey)
   ]);
 
   if (!affectedStableKeys.size) {
-    return;
+    return true;
   }
 
   const deviceId = await getOrCreateDeviceId();
@@ -575,6 +1045,7 @@ export async function saveAppState(value) {
   );
 
   await Promise.all(nextMetadataEntries.filter(Boolean).map((entry) => upsertSyncMetadata(entry)));
+  return true;
 }
 
 export async function getOrCreateDeviceId() {
@@ -625,22 +1096,74 @@ export async function clearSyncMetadata() {
 
 export async function backfillLocalSyncMetadata(items = [], savedOutfits = []) {
   const deviceId = await getOrCreateDeviceId();
-  const existingMetadataEntries = await getSyncMetadata();
-  const existingMetadataByKey = Object.fromEntries(existingMetadataEntries.map((entry) => [entry.key, entry]));
-  const nextMetadataEntries = [
-    ...(Array.isArray(items) ? items : [])
-      .map((item) => buildReferenceSyncMetadata(item, deviceId, existingMetadataByKey[createReferenceSyncMetadataKey(item?.itemUuid)]))
-      .filter(Boolean),
-    ...(Array.isArray(savedOutfits) ? savedOutfits : [])
-      .map((savedOutfit) =>
-        buildSavedBoardSyncMetadata(
-          savedOutfit,
-          deviceId,
-          existingMetadataByKey[createBoardSyncMetadataKey(savedOutfit?.board?.boardUuid ?? ensureSavedBoardUuid(savedOutfit)?.board?.boardUuid)]
-        )
-      )
-      .filter(Boolean)
-  ];
+  const itemList = Array.isArray(items) ? items : [];
+  const savedOutfitList = Array.isArray(savedOutfits) ? savedOutfits : [];
+  const existingKeys = new Set();
+
+  await withStore(SYNC_METADATA_STORE, "readonly", async (store) => {
+    if (typeof store.openCursor !== "function") {
+      const entries = await requestToPromise(store.getAll());
+      entries.forEach((entry) => {
+        existingKeys.add(normalizeSyncMetadataKey(entry?.key));
+      });
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
+      const request = store.openCursor();
+
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+
+        if (!cursor) {
+          resolve();
+          return;
+        }
+
+        existingKeys.add(normalizeSyncMetadataKey(cursor.primaryKey));
+        cursor.continue();
+      };
+    });
+  });
+
+  const nextMetadataEntries = [];
+
+  for (const item of itemList) {
+    const key = createReferenceSyncMetadataKey(item?.itemUuid);
+
+    if (!key || existingKeys.has(key)) {
+      continue;
+    }
+
+    const nextEntry = buildReferenceSyncMetadata(item, deviceId, null);
+
+    if (!nextEntry) {
+      continue;
+    }
+
+    existingKeys.add(key);
+    nextMetadataEntries.push(nextEntry);
+  }
+
+  for (const savedOutfit of savedOutfitList) {
+    const boardUuid = normalizeSyncText(savedOutfit?.board?.boardUuid)
+      || normalizeSyncText(ensureSavedBoardUuid(savedOutfit)?.board?.boardUuid);
+    const key = createBoardSyncMetadataKey(boardUuid);
+
+    if (!key || existingKeys.has(key)) {
+      continue;
+    }
+
+    const nextEntry = buildSavedBoardSyncMetadata(savedOutfit, deviceId, null);
+
+    if (!nextEntry) {
+      continue;
+    }
+
+    existingKeys.add(key);
+    nextMetadataEntries.push(nextEntry);
+  }
 
   if (!nextMetadataEntries.length) {
     return {
@@ -649,13 +1172,25 @@ export async function backfillLocalSyncMetadata(items = [], savedOutfits = []) {
     };
   }
 
-  await withStore(SYNC_METADATA_STORE, "readwrite", (store) => {
-    nextMetadataEntries.forEach((entry) => store.put(entry));
-  });
+  let createdCount = 0;
+
+  for (let index = 0; index < nextMetadataEntries.length; index += SYNC_BACKFILL_BATCH_SIZE) {
+    const batch = nextMetadataEntries.slice(index, index + SYNC_BACKFILL_BATCH_SIZE);
+
+    await withStore(SYNC_METADATA_STORE, "readwrite", (store) => {
+      batch.forEach((entry) => store.put(entry));
+    });
+
+    createdCount += batch.length;
+
+    if (index + SYNC_BACKFILL_BATCH_SIZE < nextMetadataEntries.length) {
+      await yieldToBrowser();
+    }
+  }
 
   return {
     deviceId,
-    createdCount: nextMetadataEntries.length
+    createdCount
   };
 }
 
