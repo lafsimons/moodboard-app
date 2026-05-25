@@ -92,3 +92,21 @@ test("rendered collision rectangles report gutter intersections consistently", (
   assert.equal(rectanglesIntersect(leftBounds.collisionRect, rightBounds.collisionRect, 20), false);
   assert.equal(rectanglesIntersect(leftBounds.collisionRect, rightBounds.collisionRect, 0), false);
 });
+
+test("buildBoardRenderMetadata uses resolved media dimensions to preserve aspect ratio for metadata-only items", () => {
+  const metadataOnlyItem = {
+    imageWidth: 1,
+    imageHeight: 1,
+    imageCropWidth: 100,
+    imageCropHeight: 100
+  };
+
+  const fallbackMetadata = buildBoardRenderMetadata(metadataOnlyItem);
+  const resolvedMetadata = buildBoardRenderMetadata(metadataOnlyItem, {
+    naturalWidth: 800,
+    naturalHeight: 1200
+  });
+
+  assert.equal(fallbackMetadata.aspectRatio, 1);
+  assert.equal(Math.round(resolvedMetadata.aspectRatio * 1000) / 1000, 0.667);
+});

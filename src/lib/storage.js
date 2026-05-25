@@ -8,17 +8,18 @@ import {
   SUPPORTED_BACKUP_VERSIONS
 } from "./appIdentity.js";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./boardIdentity.js";
-import { createImageAsset, normalizeItemImages } from "./itemImages.js";
+import { applyPreviewImageFields, createImageAsset, normalizeItemImages } from "./itemImages.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 export const BACKUP_VERSION = 2;
 export const BACKUP_EXPORT_WARN_BYTES = 150 * 1024 * 1024;
 export const BACKUP_IMPORT_MAX_BYTES = 250 * 1024 * 1024;
 export const BACKUP_IMPORT_HARD_MAX_BYTES = 650 * 1024 * 1024;
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
+const ITEM_MEDIA_STORE = "itemMediaAssets";
 const ORIGINAL_STORE = "originalImageBlobs";
 const SYNC_STATE_STORE = "syncState";
 const SYNC_METADATA_STORE = "syncMetadata";
@@ -26,6 +27,7 @@ const SYNC_STATE_KEY = "state";
 const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
 const SYNC_BACKFILL_BATCH_SIZE = 100;
+const ITEM_MEDIA_VARIANTS = ["preview", "thumbnail"];
 
 let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
@@ -379,6 +381,72 @@ function stripLocalOnlyAppState(appState) {
   return rest;
 }
 
+function stripItemInlineMediaFields(record = {}) {
+  const normalizedImages = normalizeItemImages(record);
+
+  return {
+    ...record,
+    imageUrl: "",
+    images: {
+      ...(record?.images && typeof record.images === "object" && !Array.isArray(record.images) ? record.images : {}),
+      original: {
+        ...normalizedImages.original,
+        src: ""
+      },
+      preview: {
+        ...normalizedImages.preview,
+        src: ""
+      },
+      thumbnail: {
+        ...normalizedImages.thumbnail,
+        src: ""
+      }
+    },
+    originalPreserved: normalizedImages.originalPreserved
+  };
+}
+
+function createItemMediaKey(itemId, variant) {
+  const normalizedItemId = typeof itemId === "string" ? itemId.trim() : "";
+  const normalizedVariant = typeof variant === "string" ? variant.trim().toLowerCase() : "";
+
+  if (!normalizedItemId || !ITEM_MEDIA_VARIANTS.includes(normalizedVariant)) {
+    return "";
+  }
+
+  return `${normalizedItemId}:${normalizedVariant}`;
+}
+
+function normalizeItemMediaVariant(value) {
+  const normalizedVariant = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return ITEM_MEDIA_VARIANTS.includes(normalizedVariant) ? normalizedVariant : "";
+}
+
+function normalizeItemMediaAssetRecord(record) {
+  const itemId = typeof record?.itemId === "string" ? record.itemId.trim() : "";
+  const variant = normalizeItemMediaVariant(record?.variant);
+  const key = createItemMediaKey(itemId, variant);
+
+  if (!key) {
+    throw new Error("Item media asset record is invalid.");
+  }
+
+  return {
+    key,
+    itemId,
+    variant,
+    asset: createImageAsset(record?.asset)
+  };
+}
+
+function buildItemMediaAssetRecord(itemId, variant, asset) {
+  return normalizeItemMediaAssetRecord({
+    itemId,
+    variant,
+    asset
+  });
+}
+
 function requestToPromise(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -409,6 +477,10 @@ function openDatabaseByName(name) {
 
       if (!db.objectStoreNames.contains(APP_STORE)) {
         db.createObjectStore(APP_STORE, { keyPath: "key" });
+      }
+
+      if (!db.objectStoreNames.contains(ITEM_MEDIA_STORE)) {
+        db.createObjectStore(ITEM_MEDIA_STORE, { keyPath: "key" });
       }
 
       if (!db.objectStoreNames.contains(ORIGINAL_STORE)) {
@@ -681,6 +753,25 @@ function yieldToBrowser() {
   });
 }
 
+function isEmbeddedImageDataUrl(value) {
+  return typeof value === "string" && value.startsWith("data:image/");
+}
+
+async function convertImageAssetToBlob(asset) {
+  if (!isEmbeddedImageDataUrl(asset?.src)) {
+    return null;
+  }
+
+  const [header, payload = ""] = asset.src.split(",", 2);
+  const mimeType = header.match(/^data:([^;]+)/)?.[1] ?? asset?.mimeType ?? "application/octet-stream";
+  const binary =
+    typeof Buffer !== "undefined"
+      ? Buffer.from(payload, "base64")
+      : Uint8Array.from(globalThis.atob(payload), (character) => character.charCodeAt(0));
+
+  return new Blob([binary], { type: mimeType });
+}
+
 async function readMetadataOnlyItemBatch(startAfterKey = undefined, batchSize = 50, excludedById = {}) {
   const db = await openDatabaseWithoutMigration();
 
@@ -837,6 +928,111 @@ export async function deleteSafeModeItems(ids = []) {
   });
 }
 
+async function loadStoredItemMediaAsset(itemId, variant) {
+  const key = createItemMediaKey(itemId, variant);
+
+  if (!key) {
+    return null;
+  }
+
+  const entry = await withStoreWithoutMigration(ITEM_MEDIA_STORE, "readonly", (store) => store.get(key));
+  return entry ? normalizeItemMediaAssetRecord(entry).asset : null;
+}
+
+async function saveStoredItemMediaAsset(itemId, variant, asset) {
+  const record = buildItemMediaAssetRecord(itemId, variant, asset);
+  await withStore(ITEM_MEDIA_STORE, "readwrite", (store) => store.put(record));
+  return record.asset;
+}
+
+async function deleteStoredItemMediaAsset(itemId, variant) {
+  const key = createItemMediaKey(itemId, variant);
+
+  if (!key) {
+    return;
+  }
+
+  await withStore(ITEM_MEDIA_STORE, "readwrite", (store) => store.delete(key));
+}
+
+async function deleteStoredItemMediaAssets(itemId) {
+  await Promise.all(ITEM_MEDIA_VARIANTS.map((variant) => deleteStoredItemMediaAsset(itemId, variant)));
+}
+
+async function copyStoredItemMediaAssets(sourceItemId, targetItemId) {
+  const normalizedSourceItemId = typeof sourceItemId === "string" ? sourceItemId.trim() : "";
+  const normalizedTargetItemId = typeof targetItemId === "string" ? targetItemId.trim() : "";
+
+  if (!normalizedSourceItemId || !normalizedTargetItemId || normalizedSourceItemId === normalizedTargetItemId) {
+    return;
+  }
+
+  const assets = await Promise.all(
+    ITEM_MEDIA_VARIANTS.map(async (variant) => [variant, await loadStoredItemMediaAsset(normalizedSourceItemId, variant)])
+  );
+
+  await Promise.all(
+    assets
+      .filter(([, asset]) => asset?.src)
+      .map(([variant, asset]) => saveStoredItemMediaAsset(normalizedTargetItemId, variant, asset))
+  );
+}
+
+async function findStoredItemByItemUuid(itemUuid, excludedId = "") {
+  const normalizedItemUuid = normalizeSyncText(itemUuid);
+
+  if (!normalizedItemUuid) {
+    return null;
+  }
+
+  const items = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.getAll());
+
+  return (Array.isArray(items) ? items : []).find(
+    (item) => normalizeSyncText(item?.id) !== normalizeSyncText(excludedId) && normalizeSyncText(item?.itemUuid) === normalizedItemUuid
+  ) ?? null;
+}
+
+async function materializeStoredItemMedia(item) {
+  if (!item || typeof item !== "object") {
+    return item;
+  }
+
+  const normalizedImages = normalizeItemImages(item);
+  const [previewAsset, thumbnailAsset] = await Promise.all([
+    normalizedImages.preview?.src ? normalizedImages.preview : loadStoredItemMediaAsset(item.id, "preview"),
+    normalizedImages.thumbnail?.src ? normalizedImages.thumbnail : loadStoredItemMediaAsset(item.id, "thumbnail")
+  ]);
+  const originalAsset = normalizedImages.original?.src
+    ? normalizedImages.original
+    : normalizedImages.originalPreserved && item.itemUuid
+      ? await loadOriginalImageBlobEntry(item.itemUuid).then((entry) =>
+          entry?.blob instanceof Blob
+            ? createImageAsset({
+                src: "",
+                mimeType: entry.mimeType,
+                width: entry.width,
+                height: entry.height,
+                fileSize: entry.fileSize,
+                originalFilename: entry.originalFilename
+              })
+            : normalizedImages.original
+        )
+      : normalizedImages.original;
+
+  return applyPreviewImageFields(
+    {
+      ...item,
+      images: {
+        original: originalAsset,
+        preview: createImageAsset(previewAsset),
+        thumbnail: createImageAsset(thumbnailAsset)
+      },
+      originalPreserved: normalizedImages.originalPreserved
+    },
+    previewAsset
+  );
+}
+
 export async function loadItemMediaAssetById(itemId, variant = "preview") {
   const normalizedItemId = typeof itemId === "string" ? itemId.trim() : "";
 
@@ -851,10 +1047,11 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
   }
 
   const normalizedImages = normalizeItemImages(item);
+  const normalizedVariant = variant === "original" ? "original" : variant === "thumbnail" ? "thumbnail" : "preview";
   const selectedAsset =
-    variant === "original"
+    normalizedVariant === "original"
       ? normalizedImages.original
-      : variant === "thumbnail"
+      : normalizedVariant === "thumbnail"
         ? normalizedImages.thumbnail
         : normalizedImages.preview;
 
@@ -865,7 +1062,18 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
     };
   }
 
-  if (variant === "original" && normalizedImages.originalPreserved && item.itemUuid) {
+  if (normalizedVariant === "preview" || normalizedVariant === "thumbnail") {
+    const storedAsset = await loadStoredItemMediaAsset(normalizedItemId, normalizedVariant);
+
+    if (storedAsset?.src) {
+      return {
+        ...storedAsset,
+        blob: null
+      };
+    }
+  }
+
+  if (normalizedVariant === "original" && normalizedImages.originalPreserved && item.itemUuid) {
     const blobEntry = await loadOriginalImageBlobEntry(item.itemUuid);
 
     if (blobEntry?.blob instanceof Blob) {
@@ -881,14 +1089,25 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
     }
   }
 
+  if (normalizedVariant === "original" || normalizedVariant === "thumbnail") {
+    const fallbackAsset = await loadItemMediaAssetById(normalizedItemId, "preview");
+    return fallbackAsset ? { ...fallbackAsset, blob: fallbackAsset.blob ?? null } : null;
+  }
+
   return null;
 }
 
-export async function loadItems() {
+export async function loadItems(options = {}) {
   const items = await withStore(ITEM_STORE, "readonly", (store) => store.getAll());
 
   if (items.length > 0) {
-    return items.map(migrateReferenceMetadataToTags);
+    const migratedItems = items.map(migrateReferenceMetadataToTags);
+
+    if (options.includeMediaPayloads) {
+      return Promise.all(migratedItems.map((item) => materializeStoredItemMedia(item)));
+    }
+
+    return migratedItems.map((item) => stripItemInlineMediaFields(item));
   }
 
   await withStore(ITEM_STORE, "readwrite", (store) => {
@@ -937,10 +1156,43 @@ export async function saveItem(item) {
               : existingItem.originalPreserved
         }
       : item;
+  const normalizedMergedImages = normalizeItemImages(mergedItem);
+  const storedItem = stripItemInlineMediaFields(mergedItem);
 
-  await withStore(ITEM_STORE, "readwrite", (store) => store.put(mergedItem));
+  await withStore(ITEM_STORE, "readwrite", (store) => store.put(storedItem));
 
-  const stableKey = normalizeSyncText(mergedItem?.itemUuid);
+  const previewAsset = normalizedMergedImages.preview;
+  const thumbnailAsset = normalizedMergedImages.thumbnail;
+
+  if (previewAsset?.src) {
+    await saveStoredItemMediaAsset(storedItem.id, "preview", previewAsset);
+  } else if (!existingItem) {
+    await deleteStoredItemMediaAsset(storedItem.id, "preview");
+  }
+
+  if (thumbnailAsset?.src) {
+    await saveStoredItemMediaAsset(storedItem.id, "thumbnail", thumbnailAsset);
+  } else if (!existingItem) {
+    await deleteStoredItemMediaAsset(storedItem.id, "thumbnail");
+  }
+
+  if (storedItem.originalPreserved && storedItem.itemUuid && normalizedMergedImages.original?.src) {
+    const originalBlob = await convertImageAssetToBlob(normalizedMergedImages.original);
+
+    if (originalBlob) {
+      await saveOriginalImageBlob(storedItem.itemUuid, originalBlob, normalizedMergedImages.original);
+    }
+  }
+
+  if (!hasIncomingMediaPayload && !existingItem && storedItem.itemUuid) {
+    const matchingStoredItem = await findStoredItemByItemUuid(storedItem.itemUuid, storedItem.id);
+
+    if (matchingStoredItem?.id) {
+      await copyStoredItemMediaAssets(matchingStoredItem.id, storedItem.id);
+    }
+  }
+
+  const stableKey = normalizeSyncText(storedItem?.itemUuid);
 
   if (!stableKey) {
     return;
@@ -956,7 +1208,7 @@ export async function saveItem(item) {
       key: createReferenceSyncMetadataKey(stableKey),
       entityType: "mbaReference",
       stableKey,
-      localId: normalizeSyncText(mergedItem?.id),
+      localId: normalizeSyncText(storedItem?.id),
       existingRecord,
       deviceId,
       pendingDelete: false
@@ -971,6 +1223,7 @@ export async function deleteItem(id) {
   const stableKey = normalizeSyncText(existingItem?.itemUuid);
 
   if (!stableKey) {
+    await deleteStoredItemMediaAssets(id);
     return;
   }
 
@@ -982,6 +1235,8 @@ export async function deleteItem(id) {
   if (matchingItem) {
     return;
   }
+
+  await deleteStoredItemMediaAssets(id);
 
   const [deviceId, existingRecord] = await Promise.all([
     getOrCreateDeviceId(),
@@ -1324,7 +1579,7 @@ function validatePreparedBackupForReplacement(backup) {
 }
 
 export async function exportBackup(options = {}) {
-  const [items, appState] = await Promise.all([loadItems(), loadAppState()]);
+  const [items, appState] = await Promise.all([loadItems({ includeMediaPayloads: true }), loadAppState()]);
   return options.mode === "metadata"
     ? createMetadataOnlyBackupData(items, appState)
     : createLightweightBackupData(items, appState);
@@ -1334,11 +1589,12 @@ export async function replaceWithPreparedBackup(backup) {
   const validatedBackup = validatePreparedBackupForReplacement(backup);
 
   await withStores(
-    [ITEM_STORE, APP_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE],
+    [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE],
     "readwrite",
-    ({ items, appState, originalImageBlobs, syncMetadata }) => {
+    ({ items, appState, itemMediaAssets, originalImageBlobs, syncMetadata }) => {
     items.clear();
     appState.clear();
+    itemMediaAssets.clear();
     originalImageBlobs.clear();
     syncMetadata.clear();
 

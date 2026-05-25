@@ -1012,6 +1012,20 @@ function getStoredImageMetrics(item) {
   };
 }
 
+function getResolvedImageMetrics(item, resolvedMedia = null) {
+  const resolvedWidth = Math.max(Number(resolvedMedia?.width) || 0, 0);
+  const resolvedHeight = Math.max(Number(resolvedMedia?.height) || 0, 0);
+
+  if (resolvedWidth && resolvedHeight) {
+    return {
+      naturalWidth: resolvedWidth,
+      naturalHeight: resolvedHeight
+    };
+  }
+
+  return getStoredImageMetrics(item);
+}
+
 function useImageMetrics(imageUrl, initialMetrics = null) {
   const imageUrlCandidates = useMemo(
     () => resolveImageUrlCandidates(imageUrl),
@@ -1345,8 +1359,9 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   onCloseSelect,
   onMetrics
 }) {
-  const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, "preview"));
-  const seedMetrics = useMemo(() => getStoredImageMetrics(item), [item]);
+  const deferredMedia = useDeferredItemMedia(item, "preview");
+  const resolvedImageUrl = resolveImageUrl(deferredMedia.src);
+  const seedMetrics = useMemo(() => getResolvedImageMetrics(item, deferredMedia), [deferredMedia, item]);
   const metrics = useImageMetrics(resolvedImageUrl, seedMetrics);
   const lastMetricsKeyRef = useRef("");
   const renderMetadata = useMemo(
@@ -3124,6 +3139,41 @@ function buildBackupExportData(items, appState) {
 
 function buildMetadataOnlyBackupExportData(items, appState) {
   return createMetadataOnlyBackupData(items, appState);
+}
+
+async function materializeItemsForBackupExport(items) {
+  return Promise.all(
+    (Array.isArray(items) ? items : []).map(async (item) => {
+      const normalizedImages = normalizeItemImages(item);
+      const [previewAsset, thumbnailAsset, originalAsset] = await Promise.all([
+        normalizedImages.preview?.src ? normalizedImages.preview : loadItemMediaAssetById(item.id, "preview"),
+        normalizedImages.thumbnail?.src ? normalizedImages.thumbnail : loadItemMediaAssetById(item.id, "thumbnail"),
+        normalizedImages.original?.src || !normalizedImages.originalPreserved
+          ? normalizedImages.original
+          : loadItemMediaAssetById(item.id, "original")
+      ]);
+      const originalSrc =
+        originalAsset?.src
+        || (originalAsset?.blob instanceof Blob ? await readFileAsDataUrl(originalAsset.blob) : "");
+
+      return {
+        ...item,
+        images: {
+          original: createImageAsset({
+            ...normalizedImages.original,
+            ...originalAsset,
+            src: originalSrc
+          }),
+          preview: createImageAsset(previewAsset),
+          thumbnail: createImageAsset(thumbnailAsset)
+        }
+      };
+    })
+  );
+}
+
+async function buildFullBackupExportData(items, appState) {
+  return createLightweightBackupData(await materializeItemsForBackupExport(items), appState);
 }
 
 function createBackupExportBlob(backup) {
@@ -5963,9 +6013,9 @@ export default function App() {
     setWardrobeManageOpen(false);
   }
 
-  async function handleExportBackup() {
+async function handleExportBackup() {
     try {
-      const backup = buildBackupExportData(items, currentPersistedAppState);
+      const backup = await buildFullBackupExportData(items, currentPersistedAppState);
       const blob = createBackupExportBlob(backup);
       const formattedSize = formatFileSize(blob.size);
 
@@ -6003,7 +6053,7 @@ export default function App() {
           : "Backup download attempted."
       );
     } catch {
-      const fallbackBackup = buildBackupExportData(items, currentPersistedAppState);
+      const fallbackBackup = buildMetadataOnlyBackupExportData(items, currentPersistedAppState);
       const copied = await copyTextToClipboard(JSON.stringify({
         source: fallbackBackup.source,
         version: fallbackBackup.version,
