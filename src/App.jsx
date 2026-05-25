@@ -110,6 +110,10 @@ import {
   buildBoardRenderMetadata,
   getBoardItemRenderedBounds
 } from "./lib/boardBounds.js";
+import {
+  exportBackupPackageToDirectory,
+  isFileSystemAccessSupported
+} from "./lib/backupPackage.js";
 import { getBackupExportMaterializationPlan } from "./lib/backupExportPolicy.js";
 import {
   normalizeLibrarySearch,
@@ -3281,6 +3285,16 @@ async function buildFullBackupExportData(items, appState) {
   return createLightweightBackupData(await materializeItemsForBackupExport(items), appState);
 }
 
+async function resolvePreviewAssetForBackupPackageExport(item) {
+  const normalizedImages = normalizeItemImages(item);
+
+  if (normalizedImages.preview?.src) {
+    return normalizedImages.preview;
+  }
+
+  return loadItemMediaAssetById(item.id, "preview");
+}
+
 function createBackupExportBlob(backup) {
   const parts = [
     "{",
@@ -6182,6 +6196,33 @@ async function handleExportBackup() {
       setBackupExportStatus("Metadata backup download attempted.");
     } catch {
       setBackupExportStatus("Metadata backup export failed in this browser.");
+    }
+  }
+
+  async function handleExportBackupPackage() {
+    if (!isFileSystemAccessSupported(window)) {
+      setBackupExportStatus("Scalable backup packages require a browser with File System Access API support.");
+      return;
+    }
+
+    try {
+      const directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+
+      await exportBackupPackageToDirectory({
+        rootHandle: directoryHandle,
+        items,
+        appState: currentPersistedAppState,
+        resolvePreviewAsset: resolvePreviewAssetForBackupPackageExport
+      });
+
+      setBackupExportStatus("Scalable backup package saved.");
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setBackupExportStatus("Scalable backup package export canceled.");
+        return;
+      }
+
+      setBackupExportStatus("Scalable backup package export failed in this browser.");
     }
   }
 
@@ -10625,6 +10666,9 @@ async function handleExportBackup() {
                           </button>
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportMetadataBackup}>
                             Export metadata backup
+                          </button>
+                          <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportBackupPackage}>
+                            Export scalable backup package
                           </button>
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={() => importBackupRef.current?.click()}>
                             Import backup
