@@ -30,15 +30,21 @@ export function stripItemMediaPayloads(record = {}) {
   const previewAsset = createMetadataOnlyAsset(record?.images?.preview);
   const thumbnailAsset = createMetadataOnlyAsset(record?.images?.thumbnail);
   const originalAsset = createMetadataOnlyAsset(record?.images?.original);
+  const existingImages =
+    record?.images && typeof record.images === "object" && !Array.isArray(record.images)
+      ? record.images
+      : {};
 
   return {
-    id: normalizeText(record?.id),
-    name: normalizeText(record?.name || record?.title),
-    description: normalizeText(record?.description),
+    ...record,
     imageUrl: "",
     images: {
+      ...existingImages,
       original: originalAsset,
       preview: {
+        ...(existingImages.preview && typeof existingImages.preview === "object" && !Array.isArray(existingImages.preview)
+          ? existingImages.preview
+          : {}),
         ...previewAsset,
         width: previewAsset.width || Math.max(0, Math.round(normalizeNumber(record?.imageWidth))),
         height: previewAsset.height || Math.max(0, Math.round(normalizeNumber(record?.imageHeight))),
@@ -49,6 +55,9 @@ export function stripItemMediaPayloads(record = {}) {
       thumbnail: thumbnailAsset
     },
     originalPreserved: normalizeBoolean(record?.originalPreserved),
+    id: normalizeText(record?.id),
+    name: normalizeText(record?.name || record?.title),
+    description: normalizeText(record?.description),
     imageScale: normalizeNumber(record?.imageScale),
     imageFrameScale: normalizeNumber(record?.imageFrameScale),
     imageOffsetX: normalizeNumber(record?.imageOffsetX),

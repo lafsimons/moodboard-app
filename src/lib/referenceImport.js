@@ -2,6 +2,7 @@ import * as exifr from "exifr";
 
 import { replaceItemImageSet } from "./itemImages.js";
 import { createImportedSourceIdentity } from "./itemIdentity.js";
+import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 import { emptyForm } from "./typeDefaults.js";
 import { uniqueTags } from "./metadata.js";
 
@@ -187,10 +188,19 @@ export async function extractEmbeddedImageMetadata(file) {
 export async function buildImportedReferenceMetadata(file, now, dependencies = {}) {
   const {
     getDimensions = getImageDimensions,
-    extractMetadata = extractEmbeddedImageMetadata
+    extractMetadata = extractEmbeddedImageMetadata,
+    knownDimensions = null
   } = dependencies;
   const importedAt = now();
-  const { imageWidth, imageHeight } = await getDimensions(file);
+  const normalizedKnownWidth = Math.max(0, Math.round(Number(knownDimensions?.imageWidth) || 0));
+  const normalizedKnownHeight = Math.max(0, Math.round(Number(knownDimensions?.imageHeight) || 0));
+  const { imageWidth, imageHeight } =
+    normalizedKnownWidth && normalizedKnownHeight
+      ? {
+          imageWidth: normalizedKnownWidth,
+          imageHeight: normalizedKnownHeight
+        }
+      : await getDimensions(file);
   const embeddedMetadata = await extractMetadata(file).catch(() => ({}));
 
   return {
@@ -258,7 +268,12 @@ export async function createReferenceFromFile(file, existingItems, dependencies)
     createThumbnailImageAsset(file)
   ]);
   const inferredTags = inferReferenceTagsFromFilename(file.name);
-  const importedMetadata = await getImportedReferenceMetadata(file, now);
+  const importedMetadata = await getImportedReferenceMetadata(file, now, {
+    knownDimensions: {
+      imageWidth: originalImage.width,
+      imageHeight: originalImage.height
+    }
+  });
   const nextItemDraft = await bakeItemImagePresentation(replaceItemImageSet({
     ...emptyForm,
     name: getFileStem(file.name),
@@ -284,9 +299,9 @@ export async function createReferenceFromFile(file, existingItems, dependencies)
     id: createUniqueItemId(nextItemDraft, existingItems)
   };
 
-  await saveItem(nextItem);
+  const savedItem = await saveItem(nextItem);
 
-  return nextItem;
+  return stripItemMediaPayloads(savedItem ?? nextItem);
 }
 
 export async function importReferenceFiles(files, existingItems, dependencies) {
@@ -295,10 +310,28 @@ export async function importReferenceFiles(files, existingItems, dependencies) {
   const failedFiles = [];
   const normalizedFiles = Array.from(files ?? []);
   const nextItems = [...existingItems];
+  const onProgress = typeof dependencies?.onProgress === "function" ? dependencies.onProgress : null;
+
+  const publishProgress = (file, outcome) => {
+    if (!onProgress) {
+      return;
+    }
+
+    onProgress({
+      file,
+      outcome,
+      total: normalizedFiles.length,
+      completed: successfulItems.length + ignoredFiles.length + failedFiles.length,
+      succeeded: successfulItems.length,
+      ignored: ignoredFiles.length,
+      failed: failedFiles.length
+    });
+  };
 
   for (const file of normalizedFiles) {
     if (!isSupportedReferenceImageFile(file)) {
       ignoredFiles.push(file);
+      publishProgress(file, "ignored");
       continue;
     }
 
@@ -306,8 +339,10 @@ export async function importReferenceFiles(files, existingItems, dependencies) {
       const nextItem = await createReferenceFromFile(file, nextItems, dependencies);
       successfulItems.push(nextItem);
       nextItems.push(nextItem);
+      publishProgress(file, "succeeded");
     } catch (error) {
       failedFiles.push({ file, error });
+      publishProgress(file, "failed");
     }
   }
 
