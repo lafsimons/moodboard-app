@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   BACKUP_EXPORT_WARN_BYTES,
   BACKUP_IMPORT_HARD_MAX_BYTES,
@@ -117,6 +117,7 @@ import {
   normalizeWardrobeFilterState,
   normalizeWardrobeSort
 } from "./lib/appStateModel.js";
+import { getVirtualizedGridLayout } from "./lib/libraryVirtualization.js";
 import {
   DEFAULT_LIBRARY_ADD_WIDTH,
   DEFAULT_SIDE_EDITOR_WIDTH,
@@ -417,6 +418,31 @@ function getManagedItemImageSrc(item, variant = "preview") {
 
 function normalizeMoodboardText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readLibraryGridViewport(scrollElement, gridElement) {
+  const nextWidth = Math.max(scrollElement.clientWidth - 4, 0);
+  const nextHeight = scrollElement.clientHeight;
+  const nextScrollTop = scrollElement.scrollTop;
+  const scrollBounds = scrollElement.getBoundingClientRect();
+  const gridBounds = gridElement.getBoundingClientRect();
+  const nextGridOffsetTop = Math.max(0, gridBounds.top - scrollBounds.top + nextScrollTop);
+
+  return {
+    width: nextWidth,
+    height: nextHeight,
+    scrollTop: nextScrollTop,
+    gridOffsetTop: nextGridOffsetTop
+  };
+}
+
+function areLibraryGridViewportsEqual(left, right) {
+  return (
+    left.width === right.width &&
+    left.height === right.height &&
+    left.scrollTop === right.scrollTop &&
+    left.gridOffsetTop === right.gridOffsetTop
+  );
 }
 
 function normalizeCreatedAt(value) {
@@ -4401,49 +4427,36 @@ export default function App() {
       };
     }
 
-    const availableWidth = Math.max(libraryGridViewport.width, LIBRARY_GRID_MIN_COLUMN_WIDTH);
-    const columns = Math.max(
-      1,
-      Math.floor((availableWidth + LIBRARY_GRID_GAP) / (LIBRARY_GRID_MIN_COLUMN_WIDTH + LIBRARY_GRID_GAP))
-    );
-    const columnWidth = Math.max(
-      LIBRARY_GRID_MIN_COLUMN_WIDTH,
-      Math.floor((availableWidth - LIBRARY_GRID_GAP * (columns - 1)) / columns)
-    );
-    const rowStride = LIBRARY_GRID_ESTIMATED_ROW_HEIGHT + LIBRARY_GRID_GAP;
-    const gridViewportTop = libraryGridViewport.scrollTop - libraryGridViewport.gridOffsetTop;
-    const viewportHeight = Math.max(libraryGridViewport.height, rowStride);
-    const startRow = Math.max(0, Math.floor(gridViewportTop / rowStride) - LIBRARY_GRID_OVERSCAN_ROWS);
-    const endRow = Math.max(
-      startRow,
-      Math.ceil((gridViewportTop + viewportHeight) / rowStride) + LIBRARY_GRID_OVERSCAN_ROWS
-    );
-    const startIndex = Math.min(visibleWardrobeItems.length, startRow * columns);
-    const endIndex = Math.min(visibleWardrobeItems.length, endRow * columns);
-    const totalRows = Math.ceil(visibleWardrobeItems.length / columns);
-    const totalHeight = Math.max(
-      0,
-      totalRows * LIBRARY_GRID_ESTIMATED_ROW_HEIGHT + Math.max(0, totalRows - 1) * LIBRARY_GRID_GAP
-    );
-    const virtualItems = visibleWardrobeItems.slice(startIndex, endIndex).map((item, index) => {
-      const absoluteIndex = startIndex + index;
-      const rowIndex = Math.floor(absoluteIndex / columns);
-      const columnIndex = absoluteIndex % columns;
+    const layout = getVirtualizedGridLayout({
+      itemCount: visibleWardrobeItems.length,
+      viewportWidth: libraryGridViewport.width,
+      viewportHeight: libraryGridViewport.height,
+      scrollTop: libraryGridViewport.scrollTop,
+      gridOffsetTop: libraryGridViewport.gridOffsetTop,
+      minColumnWidth: LIBRARY_GRID_MIN_COLUMN_WIDTH,
+      gap: LIBRARY_GRID_GAP,
+      estimatedRowHeight: LIBRARY_GRID_ESTIMATED_ROW_HEIGHT,
+      overscanRows: LIBRARY_GRID_OVERSCAN_ROWS
+    });
+    const virtualItems = visibleWardrobeItems.slice(layout.startIndex, layout.endIndex).map((item, index) => {
+      const absoluteIndex = layout.startIndex + index;
+      const rowIndex = Math.floor(absoluteIndex / layout.columns);
+      const columnIndex = absoluteIndex % layout.columns;
 
       return {
         item,
         style: {
           position: "absolute",
-          top: `${rowIndex * rowStride}px`,
-          left: `${columnIndex * (columnWidth + LIBRARY_GRID_GAP)}px`,
-          width: `${columnWidth}px`,
+          top: `${rowIndex * layout.rowStride}px`,
+          left: `${columnIndex * (layout.columnWidth + LIBRARY_GRID_GAP)}px`,
+          width: `${layout.columnWidth}px`,
           height: `${LIBRARY_GRID_ESTIMATED_ROW_HEIGHT}px`
         }
       };
     });
 
     return {
-      totalHeight,
+      totalHeight: layout.totalHeight,
       virtualItems
     };
   }, [libraryGridViewport.gridOffsetTop, libraryGridViewport.height, libraryGridViewport.scrollTop, libraryGridViewport.width, shouldVirtualizeWardrobeGrid, visibleWardrobeItems]);
@@ -4498,7 +4511,7 @@ export default function App() {
     };
   }, [boardPickerViewport.height, boardPickerViewport.scrollTop, shouldVirtualizeBoardPicker, visibleBoardPickerItems]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (activePanel !== "wardrobe" || wardrobeSavedOpen) {
       return undefined;
     }
@@ -4511,32 +4524,18 @@ export default function App() {
     }
 
     let frameId = 0;
+    const timeoutIds = new Set();
+    const postLayoutFrameIds = new Set();
     const updateViewport = () => {
       frameId = 0;
-
-      const nextWidth = Math.max(scrollElement.clientWidth - 4, 0);
-      const nextHeight = scrollElement.clientHeight;
-      const nextScrollTop = scrollElement.scrollTop;
-      const scrollBounds = scrollElement.getBoundingClientRect();
-      const gridBounds = gridElement.getBoundingClientRect();
-      const nextGridOffsetTop = Math.max(0, gridBounds.top - scrollBounds.top + nextScrollTop);
+      const nextViewport = readLibraryGridViewport(scrollElement, gridElement);
 
       setLibraryGridViewport((current) => {
-        if (
-          current.width === nextWidth &&
-          current.height === nextHeight &&
-          current.scrollTop === nextScrollTop &&
-          current.gridOffsetTop === nextGridOffsetTop
-        ) {
+        if (areLibraryGridViewportsEqual(current, nextViewport)) {
           return current;
         }
 
-        return {
-          width: nextWidth,
-          height: nextHeight,
-          scrollTop: nextScrollTop,
-          gridOffsetTop: nextGridOffsetTop
-        };
+        return nextViewport;
       });
     };
 
@@ -4548,26 +4547,93 @@ export default function App() {
       frameId = window.requestAnimationFrame(updateViewport);
     };
 
-    scheduleViewportUpdate();
+    const schedulePostLayoutRemeasure = () => {
+      scheduleViewportUpdate();
+
+      const firstFrameId = window.requestAnimationFrame(() => {
+        postLayoutFrameIds.delete(firstFrameId);
+        scheduleViewportUpdate();
+
+        const secondFrameId = window.requestAnimationFrame(() => {
+          postLayoutFrameIds.delete(secondFrameId);
+          scheduleViewportUpdate();
+        });
+
+        postLayoutFrameIds.add(secondFrameId);
+      });
+
+      postLayoutFrameIds.add(firstFrameId);
+
+      [0, 120].forEach((delay) => {
+        const timeoutId = window.setTimeout(() => {
+          timeoutIds.delete(timeoutId);
+          scheduleViewportUpdate();
+        }, delay);
+
+        timeoutIds.add(timeoutId);
+      });
+    };
+
+    schedulePostLayoutRemeasure();
     scrollElement.addEventListener("scroll", scheduleViewportUpdate, { passive: true });
 
     const resizeObserver = new ResizeObserver(() => {
       scheduleViewportUpdate();
     });
 
-    resizeObserver.observe(scrollElement);
-    resizeObserver.observe(gridElement);
-    window.addEventListener("resize", scheduleViewportUpdate);
+    [
+      scrollElement,
+      gridElement,
+      scrollElement.parentElement,
+      gridElement.parentElement,
+      scrollElement.closest(".wardrobe-panel-body"),
+      scrollElement.closest(".active-panel-overlay")
+    ]
+      .filter((element, index, array) => element instanceof Element && array.indexOf(element) === index)
+      .forEach((element) => {
+        resizeObserver.observe(element);
+      });
+
+    let intersectionObserver = null;
+
+    if (typeof IntersectionObserver === "function") {
+      intersectionObserver = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting || entry.intersectionRatio > 0)) {
+          schedulePostLayoutRemeasure();
+        }
+      });
+      intersectionObserver.observe(scrollElement);
+    }
+
+    const handleWindowResize = () => {
+      schedulePostLayoutRemeasure();
+    };
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        schedulePostLayoutRemeasure();
+      }
+    };
+
+    window.addEventListener("resize", handleWindowResize);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       scrollElement.removeEventListener("scroll", scheduleViewportUpdate);
       resizeObserver.disconnect();
-      window.removeEventListener("resize", scheduleViewportUpdate);
+      intersectionObserver?.disconnect();
+      window.removeEventListener("resize", handleWindowResize);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (frameId) {
         window.cancelAnimationFrame(frameId);
       }
+      postLayoutFrameIds.forEach((scheduledFrameId) => {
+        window.cancelAnimationFrame(scheduledFrameId);
+      });
+      timeoutIds.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
     };
-  }, [activePanel, visibleWardrobeItems.length, wardrobeSavedOpen]);
+  }, [activePanel, loading, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   useEffect(() => {
     if (!pickerBoardImageId) {
