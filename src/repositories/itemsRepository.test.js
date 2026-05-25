@@ -2,7 +2,13 @@ import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 
 import { __setIndexedDbFactoryForTests } from "../lib/storage.js";
-import { loadItems, prepareLoadedItems, saveItem } from "./itemsRepository.js";
+import {
+  loadItemMediaAssetById,
+  loadItems,
+  loadStartupItemMetadata,
+  prepareLoadedItems,
+  saveItem
+} from "./itemsRepository.js";
 
 class FakeIDBRequest {
   constructor(result, error = null) {
@@ -240,4 +246,106 @@ test("prepareLoadedItems can persist import-time image asset migrations without 
   assert.equal(persistedItem.id, "item-2");
   assert.equal(persistedItem.assetState, "fixed");
   assert.equal(persistedItem.mapped, undefined);
+});
+
+test("prepareLoadedItems disables automatic migrations when requested", async () => {
+  installFakeIndexedDb();
+  await saveItem({ id: "item-3", mapped: false });
+
+  let bakedCallCount = 0;
+
+  const result = await prepareLoadedItems(
+    [{ id: "item-3", mapped: false }],
+    {
+      itemDefaultsMigrationVersion: 0,
+      imagePresentationMigrationVersion: 0
+    },
+    createDependencies({
+      restoreLegacyBakedImageScale: (item) => ({ ...item, restored: true }),
+      applyMappedStyleWeightDefaults: (item) => ({ ...item, mapped: true }),
+      bakeItemImagePresentation: async (item) => {
+        bakedCallCount += 1;
+        return { ...item, baked: true };
+      },
+      itemNeedsImageFrameScaleMigration: () => true
+    }),
+    {
+      disableAutoMigrations: true,
+      includeStyleWeightMappingMigration: true,
+      includeImageAssetMigration: true
+    }
+  );
+
+  assert.deepEqual(result.items[0], {
+    id: "item-3",
+    mapped: false,
+    normalized: true
+  });
+  assert.equal(result.migratedItems.length, 1);
+  assert.equal(bakedCallCount, 0);
+
+  const [persistedItem] = await loadItems();
+  assert.equal(persistedItem.id, "item-3");
+  assert.equal(persistedItem.mapped, false);
+  assert.equal(persistedItem.baked, undefined);
+  assert.equal(persistedItem.restored, undefined);
+});
+
+test("loadStartupItemMetadata strips image payloads while keeping image metadata available", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-4",
+    itemUuid: "uuid-4",
+    name: "Item 4",
+    imageUrl: "data:image/png;base64,preview",
+    imageWidth: 1200,
+    imageHeight: 800,
+    originalFilename: "look.png",
+    images: {
+      preview: {
+        src: "data:image/png;base64,preview",
+        width: 1200,
+        height: 800
+      },
+      thumbnail: {
+        src: "data:image/png;base64,thumb",
+        width: 300,
+        height: 200
+      }
+    }
+  });
+
+  const [item] = await loadStartupItemMetadata();
+
+  assert.equal(item.id, "item-4");
+  assert.equal(item.imageUrl, "");
+  assert.equal(item.images.preview.src, "");
+  assert.equal(item.images.thumbnail.src, "");
+  assert.equal(item.imageWidth, 1200);
+  assert.equal(item.imageHeight, 800);
+  assert.equal(item.originalFilename, "look.png");
+});
+
+test("loadItemMediaAssetById reads persisted media payloads for metadata-only startup items", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-5",
+    itemUuid: "uuid-5",
+    imageUrl: "",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480
+      }
+    }
+  });
+
+  const asset = await loadItemMediaAssetById("item-5", "preview");
+
+  assert.equal(asset.src, "data:image/webp;base64,preview");
+  assert.equal(asset.mimeType, "image/webp");
+  assert.equal(asset.width, 640);
+  assert.equal(asset.height, 480);
 });

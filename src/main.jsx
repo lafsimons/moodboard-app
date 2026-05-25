@@ -1,8 +1,17 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import SafeModeRecovery from "./components/SafeModeRecovery.jsx";
 import { resetToDefaults } from "./repositories/backupRepository.js";
 import "./styles.css";
+
+function isSafeModeRecoveryEnabled() {
+  try {
+    return new URLSearchParams(window.location.search).get("safeMode") === "1";
+  } catch {
+    return false;
+  }
+}
 
 class RootErrorBoundary extends React.Component {
   constructor(props) {
@@ -61,7 +70,7 @@ class RootErrorBoundary extends React.Component {
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <RootErrorBoundary>
-      <App />
+      {isSafeModeRecoveryEnabled() ? <SafeModeRecovery /> : <App />}
     </RootErrorBoundary>
   </React.StrictMode>
 );

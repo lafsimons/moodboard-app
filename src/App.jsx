@@ -133,12 +133,14 @@ import {
 import {
   deleteItem,
   deleteItems,
+  loadItemMediaAssetById,
   loadItems,
+  loadStartupItemMetadata,
   prepareLoadedItems,
   saveItem,
   saveItems
 } from "./repositories/itemsRepository.js";
-import { loadAppState, saveAppState } from "./repositories/appStateRepository.js";
+import { loadStartupAppState, saveAppState } from "./repositories/appStateRepository.js";
 import { backfillLocalSyncMetadata } from "./repositories/syncRepository.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
@@ -1168,6 +1170,81 @@ function getBoardImageDimensionsForItem(item, targetWidth = 220) {
   };
 }
 
+function useDeferredItemMedia(item, variant = "preview") {
+  const immediateSrc = getManagedItemImageSrc(item, variant);
+  const [resolvedMedia, setResolvedMedia] = useState(() => ({
+    src: immediateSrc,
+    width: 0,
+    height: 0
+  }));
+
+  useEffect(() => {
+    if (immediateSrc) {
+      setResolvedMedia({
+        src: immediateSrc,
+        width: 0,
+        height: 0
+      });
+      return undefined;
+    }
+
+    if (!item?.id) {
+      setResolvedMedia({
+        src: "",
+        width: 0,
+        height: 0
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    let objectUrl = "";
+
+    async function resolveMedia() {
+      try {
+        const asset = await loadItemMediaAssetById(item.id, variant);
+
+        if (cancelled) {
+          return;
+        }
+
+        let nextSrc = asset?.src ?? "";
+
+        if (!nextSrc && asset?.blob instanceof Blob && typeof URL?.createObjectURL === "function") {
+          objectUrl = URL.createObjectURL(asset.blob);
+          nextSrc = objectUrl;
+        }
+
+        setResolvedMedia({
+          src: nextSrc,
+          width: Math.max(Number(asset?.width) || 0, 0),
+          height: Math.max(Number(asset?.height) || 0, 0)
+        });
+      } catch {
+        if (!cancelled) {
+          setResolvedMedia({
+            src: "",
+            width: 0,
+            height: 0
+          });
+        }
+      }
+    }
+
+    void resolveMedia();
+
+    return () => {
+      cancelled = true;
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [immediateSrc, item?.id, variant]);
+
+  return resolvedMedia;
+}
+
 const ManagedItemImage = memo(function ManagedItemImage({
   item,
   alt = "",
@@ -1184,7 +1261,8 @@ const ManagedItemImage = memo(function ManagedItemImage({
   loadingStrategy = "lazy",
   decodingStrategy = "async"
 }) {
-  const resolvedImageUrl = resolveImageUrl(getManagedItemImageSrc(item, variant));
+  const deferredMedia = useDeferredItemMedia(item, variant);
+  const resolvedImageUrl = resolveImageUrl(deferredMedia.src);
   const seedMetrics = useMemo(() => getStoredImageMetrics(item), [item]);
   const metrics = useImageMetrics(resolvedImageUrl, seedMetrics);
   const displayImageUrl = metrics?.resolvedSrc || resolveImageUrlCandidates(resolvedImageUrl)[0] || "";
@@ -4874,17 +4952,13 @@ export default function App() {
       let fallbackItems = [];
 
       try {
-        const [storedItems, storedAppState] = await Promise.all([loadItems(), loadAppState()]);
-        const { items: effectiveItems } = await prepareLoadedItems(
-          storedItems,
-          storedAppState,
-          getItemRepositoryDependencies(),
-          {
-            includeWeightMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
-            includeTagMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
-            includeStyleWeightMappingMigration: true
-          }
-        );
+        const [storedAppState, startupItems] = await Promise.all([
+          loadStartupAppState(),
+          loadStartupItemMetadata()
+        ]);
+        const effectiveItems = startupItems.length
+          ? startupItems.map((item) => normalizeItem(item))
+          : [];
         fallbackItems = effectiveItems;
 
         if (cancelled) {
@@ -4975,6 +5049,33 @@ export default function App() {
             console.error("Failed to initialize local sync metadata.", syncMetadataError);
           }
         }
+
+        void (async () => {
+          try {
+            const storedItems = await loadItems();
+            const { items: hydratedItems } = await prepareLoadedItems(
+              storedItems,
+              storedAppState,
+              getItemRepositoryDependencies(),
+              {
+                includeWeightMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
+                includeTagMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
+                includeStyleWeightMappingMigration: true
+              }
+            );
+
+            if (cancelled) {
+              return;
+            }
+
+            fallbackItems = hydratedItems;
+            startTransition(() => {
+              setItems(hydratedItems);
+            });
+          } catch (hydrationError) {
+            console.error("Failed to hydrate full library records after metadata-first startup.", hydrationError);
+          }
+        })();
       } catch (error) {
         if (cancelled) {
           return;
@@ -4982,12 +5083,6 @@ export default function App() {
 
         console.error("Failed to restore library state. Falling back to defaults.", error);
         applyDefaultBootstrapState(fallbackItems);
-
-        try {
-          await resetToDefaults();
-        } catch (resetError) {
-          console.error("Failed to reset persisted library state after bootstrap error.", resetError);
-        }
       }
 
       if (!cancelled) {
