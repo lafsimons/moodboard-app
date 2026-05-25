@@ -26,3 +26,7 @@ test("editor image controls key off resolver-backed draft preview state", () => 
   assert.match(appSource, /const draftImageUrl = \(draftResolvedPreviewMedia\.src \|\| draft\.imageUrl\)\.trim\(\)/);
   assert.match(appSource, /isDraftImageLoading/);
 });
+
+test("debounced persistence reuses the memoized persisted app state snapshot", () => {
+  assert.match(appSource, /enqueueAppStateSave\(currentPersistedAppState, "debounced"\)/);
+});
