@@ -1365,7 +1365,7 @@ export async function loadAppState() {
 
 export async function saveAppState(value, options = {}) {
   const sanitizedValue = sanitizePersistedAppState(value);
-  const { approxBytes } = getApproxSerializedBytes(sanitizedValue);
+  const { serialized, approxBytes } = getApproxSerializedBytes(sanitizedValue);
 
   if (approxBytes > PERSISTED_APP_STATE_MAX_BYTES) {
     return false;
@@ -1375,6 +1375,15 @@ export async function saveAppState(value, options = {}) {
   const previousAppState = hasPreviousAppStateOverride
     ? options.previousAppState
     : await loadAppState();
+  const sanitizedPreviousAppState = sanitizePersistedAppState(
+    previousAppState && typeof previousAppState === "object" && !Array.isArray(previousAppState)
+      ? previousAppState
+      : {}
+  );
+
+  if (serialized === JSON.stringify(sanitizedPreviousAppState)) {
+    return true;
+  }
 
   await withStore(APP_STORE, "readwrite", (store) =>
     store.put({
@@ -1383,7 +1392,7 @@ export async function saveAppState(value, options = {}) {
     })
   );
 
-  const previousSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(previousAppState?.savedOutfits);
+  const previousSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(sanitizedPreviousAppState?.savedOutfits);
   const nextSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(sanitizedValue?.savedOutfits);
   const affectedStableKeys = new Set([
     ...Object.keys(previousSavedBoardsByStableKey),

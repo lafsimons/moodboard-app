@@ -32,6 +32,12 @@ import {
   deleteItem,
   upsertSyncMetadata
 } from "./storage.js";
+import { INDEXED_DB_NAME } from "./appIdentity.js";
+import {
+  pruneBoardForDeletedReferences,
+  pruneOutfitForDeletedReferences,
+  pruneSavedOutfitsForDeletedReferences
+} from "./deleteStatePruning.js";
 import defaultWardrobe from "../data/defaultWardrobe.js";
 
 class FakeIDBRequest {
@@ -57,6 +63,7 @@ class FakeObjectStore {
 
   put(value) {
     const key = value?.[this.store.keyPath];
+    this.store.putCount += 1;
     this.store.records.set(key, value);
     return new FakeIDBRequest(key);
   }
@@ -70,11 +77,13 @@ class FakeObjectStore {
   }
 
   delete(key) {
+    this.store.deleteCount += 1;
     this.store.records.delete(key);
     return new FakeIDBRequest(undefined);
   }
 
   clear() {
+    this.store.clearCount += 1;
     this.store.records.clear();
     return new FakeIDBRequest(undefined);
   }
@@ -113,7 +122,10 @@ class FakeDatabase {
   createObjectStore(name, options = {}) {
     const store = {
       keyPath: options.keyPath ?? "id",
-      records: new Map()
+      records: new Map(),
+      putCount: 0,
+      deleteCount: 0,
+      clearCount: 0
     };
 
     this.stores.set(name, store);
@@ -201,6 +213,10 @@ function seedStore(indexedDb, databaseName, storeName, keyPath, records) {
   records.forEach((record) => {
     store.records.set(record[keyPath], record);
   });
+}
+
+function getStoreStats(indexedDb, storeName) {
+  return indexedDb.getDatabase(INDEXED_DB_NAME)?.stores.get(storeName) ?? null;
 }
 
 test("createLightweightBackupData preserves preview as the portable render asset and leaves sync state out of backup exports", () => {
@@ -1039,6 +1055,200 @@ test("saved boards dirty when reference delete changes persisted payload", async
   const metadata = await getSyncMetadata("mba:board:board-uuid-1");
   assert.equal(metadata.recordVersion, 1);
   assert.equal(metadata.syncStatus, "pending_upload");
+});
+
+test("duplicate saveAppState with equivalent sanitized payload skips rewrite", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveAppState({
+    board: {
+      id: "board-1",
+      boardUuid: "board-uuid-1",
+      images: [
+        {
+          id: "board-image-1",
+          referenceId: "item-1",
+          referenceItemUuid: "uuid-1",
+          imageUrl: "data:image/webp;base64,preview"
+        }
+      ]
+    },
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "",
+        board: {
+          id: "saved-board-1",
+          boardUuid: "saved-board-uuid-1",
+          images: [
+            {
+              id: "saved-image-1",
+              referenceId: "item-1",
+              referenceItemUuid: "uuid-1",
+              embeddedItem: {
+                imageUrl: "data:image/png;base64,large"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  });
+
+  const appStore = getStoreStats(indexedDb, "appState");
+  assert.equal(appStore.putCount, 1);
+
+  await saveAppState({
+    board: {
+      id: "board-1",
+      boardUuid: "board-uuid-1",
+      images: [
+        {
+          id: "board-image-1",
+          referenceId: "item-1",
+          referenceItemUuid: "uuid-1"
+        }
+      ]
+    },
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "",
+        board: {
+          id: "saved-board-1",
+          boardUuid: "saved-board-uuid-1",
+          images: [
+            {
+              id: "saved-image-1",
+              referenceId: "item-1",
+              referenceItemUuid: "uuid-1"
+            }
+          ]
+        }
+      }
+    ]
+  });
+
+  assert.equal(appStore.putCount, 1);
+});
+
+test("deleting unused reference does not cause effective app state rewrite", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const persistedState = {
+    outfit: {
+      TopInner: "item-1"
+    },
+    board: {
+      id: "board-1",
+      boardUuid: "board-uuid-1",
+      images: [{ id: "board-image-1", referenceId: "item-1", referenceItemUuid: "uuid-1" }]
+    },
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "",
+        outfit: {
+          TopInner: "item-1"
+        },
+        board: {
+          id: "saved-board-1",
+          boardUuid: "saved-board-uuid-1",
+          images: [{ id: "saved-image-1", referenceId: "item-1", referenceItemUuid: "uuid-1" }]
+        }
+      }
+    ]
+  };
+
+  await saveAppState(persistedState);
+
+  const deletedReferenceIdSet = new Set(["item-2"]);
+  const nextOutfit = pruneOutfitForDeletedReferences(persistedState.outfit, deletedReferenceIdSet);
+  const nextBoard = pruneBoardForDeletedReferences(persistedState.board, deletedReferenceIdSet);
+  const nextSavedOutfits = pruneSavedOutfitsForDeletedReferences(persistedState.savedOutfits, deletedReferenceIdSet);
+
+  assert.equal(nextOutfit, persistedState.outfit);
+  assert.equal(nextBoard, persistedState.board);
+  assert.equal(nextSavedOutfits, persistedState.savedOutfits);
+
+  await saveAppState({
+    ...persistedState,
+    outfit: nextOutfit,
+    board: nextBoard,
+    savedOutfits: nextSavedOutfits
+  });
+
+  assert.equal(getStoreStats(indexedDb, "appState").putCount, 1);
+});
+
+test("deleting reference used by current board and saved board still persists exactly once", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const persistedState = {
+    outfit: {
+      TopInner: "item-1"
+    },
+    board: {
+      id: "board-1",
+      boardUuid: "board-uuid-1",
+      images: [{ id: "board-image-1", referenceId: "item-1", referenceItemUuid: "uuid-1" }]
+    },
+    savedOutfits: [
+      {
+        id: "saved-1",
+        name: "Saved board",
+        description: "",
+        outfit: {
+          TopInner: "item-1"
+        },
+        board: {
+          id: "saved-board-1",
+          boardUuid: "saved-board-uuid-1",
+          images: [{ id: "saved-image-1", referenceId: "item-1", referenceItemUuid: "uuid-1" }]
+        }
+      }
+    ]
+  };
+
+  await saveAppState(persistedState);
+
+  const deletedReferenceIdSet = new Set(["item-1"]);
+  const nextState = {
+    ...persistedState,
+    outfit: pruneOutfitForDeletedReferences(persistedState.outfit, deletedReferenceIdSet),
+    board: pruneBoardForDeletedReferences(persistedState.board, deletedReferenceIdSet),
+    savedOutfits: pruneSavedOutfitsForDeletedReferences(persistedState.savedOutfits, deletedReferenceIdSet)
+  };
+
+  await saveAppState(nextState);
+  await saveAppState(nextState);
+
+  assert.equal(getStoreStats(indexedDb, "appState").putCount, 2);
+
+  const metadata = await getSyncMetadata("mba:board:saved-board-uuid-1");
+  assert.equal(metadata.recordVersion, 2);
+  assert.equal(metadata.syncStatus, "pending_upload");
+});
+
+test("rapid distinct app state changes still persist", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveAppState({
+    librarySearch: "alpha",
+    savedOutfits: []
+  });
+  await saveAppState({
+    librarySearch: "beta",
+    savedOutfits: []
+  });
+  await saveAppState({
+    librarySearch: "gamma",
+    savedOutfits: []
+  });
+
+  assert.equal(getStoreStats(indexedDb, "appState").putCount, 3);
+  assert.equal((await loadAppState()).librarySearch, "gamma");
 });
 
 test("current working board changes stay unsynced", async () => {
