@@ -959,6 +959,60 @@ async function deleteStoredItemMediaAssets(itemId) {
   await Promise.all(ITEM_MEDIA_VARIANTS.map((variant) => deleteStoredItemMediaAsset(itemId, variant)));
 }
 
+function buildDeletedItemBatchPlan(items = [], ids = []) {
+  const normalizedIds = [...new Set((Array.isArray(ids) ? ids : []).map((id) => normalizeSyncText(id)).filter(Boolean))];
+  const normalizedIdSet = new Set(normalizedIds);
+  const deletedItems = [];
+  const remainingStableKeys = new Set();
+  const deletedStableKeyToItems = new Map();
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const itemId = normalizeSyncText(item?.id);
+
+    if (!itemId) {
+      return;
+    }
+
+    const stableKey = normalizeSyncText(item?.itemUuid);
+
+    if (normalizedIdSet.has(itemId)) {
+      deletedItems.push(item);
+
+      if (stableKey) {
+        const matchingItems = deletedStableKeyToItems.get(stableKey) ?? [];
+        matchingItems.push(item);
+        deletedStableKeyToItems.set(stableKey, matchingItems);
+      }
+
+      return;
+    }
+
+    if (stableKey) {
+      remainingStableKeys.add(stableKey);
+    }
+  });
+
+  const itemIdsToDeleteMedia = deletedItems
+    .filter((item) => {
+      const stableKey = normalizeSyncText(item?.itemUuid);
+      return !stableKey || !remainingStableKeys.has(stableKey);
+    })
+    .map((item) => normalizeSyncText(item?.id))
+    .filter(Boolean);
+  const originalImageBlobUuidsToDelete = [...deletedStableKeyToItems.keys()].filter(
+    (stableKey) => !remainingStableKeys.has(stableKey)
+  );
+  const stableKeysToTombstone = originalImageBlobUuidsToDelete;
+
+  return {
+    normalizedIds,
+    deletedItems,
+    itemIdsToDeleteMedia,
+    originalImageBlobUuidsToDelete,
+    stableKeysToTombstone
+  };
+}
+
 async function copyStoredItemMediaAssets(sourceItemId, targetItemId) {
   const normalizedSourceItemId = typeof sourceItemId === "string" ? sourceItemId.trim() : "";
   const normalizedTargetItemId = typeof targetItemId === "string" ? targetItemId.trim() : "";
@@ -1216,44 +1270,92 @@ export async function saveItem(item) {
   );
 }
 
+export async function deleteItemsByIds(ids) {
+  const allItems = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.getAll());
+  const {
+    normalizedIds,
+    deletedItems,
+    itemIdsToDeleteMedia,
+    originalImageBlobUuidsToDelete,
+    stableKeysToTombstone
+  } = buildDeletedItemBatchPlan(allItems, ids);
+
+  if (!normalizedIds.length) {
+    return;
+  }
+
+  await withStore(ITEM_STORE, "readwrite", (store) => {
+    normalizedIds.forEach((id) => {
+      store.delete(id);
+    });
+  });
+
+  if (itemIdsToDeleteMedia.length || originalImageBlobUuidsToDelete.length) {
+    await withStores([ITEM_MEDIA_STORE, ORIGINAL_STORE], "readwrite", ({ itemMediaAssets, originalImageBlobs }) => {
+      itemIdsToDeleteMedia.forEach((itemId) => {
+        ITEM_MEDIA_VARIANTS.forEach((variant) => {
+          const mediaKey = createItemMediaKey(itemId, variant);
+
+          if (mediaKey) {
+            itemMediaAssets.delete(mediaKey);
+          }
+        });
+      });
+
+      originalImageBlobUuidsToDelete.forEach((itemUuid) => {
+        originalImageBlobs.delete(itemUuid);
+      });
+    });
+  }
+
+  if (!stableKeysToTombstone.length) {
+    return;
+  }
+
+  const tombstoneLocalIdsByStableKey = deletedItems.reduce((lookup, item) => {
+    const stableKey = normalizeSyncText(item?.itemUuid);
+
+    if (stableKey && !lookup[stableKey]) {
+      lookup[stableKey] = normalizeSyncText(item?.id);
+    }
+
+    return lookup;
+  }, {});
+  const metadataKeys = stableKeysToTombstone.map((stableKey) => createReferenceSyncMetadataKey(stableKey));
+  const existingMetadataEntries = await withStore(SYNC_METADATA_STORE, "readonly", (store) =>
+    Promise.all(metadataKeys.map((metadataKey) => requestToPromise(store.get(metadataKey))))
+  );
+  const existingMetadataByStableKey = Object.fromEntries(
+    stableKeysToTombstone.map((stableKey, index) => [stableKey, existingMetadataEntries[index] ?? null])
+  );
+  const deviceId = await getOrCreateDeviceId();
+
+  await withStore(SYNC_METADATA_STORE, "readwrite", (store) => {
+    stableKeysToTombstone.forEach((stableKey) => {
+      const metadataKey = createReferenceSyncMetadataKey(stableKey);
+      const existingRecord = existingMetadataByStableKey[stableKey];
+
+      store.put(
+        createNextDirtySyncMetadataRecord({
+          key: metadataKey,
+          entityType: "mbaReference",
+          stableKey,
+          localId: normalizeSyncText(existingRecord?.localId) || tombstoneLocalIdsByStableKey[stableKey] || "",
+          existingRecord,
+          deviceId,
+          pendingDelete: true
+        })
+      );
+    });
+  });
+}
+
+export async function deleteItems(ids) {
+  return deleteItemsByIds(ids);
+}
+
 export async function deleteItem(id) {
-  const existingItem = await withStore(ITEM_STORE, "readonly", (store) => store.get(id));
-  await withStore(ITEM_STORE, "readwrite", (store) => store.delete(id));
-
-  const stableKey = normalizeSyncText(existingItem?.itemUuid);
-
-  if (!stableKey) {
-    await deleteStoredItemMediaAssets(id);
-    return;
-  }
-
-  const remainingItems = await withStore(ITEM_STORE, "readonly", (store) => store.getAll());
-  const matchingItem = (Array.isArray(remainingItems) ? remainingItems : []).find(
-    (item) => item?.id !== id && normalizeSyncText(item?.itemUuid) === stableKey
-  );
-
-  if (matchingItem) {
-    return;
-  }
-
-  await deleteStoredItemMediaAssets(id);
-
-  const [deviceId, existingRecord] = await Promise.all([
-    getOrCreateDeviceId(),
-    getSyncMetadata(createReferenceSyncMetadataKey(stableKey))
-  ]);
-
-  await upsertSyncMetadata(
-    createNextDirtySyncMetadataRecord({
-      key: createReferenceSyncMetadataKey(stableKey),
-      entityType: "mbaReference",
-      stableKey,
-      localId: normalizeSyncText(existingRecord?.localId) || normalizeSyncText(existingItem?.id),
-      existingRecord,
-      deviceId,
-      pendingDelete: true
-    })
-  );
+  return deleteItemsByIds([id]);
 }
 
 export async function loadAppState() {

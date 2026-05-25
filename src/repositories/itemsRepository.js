@@ -1,5 +1,6 @@
 import {
   deleteItem as deleteStoredItem,
+  deleteItems as deleteStoredItems,
   loadItemMediaAssetById as loadStoredItemMediaAssetById,
   loadItems as loadStoredItems,
   loadStartupItemMetadata as loadStoredStartupItemMetadata,
@@ -32,8 +33,7 @@ export async function deleteItem(id) {
 }
 
 export async function deleteItems(ids) {
-  const normalizedIds = Array.isArray(ids) ? ids.filter(Boolean) : [];
-  await Promise.all(normalizedIds.map((id) => deleteStoredItem(id)));
+  return deleteStoredItems(ids);
 }
 
 function getMigrationState(appState, dependencies) {
