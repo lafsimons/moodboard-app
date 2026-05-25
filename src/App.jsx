@@ -3499,6 +3499,7 @@ export default function App() {
   const sideEditorResizeCleanupRef = useRef(null);
   const bulkMetadataFeedbackTimeoutRef = useRef(null);
   const backupExportFeedbackTimeoutRef = useRef(null);
+  const backupPackageExportProgressRef = useRef(null);
   const paletteCacheRef = useRef(new Map());
   const boardRenderLayoutSignatureRef = useRef("");
   const suppressNextBoardRelayoutRef = useRef(false);
@@ -3548,6 +3549,8 @@ export default function App() {
   const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
+  const [isBackupPackageExporting, setIsBackupPackageExporting] = useState(false);
+  const [backupPackageExportProgress, setBackupPackageExportProgress] = useState(null);
   const [tagManagerSearch, setTagManagerSearch] = useState("");
   const [tagManagerDrafts, setTagManagerDrafts] = useState({});
   const [expandedTagManagerTags, setExpandedTagManagerTags] = useState({});
@@ -6205,6 +6208,13 @@ async function handleExportBackup() {
       return;
     }
 
+    setIsBackupPackageExporting(true);
+    updateBackupPackageExportProgress({
+      phase: "preparing",
+      completed: 0,
+      total: Array.isArray(items) ? items.length : 0
+    });
+
     try {
       const directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
 
@@ -6212,17 +6222,22 @@ async function handleExportBackup() {
         rootHandle: directoryHandle,
         items,
         appState: currentPersistedAppState,
-        resolvePreviewAsset: resolvePreviewAssetForBackupPackageExport
+        resolvePreviewAsset: resolvePreviewAssetForBackupPackageExport,
+        onProgress: updateBackupPackageExportProgress
       });
 
+      clearBackupPackageExportProgress();
       setBackupExportStatus("Scalable backup package saved.");
     } catch (error) {
+      clearBackupPackageExportProgress();
       if (error?.name === "AbortError") {
         setBackupExportStatus("Scalable backup package export canceled.");
         return;
       }
 
       setBackupExportStatus("Scalable backup package export failed in this browser.");
+    } finally {
+      setIsBackupPackageExporting(false);
     }
   }
 
@@ -8855,6 +8870,60 @@ async function handleExportBackup() {
     }, 6000);
   }
 
+  function clearBackupPackageExportProgress() {
+    backupPackageExportProgressRef.current = null;
+    setBackupPackageExportProgress(null);
+  }
+
+  function updateBackupPackageExportProgress(nextProgress) {
+    const normalizedProgress = nextProgress && typeof nextProgress === "object"
+      ? {
+          phase: nextProgress.phase || "",
+          completed: Math.max(Number(nextProgress.completed) || 0, 0),
+          total: Math.max(Number(nextProgress.total) || 0, 0)
+        }
+      : null;
+
+    if (!normalizedProgress) {
+      clearBackupPackageExportProgress();
+      return;
+    }
+
+    const previousProgress = backupPackageExportProgressRef.current;
+    const shouldPublish =
+      !previousProgress
+      || previousProgress.phase !== normalizedProgress.phase
+      || normalizedProgress.completed === 0
+      || normalizedProgress.completed >= normalizedProgress.total
+      || normalizedProgress.completed - previousProgress.completed >= 25;
+
+    backupPackageExportProgressRef.current = normalizedProgress;
+
+    if (shouldPublish) {
+      setBackupPackageExportProgress(normalizedProgress);
+    }
+  }
+
+  function getBackupPackageExportProgressLabel(progress) {
+    if (!progress) {
+      return "";
+    }
+
+    if (progress.phase === "preparing") {
+      return "Preparing package";
+    }
+
+    if (progress.phase === "writing-previews") {
+      return `Writing previews: ${progress.completed} / ${progress.total}`;
+    }
+
+    if (progress.phase === "finalizing") {
+      return "Finalizing package";
+    }
+
+    return "";
+  }
+
   function toggleWorkspacePanel(panel, event = null) {
     setActivePanel((current) => {
       const nextPanel = current === panel ? null : panel;
@@ -9568,6 +9637,8 @@ async function handleExportBackup() {
       </div>
     );
   }
+
+  const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
 
   function renderBoardCanvas() {
     return (
@@ -10667,9 +10738,15 @@ async function handleExportBackup() {
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportMetadataBackup}>
                             Export metadata backup
                           </button>
-                          <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportBackupPackage}>
-                            Export scalable backup package
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={handleExportBackupPackage}
+                            disabled={isBackupPackageExporting}
+                          >
+                            {isBackupPackageExporting ? "Exporting scalable backup package..." : "Export scalable backup package"}
                           </button>
+                          {backupPackageExportProgressLabel ? <p className="form-success tag-manager-feedback">{backupPackageExportProgressLabel}</p> : null}
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={() => importBackupRef.current?.click()}>
                             Import backup
                           </button>

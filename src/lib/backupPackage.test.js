@@ -230,6 +230,124 @@ test("getBackupPackagePreviewFileName does not use original filename as the base
   );
 });
 
+test("getBackupPackagePreviewFileName falls back to previewAsset.type when mimeType is missing", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      { itemUuid: "mba-ref-123" },
+      { type: "image/png" }
+    ),
+    "mba-ref-123.png"
+  );
+});
+
+test("getBackupPackagePreviewFileName falls back to item preview mimeType metadata", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      {
+        itemUuid: "mba-ref-123",
+        images: {
+          preview: {
+            mimeType: "image/jpeg"
+          }
+        }
+      },
+      {}
+    ),
+    "mba-ref-123.jpg"
+  );
+});
+
+test("getBackupPackagePreviewFileName falls back to item mimeType metadata", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      {
+        itemUuid: "mba-ref-123",
+        mimeType: "image/gif"
+      },
+      {}
+    ),
+    "mba-ref-123.gif"
+  );
+});
+
+test("getBackupPackagePreviewFileName falls back to MIME parsed from preview data URLs", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      { itemUuid: "mba-ref-123" },
+      { src: "data:image/avif;base64,AAAA" }
+    ),
+    "mba-ref-123.avif"
+  );
+});
+
+test("getBackupPackagePreviewFileName falls back to item fileExtension metadata", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      {
+        itemUuid: "mba-ref-123",
+        fileExtension: "webp"
+      },
+      {}
+    ),
+    "mba-ref-123.webp"
+  );
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      {
+        itemUuid: "mba-ref-456",
+        fileExtension: ".png"
+      },
+      {}
+    ),
+    "mba-ref-456.png"
+  );
+});
+
+test("getBackupPackagePreviewFileName falls back to preview originalFilename extension before item originalFilename", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      {
+        itemUuid: "mba-ref-123",
+        originalFilename: "ignored-item.gif"
+      },
+      {
+        originalFilename: "preview-name.webp"
+      }
+    ),
+    "mba-ref-123.webp"
+  );
+});
+
+test("getBackupPackagePreviewFileName falls back to item originalFilename extension when needed", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      {
+        itemUuid: "mba-ref-123",
+        originalFilename: "item-name.jpg"
+      },
+      {}
+    ),
+    "mba-ref-123.jpg"
+  );
+});
+
+test("getBackupPackagePreviewFileName uses .bin only when the extension is genuinely unknown", () => {
+  assert.equal(
+    getBackupPackagePreviewFileName(
+      {
+        itemUuid: "mba-ref-123",
+        fileExtension: "unknown/value",
+        originalFilename: "no-valid-extension"
+      },
+      {
+        type: "image/unknown",
+        originalFilename: "still-unknown"
+      }
+    ),
+    "mba-ref-123.bin"
+  );
+});
+
 test("buildBackupPackageAppState preserves current backup app-state sanitization", () => {
   const appState = buildBackupPackageAppState({
     board: {
@@ -350,4 +468,49 @@ test("exportBackupPackageToDirectory resolves preview assets for metadata-only i
   const previewsDirectory = mediaDirectory.directories.get("previews");
   const previewBlob = await previewsDirectory.files.get("uuid-metadata-only.webp").readBlob();
   assert.equal(previewBlob.size > 0, true);
+});
+
+test("exportBackupPackageToDirectory reports package export progress by phase", async () => {
+  const rootHandle = new FakeDirectoryHandle();
+  const progressEvents = [];
+
+  await exportBackupPackageToDirectory({
+    rootHandle,
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        images: {
+          preview: {
+            src: "data:image/webp;base64,cHJldmlldw==",
+            mimeType: "image/webp"
+          }
+        }
+      },
+      {
+        id: "item-2",
+        itemUuid: "uuid-2",
+        images: {
+          preview: {
+            src: "data:image/png;base64,cHJldmlldw==",
+            mimeType: "image/png"
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    resolvePreviewAsset: async () => null,
+    onProgress: (event) => {
+      progressEvents.push(event);
+    }
+  });
+
+  assert.deepEqual(progressEvents, [
+    { phase: "preparing", completed: 0, total: 2 },
+    { phase: "writing-previews", completed: 1, total: 2 },
+    { phase: "writing-previews", completed: 2, total: 2 },
+    { phase: "finalizing", completed: 2, total: 2 }
+  ]);
 });
