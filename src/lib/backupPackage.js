@@ -56,6 +56,46 @@ function getExtensionFromMimeType(mimeType = "") {
   return MIME_EXTENSION_MAP[normalized] ?? "";
 }
 
+function getExtensionFromAssetType(type = "") {
+  return getExtensionFromMimeType(type);
+}
+
+function getExtensionFromDataUrl(dataUrl = "") {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
+    return "";
+  }
+
+  const mimeType = dataUrl.match(/^data:([^;,]+)/i)?.[1] ?? "";
+  return getExtensionFromMimeType(mimeType);
+}
+
+function getExtensionFromFileExtension(fileExtension = "") {
+  const normalized = typeof fileExtension === "string" ? fileExtension.trim().toLowerCase() : "";
+  if (!normalized) {
+    return "";
+  }
+
+  const candidate = normalized.startsWith(".") ? normalized : `.${normalized}`;
+  return /^\.[a-z0-9]{1,8}$/.test(candidate) ? candidate : "";
+}
+
+function resolvePreviewFileExtension(item, previewAsset) {
+  const normalizedItem = item && typeof item === "object" ? item : {};
+  const normalizedPreviewAsset = createImageAsset(previewAsset);
+
+  return (
+    getExtensionFromMimeType(normalizedPreviewAsset.mimeType)
+    || getExtensionFromAssetType(normalizedPreviewAsset.type)
+    || getExtensionFromMimeType(normalizedItem?.images?.preview?.mimeType)
+    || getExtensionFromMimeType(normalizedItem.mimeType)
+    || getExtensionFromDataUrl(normalizedPreviewAsset.src)
+    || getExtensionFromFileExtension(normalizedItem.fileExtension)
+    || getExtensionFromFilename(normalizedPreviewAsset.originalFilename)
+    || getExtensionFromFilename(normalizedItem.originalFilename)
+    || ".bin"
+  );
+}
+
 function createJsonBlob(value) {
   return new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
 }
@@ -209,17 +249,12 @@ export function buildBackupPackageAppState(appState) {
 
 export function getBackupPackagePreviewFileName(item, previewAsset = {}) {
   const normalizedItem = item && typeof item === "object" ? item : {};
-  const normalizedPreviewAsset = createImageAsset(previewAsset);
   const baseName = sanitizeFileSegment(
     normalizedItem.itemUuid
     || normalizedItem.id
     || "reference"
   );
-  const extension =
-    getExtensionFromMimeType(normalizedPreviewAsset.mimeType)
-    || getExtensionFromFilename(normalizedPreviewAsset.originalFilename)
-    || getExtensionFromFilename(normalizedItem.originalFilename)
-    || ".bin";
+  const extension = resolvePreviewFileExtension(normalizedItem, previewAsset);
 
   return `${baseName}${extension}`;
 }
@@ -260,7 +295,8 @@ export async function exportBackupPackageToDirectory({
   rootHandle,
   items,
   appState,
-  resolvePreviewAsset
+  resolvePreviewAsset,
+  onProgress
 }) {
   if (!rootHandle || typeof rootHandle.getDirectoryHandle !== "function" || typeof rootHandle.getFileHandle !== "function") {
     throw new Error("Backup package export requires a writable directory handle.");
@@ -272,6 +308,10 @@ export async function exportBackupPackageToDirectory({
 
   const itemList = Array.isArray(items) ? items : [];
   const exportedAt = new Date().toISOString();
+  const total = itemList.length;
+  if (typeof onProgress === "function") {
+    onProgress({ phase: "preparing", completed: 0, total });
+  }
   const packageAppState = buildBackupPackageAppState(appState);
   const { previewsDirectoryHandle } = await ensurePackageDirectories(rootHandle);
   const itemsFileHandle = await rootHandle.getFileHandle(PACKAGE_ITEMS_FILE, { create: true });
@@ -297,11 +337,17 @@ export async function exportBackupPackageToDirectory({
       await writeBlobToFile(previewsDirectoryHandle, previewFileName, previewBlob);
       await itemsWritable.write(createTextBlob(serializeBackupPackageItemRecord(itemRecord)));
       previewFileCount += 1;
+      if (typeof onProgress === "function") {
+        onProgress({ phase: "writing-previews", completed: previewFileCount, total });
+      }
     }
   } finally {
     await itemsWritable.close();
   }
 
+  if (typeof onProgress === "function") {
+    onProgress({ phase: "finalizing", completed: total, total });
+  }
   await writeBlobToFile(rootHandle, PACKAGE_APP_STATE_FILE, createJsonBlob(packageAppState));
 
   const manifest = buildBackupPackageManifest({
