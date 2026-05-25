@@ -7,6 +7,7 @@ import {
   __setIndexedDbFactoryForTests,
   backfillLocalSyncMetadata,
   clearSyncMetadata,
+  createMetadataOnlyBackupData,
   createLightweightBackupData,
   deleteOriginalImageBlob,
   getOrCreateDeviceId,
@@ -269,6 +270,88 @@ test("createLightweightBackupData preserves preview as the portable render asset
   });
   assert.equal("syncState" in backup, false);
   assert.equal("syncMetadata" in backup, false);
+});
+
+test("createMetadataOnlyBackupData strips embedded media while preserving metadata and sanitized boards", () => {
+  const backup = createMetadataOnlyBackupData([
+    {
+      id: "item-1",
+      itemUuid: "uuid-1",
+      imageUrl: "data:image/webp;base64,preview",
+      imageWidth: 1400,
+      imageHeight: 933,
+      mimeType: "image/webp",
+      fileSize: 1500,
+      originalFilename: "look.jpg",
+      images: {
+        original: {
+          src: "data:image/jpeg;base64,original",
+          mimeType: "image/jpeg",
+          width: 3000,
+          height: 2000,
+          fileSize: 9000,
+          originalFilename: "look.jpg"
+        },
+        preview: {
+          src: "data:image/webp;base64,preview",
+          mimeType: "image/webp",
+          width: 1400,
+          height: 933,
+          fileSize: 1500,
+          originalFilename: "look.jpg"
+        },
+        thumbnail: {
+          src: "data:image/webp;base64,thumb",
+          mimeType: "image/webp",
+          width: 520,
+          height: 346,
+          fileSize: 300,
+          originalFilename: "look.jpg"
+        }
+      },
+      tags: ["archive/look"]
+    }
+  ], {
+    board: {
+      id: "board-1",
+      boardUuid: "board-uuid-1",
+      images: [
+        {
+          id: "board-image-1",
+          referenceId: "item-1",
+          imageUrl: "data:image/png;base64,large"
+        }
+      ]
+    },
+    savedOutfits: [
+      {
+        id: "saved-1",
+        board: {
+          id: "saved-board-1",
+          boardUuid: "saved-board-uuid-1",
+          images: [
+            {
+              id: "saved-board-image-1",
+              referenceId: "item-1",
+              embeddedItem: {
+                imageUrl: "data:image/png;base64,large"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    recentOutfits: [{ id: "drop-me" }]
+  });
+
+  assert.equal(backup.items[0].imageUrl, "");
+  assert.equal(backup.items[0].images.original.src, "");
+  assert.equal(backup.items[0].images.preview.src, "");
+  assert.equal(backup.items[0].images.thumbnail.src, "");
+  assert.deepEqual(backup.items[0].tags, ["archive/look"]);
+  assert.equal("imageUrl" in backup.appState.board.images[0], false);
+  assert.equal("embeddedItem" in backup.appState.savedOutfits[0].board.images[0], false);
+  assert.equal("recentOutfits" in backup.appState, false);
 });
 
 test("default wardrobe demo references point at bundled working image assets", () => {
@@ -1095,6 +1178,50 @@ test("prepareBackupImport preserves and backfills boardUuid for persisted boards
   assert.deepEqual(prepared.appState.recentOutfits, []);
 });
 
+test("prepareBackupImport strips embedded payload fields from imported app state boards", () => {
+  const prepared = prepareBackupImport({
+    source: "moodboard-app",
+    version: 2,
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    items: [],
+    appState: {
+      board: {
+        id: "active-board",
+        boardUuid: "board-uuid-active",
+        images: [
+          {
+            id: "board-image-1",
+            referenceId: "item-1",
+            imageUrl: "data:image/png;base64,large",
+            embeddedItem: {
+              imageUrl: "data:image/png;base64,large"
+            }
+          }
+        ]
+      },
+      savedOutfits: [
+        {
+          id: "saved-1",
+          board: {
+            id: "saved-board-1",
+            images: [
+              {
+                id: "saved-board-image-1",
+                referenceId: "item-1",
+                imageUrl: "data:image/png;base64,large"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  });
+
+  assert.equal("imageUrl" in prepared.appState.board.images[0], false);
+  assert.equal("embeddedItem" in prepared.appState.board.images[0], false);
+  assert.equal("imageUrl" in prepared.appState.savedOutfits[0].board.images[0], false);
+});
+
 test("backup import export round-trip preserves unknown list values", () => {
   const backup = createLightweightBackupData(
     [
@@ -1324,6 +1451,45 @@ test("prepareBackupImport rejects invalid payloads before replacement", () => {
     }),
     /missing an id/i
   );
+});
+
+test("replaceWithPreparedBackup validates payload before clearing existing data", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-1",
+    imageUrl: "data:image/webp;base64,preview",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview",
+        mimeType: "image/webp",
+        width: 400,
+        height: 300
+      }
+    }
+  });
+  await saveAppState({
+    savedOutfits: []
+  });
+
+  await assert.rejects(
+    () => replaceWithPreparedBackup({
+      source: "moodboard-app",
+      version: 2,
+      exportedAt: "2026-05-25T12:00:00.000Z",
+      items: null,
+      appState: {}
+    }),
+    /backup items are invalid/i
+  );
+
+  const persistedItems = await loadItems();
+  const persistedAppState = await loadAppState();
+
+  assert.equal(persistedItems.length, 1);
+  assert.equal(persistedItems[0].id, "item-1");
+  assert.deepEqual(persistedAppState.savedOutfits, []);
 });
 
 test("replaceWithBackup leaves existing items untouched when validation fails", async () => {

@@ -14,6 +14,9 @@ import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
 const DB_VERSION = 3;
 export const BACKUP_VERSION = 2;
+export const BACKUP_EXPORT_WARN_BYTES = 150 * 1024 * 1024;
+export const BACKUP_IMPORT_MAX_BYTES = 250 * 1024 * 1024;
+export const BACKUP_IMPORT_HARD_MAX_BYTES = 650 * 1024 * 1024;
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
 const ORIGINAL_STORE = "originalImageBlobs";
@@ -126,6 +129,33 @@ function sanitizePersistedAppState(value = {}) {
       .map((savedOutfit, index) => sanitizePersistedSavedOutfit(savedOutfit, index))
       .filter(Boolean)
   };
+}
+
+function sanitizeBackupAppStateSnapshot(appState) {
+  if (!appState || typeof appState !== "object" || Array.isArray(appState)) {
+    return {};
+  }
+
+  const strippedAppState = stripLocalOnlyAppState(appState);
+  const sanitizedAppState = {
+    ...strippedAppState
+  };
+
+  if (Object.prototype.hasOwnProperty.call(strippedAppState, "outfit")) {
+    sanitizedAppState.outfit = sanitizePersistedOutfit(strippedAppState.outfit);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(strippedAppState, "board")) {
+    sanitizedAppState.board = sanitizePersistedBoard(strippedAppState.board);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(strippedAppState, "savedOutfits")) {
+    sanitizedAppState.savedOutfits = (Array.isArray(strippedAppState.savedOutfits) ? strippedAppState.savedOutfits : [])
+      .map((savedOutfit, index) => sanitizePersistedSavedOutfit(savedOutfit, index))
+      .filter(Boolean);
+  }
+
+  return sanitizedAppState;
 }
 
 function getApproxSerializedBytes(value) {
@@ -1199,12 +1229,15 @@ function normalizeBackupAppState(appState) {
     throw new Error("Backup app state is invalid.");
   }
 
-  const normalizedBoard = ensureBoardUuid(appState.board);
+  const sanitizedAppState = sanitizeBackupAppStateSnapshot(appState);
+  const normalizedBoard = ensureBoardUuid(sanitizedAppState.board);
 
   return {
-    ...appState,
+    ...sanitizedAppState,
     ...(normalizedBoard === undefined ? {} : { board: normalizedBoard }),
-    savedOutfits: Array.isArray(appState.savedOutfits) ? appState.savedOutfits.map(ensureSavedBoardUuid) : appState.savedOutfits,
+    savedOutfits: Array.isArray(sanitizedAppState.savedOutfits)
+      ? sanitizedAppState.savedOutfits.map(ensureSavedBoardUuid)
+      : sanitizedAppState.savedOutfits,
     recentOutfits: []
   };
 }
@@ -1240,7 +1273,17 @@ export function createLightweightBackupData(items, appState) {
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     items: (Array.isArray(items) ? items : []).map((item) => sanitizeBackupReference(item)),
-    appState: stripLocalOnlyAppState(appState)
+    appState: sanitizeBackupAppStateSnapshot(appState)
+  };
+}
+
+export function createMetadataOnlyBackupData(items, appState) {
+  return {
+    source: BACKUP_SOURCE,
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    items: (Array.isArray(items) ? items : []).map((item) => stripItemMediaPayloads(migrateReferenceMetadataToTags(item))),
+    appState: sanitizeBackupAppStateSnapshot(appState)
   };
 }
 
@@ -1266,12 +1309,30 @@ export function prepareBackupImport(backup) {
   };
 }
 
-export async function exportBackup() {
+function validatePreparedBackupForReplacement(backup) {
+  if (!backup || typeof backup !== "object" || Array.isArray(backup)) {
+    throw new Error("Prepared backup payload is invalid.");
+  }
+
+  return {
+    source: typeof backup.source === "string" ? backup.source : BACKUP_SOURCE,
+    version: Number.isFinite(Number(backup.version)) ? Number(backup.version) : BACKUP_VERSION,
+    exportedAt: typeof backup.exportedAt === "string" ? backup.exportedAt : "",
+    items: prepareBackupItems(backup.items),
+    appState: normalizeBackupAppState(backup.appState)
+  };
+}
+
+export async function exportBackup(options = {}) {
   const [items, appState] = await Promise.all([loadItems(), loadAppState()]);
-  return createLightweightBackupData(items, appState);
+  return options.mode === "metadata"
+    ? createMetadataOnlyBackupData(items, appState)
+    : createLightweightBackupData(items, appState);
 }
 
 export async function replaceWithPreparedBackup(backup) {
+  const validatedBackup = validatePreparedBackupForReplacement(backup);
+
   await withStores(
     [ITEM_STORE, APP_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE],
     "readwrite",
@@ -1281,15 +1342,15 @@ export async function replaceWithPreparedBackup(backup) {
     originalImageBlobs.clear();
     syncMetadata.clear();
 
-    backup.items.forEach((item) => items.put(item));
+    validatedBackup.items.forEach((item) => items.put(item));
     appState.put({
       key: "state",
-      value: backup.appState
+      value: validatedBackup.appState
     });
     }
   );
 
-  await backfillLocalSyncMetadata(backup.items, backup.appState?.savedOutfits ?? []);
+  await backfillLocalSyncMetadata(validatedBackup.items, validatedBackup.appState?.savedOutfits ?? []);
 }
 
 export async function replaceWithBackup(backup) {
