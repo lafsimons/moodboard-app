@@ -1,6 +1,7 @@
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   BACKUP_EXPORT_WARN_BYTES,
+  BACKUP_IMPORT_HARD_MAX_BYTES,
   BACKUP_IMPORT_MAX_BYTES,
   createMetadataOnlyBackupData,
   createLightweightBackupData,
@@ -6061,11 +6062,23 @@ export default function App() {
       return;
     }
 
-    if (file.size > BACKUP_IMPORT_MAX_BYTES) {
+    if (file.size > BACKUP_IMPORT_HARD_MAX_BYTES) {
       window.alert(
-        `This backup file is ${formatFileSize(file.size)}, which is above the browser import safety limit of ${formatFileSize(BACKUP_IMPORT_MAX_BYTES)}. The app did not try to read it. Use a smaller backup, or export/import metadata-only until chunked backup support exists.`
+        `This backup file is ${formatFileSize(file.size)}, which is above the hard browser import limit of ${formatFileSize(BACKUP_IMPORT_HARD_MAX_BYTES)}. The app did not try to read it because extremely large imports can freeze or crash the browser. Use a smaller backup, or prefer a metadata-only backup where possible.`
       );
       return;
+    }
+
+    if (file.size > BACKUP_IMPORT_MAX_BYTES) {
+      const confirmedLargeImport = await requestConfirmation({
+        title: "Import large backup?",
+        message: `This backup file is ${formatFileSize(file.size)}, which is above the normal browser safety limit of ${formatFileSize(BACKUP_IMPORT_MAX_BYTES)}. Reading and parsing a large full backup may freeze or crash the browser. Prefer a metadata-only backup where possible. Continue anyway?`,
+        confirmLabel: "Read large backup"
+      });
+
+      if (!confirmedLargeImport) {
+        return;
+      }
     }
 
     let backup;

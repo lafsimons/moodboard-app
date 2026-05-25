@@ -16,6 +16,7 @@ const DB_VERSION = 3;
 export const BACKUP_VERSION = 2;
 export const BACKUP_EXPORT_WARN_BYTES = 150 * 1024 * 1024;
 export const BACKUP_IMPORT_MAX_BYTES = 250 * 1024 * 1024;
+export const BACKUP_IMPORT_HARD_MAX_BYTES = 650 * 1024 * 1024;
 const ITEM_STORE = "items";
 const APP_STORE = "appState";
 const ORIGINAL_STORE = "originalImageBlobs";

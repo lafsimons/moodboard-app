@@ -3,6 +3,7 @@ import {
 } from "../lib/backupAnalysis.js";
 import {
   BACKUP_EXPORT_WARN_BYTES,
+  BACKUP_IMPORT_HARD_MAX_BYTES,
   BACKUP_IMPORT_MAX_BYTES,
   createMetadataOnlyBackupData,
   createLightweightBackupData,
@@ -17,6 +18,7 @@ import {
 export {
   analyzeBackupData,
   BACKUP_EXPORT_WARN_BYTES,
+  BACKUP_IMPORT_HARD_MAX_BYTES,
   BACKUP_IMPORT_MAX_BYTES,
   createMetadataOnlyBackupData,
   createLightweightBackupData,
