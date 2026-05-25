@@ -25,35 +25,79 @@ npm run dev -- --host 0.0.0.0
 
 ---
 
+# Recent stabilization checkpoint
+
+Completed in MBA:
+- metadata-first startup
+- metadata-only runtime state
+- out-of-line media storage
+- lazy media resolution
+- removed post-startup full hydration
+- Safe Mode recovery
+- batched delete cleanup
+- persistence dedupe
+- virtualization reload stabilization
+- backup hardening
+
+Next large-library architecture work:
+- archive/chunked backup format
+- media integrity tools
+- export limits/UX
+- optional object URL cache layer
+
+---
+
 # OA & MBA Current priorities
 
-## **OA — Phase 1 (Core interaction stabilization)**
+## OA + MBA — Stability / Scaling
 
-### **Local controls architecture**
+### Completed large-library stabilization
+
+- ~~Large-library crash fix~~
+- ~~Large backup import/export hardening~~
+
+### Persistence / rendering
+
+- Audit/spec screenshot-style miniature rendering
+- Implement OA screenshot-style saved outfit previews
+- Implement MBA screenshot-style saved board previews
+
+## OA — Phase 1 (Core interaction stabilization)
+
+### Local collection controls architecture
 
 - Audit/spec local collection controls
 - Implement selector-local search/filter/sort
 - Audit/spec dashboard-local filters
 - Implement dashboard-local filters
 
-### **Core interaction fixes** - done
+### Secondary surface rollout
+
+- Local search/filter/sort for Saved Outfits
+- Lightweight local search/sort for Fitpics
+
+### **Core interaction fixes** -  done
 
 - ~~Fix exclude in selector not triggering reroll/generation~~
 - ~~Clicking item no longer auto-opens Select on desktop~~
 - ~~Outfit single-click = select~~
 - ~~Outfit double-click = preview~~
 - ~~Add “Unlock all slots” control~~
-- ~~Toolbar selected/unselected layout stability~~ - later
 - ~~Persist editor/add-images window positions~~
 
-### **UI polish / smaller fixes** - done
+### **UI polish / smaller fixes** -  done
 
-- ~~Headwear hover buttons cut off~~ - almost
 - ~~Remove click/select shadows~~
 - ~~Preview equip → unequip state polish~~
 - ~~Preview favorite heart icon~~
 - ~~Dashboard search hidden + filter reposition~~
 - ~~Manage buttons non-wrapping layout~~
+
+
+### Deferred polish
+
+- Toolbar selected/unselected layout stability
+- Headwear hover buttons cut off (minor remaining issue)
 
 ## **OA — Phase 2 (Selector & preview UX redesign)**
 
@@ -63,22 +107,12 @@ npm run dev -- --host 0.0.0.0
 - Implement Actions dropdown in outfit hover controls
 - Preview view redesign / action hierarchy cleanup
 
-### **Layering / accessory systems**
+### Accessory / layering systems
 
 - Audit/spec accessory visibility system
 - Implement per-item accessory visibility toggles
 - Audit/spec layering-off “which item stays” behavior
 - Implement layering-off keep-inner/keep-outer behavior
-
-## **OA — Phase 3 (Secondary collection surfaces)**
-
-### **Saved Outfits**
-
-- Local search/filter/sort for Saved Outfits
-
-### **Fitpics**
-
-- Lightweight local search/sort for Fitpics
 
 ## ~~**MBA — Phase 1 (Interaction & layout stabilization)** - done~~
 
@@ -113,30 +147,9 @@ npm run dev -- --host 0.0.0.0
 - ~~Technical/subtle preview regeneration controls~~
 - ~~Separate destructive Remove Image area~~
 
----
-
-## **Shared ecosystem features (OA + MBA)**
-
-### **Saved miniature previews**
-
-- Audit/spec screenshot-style miniature rendering
-- Implement OA screenshot-style saved outfit previews
-- Implement MBA screenshot-style saved board previews
-
 ## **Architectural direction / principles**
 
-### **Local state per surface**
-
-- Selector controls independent from Wardrobe
-- Dashboard filters independent from Wardrobe
-- Saved Outfits controls independent
-- Fitpics controls independent
-- Avoid global shared filter state across surfaces
-
-# OA & MBA Secondary Priorities 
-(might be partially already in list above, will be checked afterwards)
-
-## **Mobile check**
+## Mobile Quick Wins
 1. MBA quick mobile audit
 2. OA quick mobile audit
 3. Note all issues
@@ -168,19 +181,38 @@ npm run dev -- --host 0.0.0.0
 
 ---
 
-## **Next Steps:** 
-1. Finish MBA Library grid
-    Hide raw names unless explicitly renamed.
-2. Improve MBA reference editor
-    Bring closer to OA editor hierarchy.
-3. Improve both bulk editors
-    MBA + OA should use the same operation-based bulk-edit philosophy, with app-specific operations.
-4. Finish OA Fitpics + Saved Outfits
-5. Finish MBA Saved Boards
-6. Normalize Fitpics ↔ MBA References
-    Shared media/reference shape and compatibility.
-7. Add relationship model
-    Link outfits, wardrobe pieces, fitpics, MBA references, and boards.
+## Ecosystem Evolution (Post-Stabilization)
+
+### Shared editing systems
+
+- Improve MBA bulk editor
+- Improve OA bulk editor
+- Align both apps around shared operation-based bulk-edit architecture
+- Keep app-specific operations where needed
+
+### Shared reference/media model
+
+- Normalize Fitpics ↔ MBA references
+- Shared media/reference shape
+- Shared compatibility layer
+
+### Secondary entity systems
+
+- Finish OA Fitpics
+- Finish OA Saved Outfits
+- Finish MBA Saved Boards
+
+### Relationship model
+
+- Link:
+  - wardrobe items
+  - outfits
+  - fitpics
+  - MBA references
+  - saved boards
+
+- Support many-to-many relationships
+- Preserve local-first architecture compatibility
 
 ---
 
@@ -221,11 +253,6 @@ See:
 
 ## **Current MBA issues**
 
-- when I click ESC in saved boards, this should not go back to library, but to the board. also remove the "back to library" button
-- saved boards are deleting on refresh page
-- images in card could be bigger (like in OA)
-- toolbar: remove divider line
-
 ### **Tags**
 
 - infinite nesting support
@@ -234,13 +261,8 @@ See:
 
 ### **Crop**
 
-- incorrect crop boundaries
+- crop boundary edge cases on tall/extreme-aspect images
 - oversized crop UI on tall images
-
-### **Canvas**
-
-- occasional distortion
-- preview/render mismatch
 
 ---
 
@@ -325,6 +347,18 @@ Avoid accidental changes to:
 
 Use regression fixtures/tests when possible.
 
+## Runtime hydration warning
+
+Do not casually reintroduce:
+- full-library runtime hydration
+- inline media residency in React state
+- startup-time full media materialization
+
+Large-library stabilization depends on maintaining:
+- metadata-only runtime state
+- lazy media resolution
+- out-of-line media storage
+
 ---
 
 # **Deferred systems**
@@ -348,7 +382,7 @@ IndexedDB remains the active local-first layer for now.
 - relationship systems still mostly rely on mutable `id`
 - OA still primarily renders from `imageUrl`
 - metadata/image migrations remain high-risk regression areas
-
+- Current browser architecture has been substantially hardened for multi-thousand-image libraries, but continued validation is needed around memory pressure, large IndexedDB flows, backup size, and recovery behavior.
 ---
 
 # **Backlog**
@@ -390,7 +424,9 @@ IndexedDB remains the active local-first layer for now.
 
 ### **MBA**
 - bulk rename
-- higher image counts
+- validate higher image counts after metadata/media split
+- define practical backup/export limits
+- add media integrity tools
 - Manage Tags:
 	- add also to add new tags
 	- change order button A-Z / number

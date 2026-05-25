@@ -733,14 +733,14 @@ Current direction:
 - `originalPreserved` must never be inferred
 
 Still deferred:
-- original preservation
-- blob/object storage
-- shared asset repository architecture
+- full original-preservation workflow
+- shared asset repository architecture across OA/MBA
+- cloud/object-storage-backed media
 
 ## What must not change yet
 
 - Do not remove `imageUrl` compatibility yet
-- Do not change backup payload behavior yet
+- Do not break backward-compatible backup/import behavior without explicit migration handling
 - Do not change import/export behavior yet
 - Do not rewrite crop, frame scale, offset, or presentation behavior yet
 - Do not change the current meaning of persisted crop/presentation fields without explicit migration handling
@@ -805,4 +805,269 @@ Still deferred:
 - Less rigid than OA.
 - Helps make sense of visual attraction and recurring aesthetic patterns.
 - Can function like an Obsidian-style visual thinking space for taste development.
+
+---
+
+# Large-Library Runtime Architecture
+
+## Metadata-first startup
+
+Startup is now metadata-first rather than media-first.
+
+The app no longer attempts to fully hydrate image-bearing item records during initial boot. Startup loads lightweight item metadata only:
+
+- ids
+- itemUuid
+- tags
+- dimensions
+- crop/presentation metadata
+- timestamps
+- source identity
+- lightweight image metadata
+
+This allows:
+
+- significantly lower startup heap pressure
+- reduced IndexedDB read spikes
+- stable startup on large libraries
+- safer recovery behavior after interrupted imports or oversized datasets
+
+Startup state now initializes:
+
+- Library
+- boards
+- saved boards
+- filters
+- tag systems
+- selection state
+
+without requiring inline image payload hydration.
+
+---
+
+## Metadata-only runtime state
+
+Runtime `items` state is now permanently metadata-only.
+
+React state no longer stores:
+
+- inline preview data URLs
+- inline thumbnail payloads
+- inline original payloads
+
+This avoids:
+
+- full-library media residency in JS heap
+- repeated giant object cloning
+- unnecessary React diffing on media payloads
+- memory spikes during delete/filter/sort operations
+
+All major runtime systems now operate from metadata:
+
+- Library
+- filters/search/sorting
+- boards
+- saved boards
+- generation
+- persistence
+- selection state
+
+Media is resolved lazily only where needed.
+
+---
+
+## Out-of-line media storage
+
+Preview, thumbnail, and original media were moved out of item records.
+
+Current IndexedDB model:
+
+- `items`
+    - metadata-only item records
+- `itemMediaAssets`
+    - preview/thumbnail payloads
+- `originalImageBlobs`
+    - original-resolution blobs
+
+This replaces the earlier architecture where every item embedded image payloads directly into the main item record.
+
+Benefits:
+
+- dramatically smaller item records
+- reduced serialization cost
+- lower startup pressure
+- lower persistence pressure
+- safer large-library scaling
+- future-compatible with chunked/archive backups
+
+Legacy inline-media items remain backward-compatible.
+
+---
+
+## Lazy media resolution
+
+Media is now resolved lazily/on-demand.
+
+UI systems request media only when required:
+
+- Library cards
+- board images
+- editor preview
+- crop editor
+- palette extraction
+- export paths
+
+Resolution occurs through centralized async media resolution helpers rather than assuming `item.imageUrl` already exists in runtime state.
+
+This preserves:
+
+- metadata-only runtime architecture
+- lower memory residency
+- compatibility with old inline-media items
+- compatibility with new out-of-line media records
+
+---
+
+## Removal of post-startup full hydration
+
+The previous architecture still performed a second full-library `loadItems().getAll()` pass after startup.
+
+That pass:
+
+- reloaded the entire library
+- rebuilt runtime state
+- created unnecessary memory pressure
+- duplicated startup work
+- provided little value after media splitting
+
+This pass has been removed.
+
+The app now remains metadata-only after startup rather than transitioning into a fully hydrated runtime model.
+
+---
+
+# Large-library stabilization work
+
+Large-library stabilization included:
+
+- metadata-first startup
+- removal of inline media from runtime state
+- batched delete operations
+- safer persistence behavior
+- virtualization startup fixes
+- backup hardening
+- recovery tooling
+- persistence deduplication
+
+The primary goal was transitioning from prototype-scale assumptions toward stable multi-thousand-image library behavior.
+
+This work specifically targeted:
+
+- browser crashes
+- corrupted startup states
+- runaway memory usage
+- oversized persistence writes
+- import/export instability
+- delete-time crashes
+- virtualization reload failures
+
+---
+
+## Safe Mode recovery
+
+A dedicated Safe Mode recovery surface now exists via:
+
+```text
+?safeMode=1
+```
+
+Safe Mode:
+
+- loads metadata only
+- avoids full runtime initialization
+- supports large-library recovery workflows
+- allows inspection of oversized/corrupted datasets
+- supports targeted deletion/recovery operations
+- supports metadata backup export
+
+The recovery path exists specifically to avoid requiring full browser storage wipes during failure scenarios.
+
+---
+
+## Bulk delete batching
+
+Bulk delete operations previously executed as repeated single-item deletes with repeated full-store scans.
+
+Delete architecture now:
+
+- batches item deletions
+- batches media cleanup
+- computes shared itemUuid ownership once
+- deletes preview/thumbnail/original media only when last ownership disappears
+- avoids repeated full-library scans
+
+This resolved:
+
+- delete-triggered browser crashes
+- extreme delete-time memory spikes
+- redundant persistence amplification
+
+---
+
+## Persistence dedupe
+
+Persistence behavior was tightened significantly.
+
+Changes:
+
+- duplicate sanitized app-state writes are skipped
+- redundant post-delete persistence paths were deduped
+- unnecessary object replacement after delete was reduced
+- saved board cleanup preserves references when unchanged
+
+This reduced:
+
+- redundant IndexedDB writes
+- repeated JSON serialization
+- unnecessary saved-board persistence work
+- delete-time persistence amplification
+
+---
+
+## Virtualization reload fixes
+
+Library virtualization previously had reload timing failures where:
+
+- only the first column rendered correctly
+- remaining columns stayed placeholder/blurred
+- measurement occurred before stable layout
+
+Fixes added:
+
+- stronger startup measurement timing
+- post-layout remeasurement
+- ResizeObserver coverage
+- visibility-triggered remeasurement
+- virtualization window math extraction/testing
+
+Virtualization remains enabled and lazy-loading behavior remains intact.
+
+---
+
+## Backup hardening + metadata-only backups
+
+Backup/import behavior was hardened substantially.
+
+Added:
+
+- metadata-only backup export
+- oversized import warnings/rejections
+- validation-before-replacement
+- safer app-state sanitization
+- backup materialization for out-of-line media
+- recovery-oriented backup workflows
+
+The current system still uses single-file JSON backups, but they are now safer and more resilient.
+
+---
 

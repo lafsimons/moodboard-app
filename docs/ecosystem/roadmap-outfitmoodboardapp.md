@@ -2,6 +2,8 @@
 
 ---
 
+# Vision / ecosystem
+
 ## Long-term ecosystem direction
 
 - Main hub page with access to OA and MBA.
@@ -35,6 +37,7 @@ The system could reveal:
 - most-linked references
 
 ---
+# Infrastructure / architecture
 
 ## Infrastructure direction
 
@@ -44,7 +47,109 @@ The system could reveal:
 
 ---
 
-## Near-term priorities
+# Current stabilization state
+
+## Large-library runtime architecture
+
+Current stabilization work completed:
+- metadata-first startup
+- metadata-only runtime state
+- out-of-line media storage
+- lazy media resolution
+- batched delete cleanup
+- persistence dedupe
+- virtualization stabilization
+- backup hardening
+- Safe Mode recovery
+
+Current architecture is now designed to support multi-thousand-image personal libraries before sync/cloud rollout.
+
+# Large-library architecture direction
+
+- archive/chunked backup format
+- streaming import/export
+- media integrity tools
+- export limits/UX
+- possible centralized object URL cache layer
+
+### Future backup/media direction
+
+Current JSON backup works after slimming duplicated image payloads, but it still embeds preview images inline and still relies on full in-memory JSON materialization.
+
+This is acceptable short-term, but not scalable for very large libraries.
+
+Long-term direction:
+- metadata backup should stay small
+- media assets should be stored separately
+- previews/originals should become separate image assets
+- app records should reference stable media IDs/URLs instead of embedding all image data inline
+- cloud sync should eventually store media in object storage
+
+Current backups still:
+- materialize entire JSON payloads
+- rely on `readAsText`
+- rely on full `JSON.parse`
+
+Future backup architecture will likely move toward:
+- manifest-based archive format
+- chunked metadata files / NDJSON
+- separated media payloads
+- streaming import/export
+- optional zip/tar packaging
+
+Likely future structure:
+
+```text
+manifest.json
+appState.json
+items.ndjson
+media/previews/
+media/thumbnails/
+media/originals/
+```
+
+Also MBA has already been stabilized around slimmer backup/media handling. Later compare OA’s backup shape and potentially reuse the same backup-slimming and media-separation rules across both apps.
+
+### **Media integrity tools**
+
+Potential future tooling:
+
+- orphaned media detection
+- orphaned metadata detection
+- missing preview/original validation
+- integrity repair utilities
+- media compaction tools
+
+These become more important with separated metadata/media storage.
+
+### **Export limits / UX**
+
+Very large visual exports are currently impractical at extreme library sizes.
+
+Future UX work may include:
+
+- filtered export limits
+- export warnings
+- chunked rendering
+- paginated exports
+- staged rendering/export pipelines
+
+### **Possible future object URL cache layer**
+
+Current lazy media resolution already revokes object URLs correctly, but object URL creation remains decentralized.
+
+Possible future optimization:
+
+- centralized object URL cache
+- LRU eviction
+- shared resolver cache
+- ref-counted object URL reuse
+
+This is not currently required, but may become useful for extremely large libraries or future multi-panel/media-heavy workflows.
+
+---
+
+# Near-term priorities  
 
 ### Documentation
 
@@ -79,6 +184,8 @@ Before implementing accounts/sync/cloud:
 - remove duplicated OA/MBA infrastructure
 - keep feature work moving while gradually modularizing shared systems
 - complete missing additive stable UUID fields for any syncable non-item entities before rollout
+
+# Major future phases
 
 ### Major future system phases
 
@@ -117,7 +224,29 @@ Eventually important. Especially because:
 - zooming
 will increasingly want: preview image + original image separation.
 
-**4. Sync architecture**
+**4. Shared shell / ecosystem timing**
+Do not build the shared shell yet.
+OA and MBA should first stabilize independently:
+- local interaction systems
+- filtering/search architecture
+- image/original handling
+- metadata/entity systems
+- persistence/import/export
+- shared helper extraction
+Prefer incremental shared concepts/helpers over early app coupling.
+The shared shell/hub should begin only once real cross-app workflows exist, such as:
+- OA outfit → MBA board workflows
+- shared image library
+- shared tags/favorites
+- fitpics referencing outfits/items/boards
+- shared auth/workspaces
+- shared navigation/session state
+Until then:
+- keep apps independently deployable
+- keep architecture loosely coupled
+- share pure helpers/systems incrementally
+
+**5. Sync architecture**
 Not urgent immediately. But after relationships stabilize:
 - local-only object assumptions become dangerous
 - IDs matter more
@@ -126,7 +255,7 @@ Not urgent immediately. But after relationships stabilize:
 Eventually:
 - Supabase/R2/shared media storage becomes the next major system phase.
 
-**5. Performance/stability pass**
+**6. Performance/stability pass**
 - render audits
 - save throttling audits
 - relationship graph performance
@@ -135,7 +264,7 @@ Eventually:
 - mobile Safari sanity
 Especially once relationships/media grow.
 
-**6. Undo/history system**
+**7. Undo/history system**
 Not urgent, but high-value later.
 Once:
 - boards
@@ -151,22 +280,6 @@ become richer,  undo/history becomes disproportionately valuable.
 - separate app identity from shared infrastructure
 - improve repo structure before public sharing
 
-### Future backup/media direction
-
-Current JSON backup works after slimming duplicated image payloads, but it still embeds preview images inline.
-
-This is acceptable short-term, but not scalable for very large libraries.
-
-Long-term direction:
-- metadata backup should stay small
-- media assets should be stored separately
-- previews/originals should become separate image assets
-- backup may need to become metadata JSON + media folder/zip
-- cloud sync should eventually store media in object storage
-- app records should reference stable media IDs/URLs instead of embedding all image data inline
-
-Also MBA has been fixed now, but then later compare OA’s backup shape and maybe reuse the same backup-slimming rules across both apps.
-
 ### Post-foundation direction
 
 After those steps, I don’t think there are any major urgent UI restructures left. At that point you’ll have:
@@ -180,8 +293,7 @@ After those steps, I don’t think there are any major urgent UI restructures le
 - relationship direction
 
 ---
-
-## Deferred systems
+# Deferred systems
 
 Not priority yet:
 
@@ -210,6 +322,8 @@ Not priority yet:
 - selection visibility improvements
 - chip UX refinements
 - mobile filter adaptations
+
+# Experimental ideas
 
 ### Experimental taxonomy ideas
 
@@ -255,11 +369,18 @@ store/
 
 ---
 
-## Non-goals (for now)
+# Non-goals
 
 - monorepo rewrite
 - premature shared UI framework
 - fully automated styling AI
 - aggressive normalization
 - mandatory cloud dependency
+- ideas for URLs: 
+	- atelier.so
+	- wear.atelier.so
+	- boards.atelier.so
+
+---
+
 
