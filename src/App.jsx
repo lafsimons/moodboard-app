@@ -1,5 +1,8 @@
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
+  BACKUP_EXPORT_WARN_BYTES,
+  BACKUP_IMPORT_MAX_BYTES,
+  createMetadataOnlyBackupData,
   createLightweightBackupData,
   getDefaultData,
   prepareBackupImport,
@@ -499,7 +502,11 @@ function formatFileSize(bytes) {
     return `${(normalizedBytes / 1024).toFixed(1)} KB`;
   }
 
-  return `${(normalizedBytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (normalizedBytes < 1024 * 1024 * 1024) {
+    return `${(normalizedBytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return `${(normalizedBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function formatAspectRatio(value) {
@@ -3114,6 +3121,10 @@ function buildBackupExportData(items, appState) {
   return createLightweightBackupData(items, appState);
 }
 
+function buildMetadataOnlyBackupExportData(items, appState) {
+  return createMetadataOnlyBackupData(items, appState);
+}
+
 function createBackupExportBlob(backup) {
   const parts = [
     "{",
@@ -3133,6 +3144,13 @@ function createBackupExportBlob(backup) {
   parts.push(`],"appState":${JSON.stringify(backup.appState)}}`);
 
   return new Blob(parts, { type: "application/json" });
+}
+
+function isLikelyJsonBackupFile(file) {
+  const fileType = typeof file?.type === "string" ? file.type.toLowerCase() : "";
+  const fileName = typeof file?.name === "string" ? file.name.toLowerCase() : "";
+
+  return !fileType || fileType.includes("json") || fileName.endsWith(".json");
 }
 
 const emptyWeatherSettings = {
@@ -5948,6 +5966,21 @@ export default function App() {
     try {
       const backup = buildBackupExportData(items, currentPersistedAppState);
       const blob = createBackupExportBlob(backup);
+      const formattedSize = formatFileSize(blob.size);
+
+      if (blob.size >= BACKUP_EXPORT_WARN_BYTES) {
+        const confirmed = await requestConfirmation({
+          title: "Export very large backup?",
+          message: `This full backup is about ${formattedSize}. Large JSON backups can be slow to save and may not import reliably in the browser. Continue with the full backup export?`,
+          confirmLabel: "Export full backup"
+        });
+
+        if (!confirmed) {
+          setBackupExportStatus("Full backup export canceled.");
+          return;
+        }
+      }
+
       const date = new Date().toISOString().slice(0, 10);
       const downloadStatus = await downloadBlobFile(blob, `moodboard-app-backup-${date}.json`, {
         mimeType: "application/json"
@@ -5959,11 +5992,15 @@ export default function App() {
       }
 
       if (downloadStatus === "saved") {
-        setBackupExportStatus("Backup saved.");
+        setBackupExportStatus(blob.size >= BACKUP_EXPORT_WARN_BYTES ? `Full backup saved (${formattedSize}).` : "Backup saved.");
         return;
       }
 
-      setBackupExportStatus("Backup download attempted.");
+      setBackupExportStatus(
+        blob.size >= BACKUP_EXPORT_WARN_BYTES
+          ? `Full backup download attempted (${formattedSize}).`
+          : "Backup download attempted."
+      );
     } catch {
       const fallbackBackup = buildBackupExportData(items, currentPersistedAppState);
       const copied = await copyTextToClipboard(JSON.stringify({
@@ -5981,11 +6018,53 @@ export default function App() {
     }
   }
 
+  async function handleExportMetadataBackup() {
+    try {
+      const backup = buildMetadataOnlyBackupExportData(items, currentPersistedAppState);
+      const blob = createBackupExportBlob(backup);
+      const date = new Date().toISOString().slice(0, 10);
+      const downloadStatus = await downloadBlobFile(blob, `moodboard-app-metadata-backup-${date}.json`, {
+        mimeType: "application/json"
+      });
+
+      if (downloadStatus === "cancelled") {
+        setBackupExportStatus("Metadata backup export canceled.");
+        return;
+      }
+
+      if (downloadStatus === "saved") {
+        setBackupExportStatus("Metadata backup saved.");
+        return;
+      }
+
+      setBackupExportStatus("Metadata backup download attempted.");
+    } catch {
+      setBackupExportStatus("Metadata backup export failed in this browser.");
+    }
+  }
+
   async function handleImportBackup(event) {
     const [file] = event.target.files;
     event.target.value = "";
 
     if (!file) {
+      return;
+    }
+
+    if (!isLikelyJsonBackupFile(file)) {
+      window.alert("This backup file must be a JSON export from this app.");
+      return;
+    }
+
+    if (file.size <= 0) {
+      window.alert("This backup file is empty.");
+      return;
+    }
+
+    if (file.size > BACKUP_IMPORT_MAX_BYTES) {
+      window.alert(
+        `This backup file is ${formatFileSize(file.size)}, which is above the browser import safety limit of ${formatFileSize(BACKUP_IMPORT_MAX_BYTES)}. The app did not try to read it. Use a smaller backup, or export/import metadata-only until chunked backup support exists.`
+      );
       return;
     }
 
@@ -6002,8 +6081,8 @@ export default function App() {
 
     try {
       preparedBackup = prepareBackupImport(backup);
-    } catch {
-      window.alert("This is not a valid backup file for this app.");
+    } catch (error) {
+      window.alert(error?.message || "This is not a valid backup file for this app.");
       return;
     }
 
@@ -6017,9 +6096,13 @@ export default function App() {
       return;
     }
 
-    await replaceWithPreparedBackup(preparedBackup);
-    await applyLoadedData(preparedBackup.items, preparedBackup.appState);
-    window.alert("Backup imported.");
+    try {
+      await replaceWithPreparedBackup(preparedBackup);
+      await applyLoadedData(preparedBackup.items, preparedBackup.appState);
+      window.alert("Backup imported.");
+    } catch (error) {
+      window.alert(error?.message || "This backup could not be imported.");
+    }
   }
 
   async function handleExportOutfitImage() {
@@ -10378,6 +10461,9 @@ export default function App() {
                           </button>
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportBackup}>
                             Export backup
+                          </button>
+                          <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportMetadataBackup}>
+                            Export metadata backup
                           </button>
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={() => importBackupRef.current?.click()}>
                             Import backup
