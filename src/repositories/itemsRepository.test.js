@@ -1,7 +1,10 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { __setIndexedDbFactoryForTests } from "../lib/storage.js";
+import {
+  __setIndexedDbFactoryForTests,
+  replaceWithPreparedBackupPackage
+} from "../lib/storage.js";
 import { INDEXED_DB_NAME } from "../lib/appIdentity.js";
 import {
   loadItemMediaAssetById,
@@ -418,6 +421,83 @@ test("resolveItemMediaSource resolves out-of-line media for metadata-only items"
     originalMedia.revoke();
     assert.equal(revokedUrl, "blob:resolved-original");
     assert.equal(originalDataUrlMedia.src, "data:image/png;base64,b3JpZw==");
+  } finally {
+    URL.createObjectURL = originalCreateObjectUrl;
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+  }
+});
+
+test("resolveItemMediaSource creates an object URL for blob-backed preview assets restored by scalable package import", async () => {
+  const originalCreateObjectUrl = URL.createObjectURL;
+  const originalRevokeObjectUrl = URL.revokeObjectURL;
+  let revokedUrl = "";
+  URL.createObjectURL = () => "blob:resolved-package-preview";
+  URL.revokeObjectURL = (value) => {
+    revokedUrl = value;
+  };
+
+  try {
+    installFakeIndexedDb();
+
+    await replaceWithPreparedBackupPackage({
+      source: "moodboard-app-package",
+      version: 1,
+      exportedAt: "2026-05-25T12:00:00.000Z",
+      items: [
+        {
+          id: "item-package",
+          itemUuid: "uuid-package",
+          originalPreserved: false,
+          images: {
+            original: {
+              src: "",
+              mimeType: "",
+              width: 0,
+              height: 0
+            },
+            preview: {
+              src: "",
+              mimeType: "image/webp",
+              width: 640,
+              height: 480,
+              originalFilename: "preview.webp"
+            },
+            thumbnail: {
+              src: "",
+              mimeType: "",
+              width: 0,
+              height: 0
+            }
+          }
+        }
+      ],
+      appState: {
+        savedOutfits: []
+      },
+      itemMediaAssets: [
+        {
+          itemId: "item-package",
+          variant: "preview",
+          asset: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            originalFilename: "preview.webp",
+            blob: new Blob(["package-preview"], { type: "image/webp" })
+          }
+        }
+      ]
+    });
+
+    const [metadataOnlyItem] = await loadStartupItemMetadata();
+    const previewMedia = await resolveItemMediaSource(metadataOnlyItem, "preview");
+
+    assert.equal(previewMedia.src, "blob:resolved-package-preview");
+    assert.equal(previewMedia.blob instanceof Blob, true);
+    assert.equal(typeof previewMedia.revoke, "function");
+    previewMedia.revoke();
+    assert.equal(revokedUrl, "blob:resolved-package-preview");
   } finally {
     URL.createObjectURL = originalCreateObjectUrl;
     URL.revokeObjectURL = originalRevokeObjectUrl;

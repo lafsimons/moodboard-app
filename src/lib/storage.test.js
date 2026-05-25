@@ -24,6 +24,7 @@ import {
   loadStartupItemMetadata,
   prepareBackupImport,
   replaceWithBackup,
+  replaceWithPreparedBackupPackage,
   replaceWithPreparedBackup,
   resetToDefaults,
   saveAppState,
@@ -2029,6 +2030,73 @@ test("replaceWithPreparedBackup validates payload before clearing existing data"
   assert.deepEqual(persistedAppState.savedOutfits, []);
 });
 
+test("replaceWithPreparedBackupPackage validates payload before clearing existing data", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-1",
+    imageUrl: "data:image/webp;base64,preview",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview",
+        mimeType: "image/webp",
+        width: 400,
+        height: 300
+      }
+    }
+  });
+  await saveAppState({
+    savedOutfits: []
+  });
+
+  await assert.rejects(
+    () => replaceWithPreparedBackupPackage({
+      source: "moodboard-app-package",
+      version: 1,
+      exportedAt: "2026-05-25T12:00:00.000Z",
+      items: [
+        {
+          id: "item-2",
+          itemUuid: "uuid-2",
+          images: {
+            preview: {
+              src: "",
+              mimeType: "image/webp",
+              width: 640,
+              height: 480
+            }
+          }
+        }
+      ],
+      appState: {
+        savedOutfits: []
+      },
+      itemMediaAssets: [
+        {
+          itemId: "item-2",
+          variant: "preview",
+          asset: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            blob: null
+          }
+        }
+      ]
+    }),
+    /missing preview data/i
+  );
+
+  const persistedItems = await loadItems();
+  const persistedAppState = await loadAppState();
+
+  assert.equal(persistedItems.length, 1);
+  assert.equal(persistedItems[0].id, "item-1");
+  assert.deepEqual(persistedAppState.savedOutfits, []);
+});
+
 test("replaceWithBackup leaves existing items untouched when validation fails", async () => {
   installFakeIndexedDb();
 
@@ -2124,6 +2192,112 @@ test("replaceWithPreparedBackup clears stale sync metadata and rebuilds local-on
   );
   assert.equal(await getSyncMetadata("mba:reference:stale-uuid"), null);
   assert.equal(metadata.every((entry) => entry.syncStatus === "local_only"), true);
+});
+
+test("replaceWithPreparedBackupPackage stores preview media, clears originals, and rebuilds sync metadata", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveItem({
+    id: "stale-item",
+    itemUuid: "stale-uuid",
+    originalPreserved: true,
+    images: {
+      original: {
+        src: "data:image/png;base64,b3JpZw==",
+        mimeType: "image/png",
+        width: 1200,
+        height: 800,
+        originalFilename: "orig.png"
+      },
+      preview: {
+        src: "data:image/webp;base64,cHJldmlldw==",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "preview.webp"
+      }
+    }
+  });
+  await upsertSyncMetadata({
+    key: "mba:reference:stale-uuid",
+    entityType: "mbaReference",
+    stableKey: "stale-uuid",
+    localId: "stale-item",
+    recordVersion: 2,
+    syncStatus: "error",
+    lastSyncedAt: "",
+    lastModifiedByDevice: "device-stale",
+    pendingDelete: false,
+    lastSyncError: "stale",
+    lastLocalChangeAt: ""
+  });
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    items: [
+      {
+        id: "item-2",
+        itemUuid: "uuid-2",
+        originalPreserved: false,
+        images: {
+          original: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0
+          },
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            originalFilename: "preview.webp"
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-2",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          originalFilename: "preview.webp",
+          blob: new Blob(["preview-binary"], { type: "image/webp" })
+        }
+      }
+    ]
+  });
+
+  const persistedItems = await loadItems();
+  const metadata = await getSyncMetadata();
+  const itemMediaStore = indexedDb.getDatabase(INDEXED_DB_NAME).stores.get("itemMediaAssets");
+  const storedPreviewRecord = itemMediaStore.records.get("item-2:preview");
+
+  assert.equal(persistedItems.length, 1);
+  assert.equal(persistedItems[0].id, "item-2");
+  assert.equal(persistedItems[0].imageUrl, "");
+  assert.equal(persistedItems[0].images.preview.src, "");
+  assert.equal(storedPreviewRecord.asset.mimeType, "image/webp");
+  assert.equal(storedPreviewRecord.asset.blob instanceof Blob, true);
+  assert.equal(await hasOriginalImageBlob("stale-uuid"), false);
+  assert.equal(metadata.length, 1);
+  assert.equal(metadata[0].key, "mba:reference:uuid-2");
+  assert.equal(await getSyncMetadata("mba:reference:stale-uuid"), null);
 });
 
 test("resetToDefaults clears stale sync metadata and rebuilds metadata for default references", async () => {

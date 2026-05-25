@@ -1125,6 +1125,14 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
         blob: null
       };
     }
+
+    if (storedAsset?.blob instanceof Blob) {
+      return {
+        ...storedAsset,
+        src: "",
+        blob: storedAsset.blob
+      };
+    }
   }
 
   if (normalizedVariant === "original" && normalizedImages.originalPreserved && item.itemUuid) {
@@ -1689,6 +1697,39 @@ function validatePreparedBackupForReplacement(backup) {
   };
 }
 
+function validatePreparedBackupPackageForReplacement(preparedPackage) {
+  if (!preparedPackage || typeof preparedPackage !== "object" || Array.isArray(preparedPackage)) {
+    throw new Error("Prepared backup package payload is invalid.");
+  }
+
+  const validatedItemMediaAssets = Array.isArray(preparedPackage.itemMediaAssets)
+    ? preparedPackage.itemMediaAssets.map((record, index) => {
+        const normalizedRecord = normalizeItemMediaAssetRecord(record);
+
+        if (normalizedRecord.variant !== "preview") {
+          throw new Error(`Prepared backup package media asset ${index + 1} is invalid.`);
+        }
+
+        if (!(normalizedRecord.asset?.blob instanceof Blob)) {
+          throw new Error(`Prepared backup package media asset ${index + 1} is missing preview data.`);
+        }
+
+        return normalizedRecord;
+      })
+    : (() => {
+        throw new Error("Prepared backup package media assets are invalid.");
+      })();
+
+  return {
+    source: typeof preparedPackage.source === "string" ? preparedPackage.source : BACKUP_SOURCE,
+    version: Number.isFinite(Number(preparedPackage.version)) ? Number(preparedPackage.version) : BACKUP_VERSION,
+    exportedAt: typeof preparedPackage.exportedAt === "string" ? preparedPackage.exportedAt : "",
+    items: prepareBackupItems(preparedPackage.items),
+    appState: normalizeBackupAppState(preparedPackage.appState),
+    itemMediaAssets: validatedItemMediaAssets
+  };
+}
+
 export async function exportBackup(options = {}) {
   const [items, appState] = await Promise.all([loadItems({ includeMediaPayloads: true }), loadAppState()]);
   return options.mode === "metadata"
@@ -1718,6 +1759,31 @@ export async function replaceWithPreparedBackup(backup) {
   );
 
   await backfillLocalSyncMetadata(validatedBackup.items, validatedBackup.appState?.savedOutfits ?? []);
+}
+
+export async function replaceWithPreparedBackupPackage(preparedPackage) {
+  const validatedPackage = validatePreparedBackupPackageForReplacement(preparedPackage);
+
+  await withStores(
+    [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE],
+    "readwrite",
+    ({ items, appState, itemMediaAssets, originalImageBlobs, syncMetadata }) => {
+      items.clear();
+      appState.clear();
+      itemMediaAssets.clear();
+      originalImageBlobs.clear();
+      syncMetadata.clear();
+
+      validatedPackage.items.forEach((item) => items.put(item));
+      validatedPackage.itemMediaAssets.forEach((assetRecord) => itemMediaAssets.put(assetRecord));
+      appState.put({
+        key: "state",
+        value: validatedPackage.appState
+      });
+    }
+  );
+
+  await backfillLocalSyncMetadata(validatedPackage.items, validatedPackage.appState?.savedOutfits ?? []);
 }
 
 export async function replaceWithBackup(backup) {
