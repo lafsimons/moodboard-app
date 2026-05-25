@@ -10,6 +10,7 @@ import {
   createMetadataOnlyBackupData,
   createLightweightBackupData,
   deleteOriginalImageBlob,
+  deleteItems,
   exportBackup,
   getOrCreateDeviceId,
   getSyncMetadata,
@@ -655,6 +656,148 @@ test("reference delete preserves metadata as a tombstone pending upload", async 
   assert.equal(metadata.syncStatus, "pending_upload");
   assert.equal(metadata.recordVersion, 1);
   assert.equal(metadata.lastLocalChangeAt.length > 0, true);
+});
+
+test("bulk delete removes multiple distinct items and writes tombstones once per itemUuid", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview-1"
+      },
+      {
+        id: "item-2",
+        itemUuid: "uuid-2",
+        imageUrl: "data:image/webp;base64,preview-2"
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  });
+
+  await deleteItems(["item-1", "item-2"]);
+
+  const persistedItems = await loadItems();
+  const metadata = await getSyncMetadata();
+
+  assert.equal(persistedItems.some((item) => item.id === "item-1"), false);
+  assert.equal(persistedItems.some((item) => item.id === "item-2"), false);
+  assert.deepEqual(
+    metadata.map((entry) => entry.key).sort(),
+    ["mba:reference:uuid-1", "mba:reference:uuid-2"]
+  );
+  assert.equal(metadata.every((entry) => entry.pendingDelete), true);
+});
+
+test("bulk delete writes one tombstone when deleting multiple items sharing an itemUuid", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-shared",
+        imageUrl: "data:image/webp;base64,preview-1"
+      },
+      {
+        id: "item-2",
+        itemUuid: "uuid-shared",
+        imageUrl: "data:image/webp;base64,preview-2"
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  });
+
+  await deleteItems(["item-1", "item-2"]);
+
+  const metadata = await getSyncMetadata();
+
+  assert.deepEqual(metadata.map((entry) => entry.key), ["mba:reference:uuid-shared"]);
+  assert.equal(metadata[0].pendingDelete, true);
+  assert.equal(metadata[0].recordVersion, 1);
+});
+
+test("bulk delete preserves shared media when another itemUuid owner remains", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-shared",
+    imageUrl: "data:image/webp;base64,preview-1",
+    images: {
+      preview: { src: "data:image/webp;base64,preview-1" },
+      thumbnail: { src: "data:image/webp;base64,thumb-1" },
+      original: { src: "data:image/jpeg;base64,original-1" }
+    },
+    originalPreserved: true
+  });
+  await saveItem({
+    id: "item-2",
+    itemUuid: "uuid-shared",
+    imageUrl: "data:image/webp;base64,preview-2"
+  });
+
+  await saveOriginalImageBlob("uuid-shared", new Blob(["original-shared"], { type: "image/jpeg" }), {
+    mimeType: "image/jpeg",
+    width: 1200,
+    height: 1600,
+    originalFilename: "shared.jpg"
+  });
+
+  await deleteItems(["item-1"]);
+
+  const database = indexedDb.getDatabase("moodboard-app-db");
+
+  assert.equal(database.stores.get("itemMediaAssets").records.has("item-1:preview"), true);
+  assert.equal(database.stores.get("itemMediaAssets").records.has("item-1:thumbnail"), true);
+  assert.equal(await hasOriginalImageBlob("uuid-shared"), true);
+  assert.equal((await getSyncMetadata("mba:reference:uuid-shared"))?.pendingDelete, false);
+});
+
+test("bulk delete removes preview thumbnail and original media when last itemUuid owner is deleted", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview-1"
+      },
+      {
+        id: "item-2",
+        itemUuid: "uuid-2",
+        imageUrl: "data:image/webp;base64,preview-2"
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      recentOutfits: []
+    }
+  });
+
+  await saveOriginalImageBlob("uuid-1", new Blob(["original-1"], { type: "image/jpeg" }), {
+    mimeType: "image/jpeg",
+    width: 900,
+    height: 1200,
+    originalFilename: "one.jpg"
+  });
+
+  await deleteItems(["item-1"]);
+
+  const database = indexedDb.getDatabase("moodboard-app-db");
+
+  assert.equal(database.stores.get("itemMediaAssets").records.has("item-1:preview"), false);
+  assert.equal(database.stores.get("itemMediaAssets").records.has("item-1:thumbnail"), false);
+  assert.equal(await hasOriginalImageBlob("uuid-1"), false);
 });
 
 test("reference legacy id rename preserves one metadata row keyed by itemUuid", async () => {
