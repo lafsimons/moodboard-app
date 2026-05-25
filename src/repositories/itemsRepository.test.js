@@ -2,11 +2,13 @@ import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 
 import { __setIndexedDbFactoryForTests } from "../lib/storage.js";
+import { INDEXED_DB_NAME } from "../lib/appIdentity.js";
 import {
   loadItemMediaAssetById,
   loadItems,
   loadStartupItemMetadata,
   prepareLoadedItems,
+  resolveItemMediaSource,
   saveItem
 } from "./itemsRepository.js";
 
@@ -151,6 +153,25 @@ function installFakeIndexedDb() {
   globalThis.IDBRequest = FakeIDBRequest;
   __setIndexedDbFactoryForTests(() => indexedDb);
   return indexedDb;
+}
+
+function seedStore(indexedDb, storeName, keyPath, records) {
+  const database = indexedDb.database ?? new FakeDatabase(4);
+
+  if (!indexedDb.database) {
+    indexedDb.database = database;
+  }
+
+  const store =
+    database.stores.get(storeName) ??
+    (() => {
+      database.createObjectStore(storeName, { keyPath });
+      return database.stores.get(storeName);
+    })();
+
+  records.forEach((record) => {
+    store.records.set(record[keyPath], record);
+  });
 }
 
 function createDependencies(overrides = {}) {
@@ -348,4 +369,79 @@ test("loadItemMediaAssetById reads persisted media payloads for metadata-only st
   assert.equal(asset.mimeType, "image/webp");
   assert.equal(asset.width, 640);
   assert.equal(asset.height, 480);
+});
+
+test("resolveItemMediaSource resolves out-of-line media for metadata-only items", async () => {
+  const originalCreateObjectUrl = URL.createObjectURL;
+  const originalRevokeObjectUrl = URL.revokeObjectURL;
+  let revokedUrl = "";
+  URL.createObjectURL = () => "blob:resolved-original";
+  URL.revokeObjectURL = (value) => {
+    revokedUrl = value;
+  };
+
+  try {
+    installFakeIndexedDb();
+    await saveItem({
+      id: "item-6",
+      itemUuid: "uuid-6",
+      originalPreserved: true,
+      images: {
+        original: {
+          src: "data:image/png;base64,b3JpZw==",
+          mimeType: "image/png",
+          width: 1200,
+          height: 800,
+          originalFilename: "look.png"
+        },
+        preview: {
+          src: "data:image/webp;base64,cHJldmlldw==",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          originalFilename: "look.png"
+        }
+      }
+    });
+
+    const [metadataOnlyItem] = await loadStartupItemMetadata();
+    const previewMedia = await resolveItemMediaSource(metadataOnlyItem, "preview");
+    const originalMedia = await resolveItemMediaSource(metadataOnlyItem, "original");
+    const originalDataUrlMedia = await resolveItemMediaSource(metadataOnlyItem, "original", { preferDataUrl: true });
+
+    assert.equal(previewMedia.src, "data:image/webp;base64,cHJldmlldw==");
+    assert.equal(previewMedia.width, 640);
+    assert.equal(previewMedia.revoke, null);
+    assert.equal(originalMedia.src, "blob:resolved-original");
+    assert.equal(originalMedia.blob instanceof Blob, true);
+    assert.equal(typeof originalMedia.revoke, "function");
+    originalMedia.revoke();
+    assert.equal(revokedUrl, "blob:resolved-original");
+    assert.equal(originalDataUrlMedia.src, "data:image/png;base64,b3JpZw==");
+  } finally {
+    URL.createObjectURL = originalCreateObjectUrl;
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+  }
+});
+
+test("resolveItemMediaSource preserves legacy inline media fallback", async () => {
+  const indexedDb = installFakeIndexedDb();
+  indexedDb.open(INDEXED_DB_NAME, 4);
+  seedStore(indexedDb, "items", "id", [
+    {
+      id: "legacy-inline",
+      imageUrl: "data:image/png;base64,bGVnYWN5",
+      mimeType: "image/png",
+      imageWidth: 900,
+      imageHeight: 600,
+      originalFilename: "legacy.png"
+    }
+  ]);
+
+  const media = await resolveItemMediaSource({ id: "legacy-inline" }, "preview");
+
+  assert.equal(media.src, "data:image/png;base64,bGVnYWN5");
+  assert.equal(media.mimeType, "image/png");
+  assert.equal(media.width, 900);
+  assert.equal(media.height, 600);
 });

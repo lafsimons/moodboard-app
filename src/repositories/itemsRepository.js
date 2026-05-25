@@ -6,6 +6,7 @@ import {
   loadStartupItemMetadata as loadStoredStartupItemMetadata,
   saveItem as saveStoredItem
 } from "../lib/storage.js";
+import { normalizeItemImages } from "../lib/itemImages.js";
 
 export async function loadItems() {
   return loadStoredItems();
@@ -17,6 +18,124 @@ export async function loadStartupItemMetadata(options = {}) {
 
 export async function loadItemMediaAssetById(itemId, variant = "preview") {
   return loadStoredItemMediaAssetById(itemId, variant);
+}
+
+function readBlobAsDataUrl(blob) {
+  return blob.arrayBuffer().then((buffer) => {
+    const base64Payload =
+      typeof Buffer !== "undefined"
+        ? Buffer.from(buffer).toString("base64")
+        : globalThis.btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    const mimeType = typeof blob.type === "string" ? blob.type : "application/octet-stream";
+
+    return `data:${mimeType};base64,${base64Payload}`;
+  });
+}
+
+function getRequestedAsset(images, variant = "preview") {
+  if (variant === "original") {
+    return images.original;
+  }
+
+  if (variant === "thumbnail") {
+    return images.thumbnail;
+  }
+
+  return images.preview;
+}
+
+export async function resolveItemMediaSource(itemOrId, variant = "preview", options = {}) {
+  const normalizedVariant = variant === "original" ? "original" : variant === "thumbnail" ? "thumbnail" : "preview";
+  const item = itemOrId && typeof itemOrId === "object" ? itemOrId : null;
+  const itemId = typeof itemOrId === "string"
+    ? itemOrId.trim()
+    : typeof item?.id === "string"
+      ? item.id.trim()
+      : "";
+  const {
+    preferDataUrl = false
+  } = options;
+  const normalizedImages = normalizeItemImages(item);
+  const selectedAsset = getRequestedAsset(normalizedImages, normalizedVariant);
+
+  if (selectedAsset?.src) {
+    return {
+      ...selectedAsset,
+      src: selectedAsset.src,
+      blob: null,
+      revoke: null
+    };
+  }
+
+  if (!itemId) {
+    return {
+      src: "",
+      blob: null,
+      revoke: null,
+      width: 0,
+      height: 0,
+      fileSize: 0,
+      mimeType: "",
+      originalFilename: ""
+    };
+  }
+
+  const asset = await loadStoredItemMediaAssetById(itemId, normalizedVariant);
+
+  if (!asset) {
+    return {
+      src: "",
+      blob: null,
+      revoke: null,
+      width: 0,
+      height: 0,
+      fileSize: 0,
+      mimeType: "",
+      originalFilename: ""
+    };
+  }
+
+  if (asset.src) {
+    return {
+      ...asset,
+      src: asset.src,
+      revoke: null
+    };
+  }
+
+  if (!(asset.blob instanceof Blob)) {
+    return {
+      ...asset,
+      src: "",
+      revoke: null
+    };
+  }
+
+  if (preferDataUrl) {
+    return {
+      ...asset,
+      src: await readBlobAsDataUrl(asset.blob),
+      revoke: null
+    };
+  }
+
+  if (typeof URL?.createObjectURL === "function") {
+    const objectUrl = URL.createObjectURL(asset.blob);
+
+    return {
+      ...asset,
+      src: objectUrl,
+      revoke: () => {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }
+
+  return {
+    ...asset,
+    src: "",
+    revoke: null
+  };
 }
 
 export async function saveItem(item) {

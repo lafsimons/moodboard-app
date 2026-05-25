@@ -139,9 +139,9 @@ import {
   deleteItem,
   deleteItems,
   loadItemMediaAssetById,
-  loadItems,
   loadStartupItemMetadata,
   prepareLoadedItems,
+  resolveItemMediaSource,
   saveItem,
   saveItems
 } from "./repositories/itemsRepository.js";
@@ -803,7 +803,8 @@ function getVisibleAlphaBounds(imageData, width, height, alphaThreshold = 16) {
 }
 
 async function getAutoImageCrop(item) {
-  const imageUrl = item?.imageUrl?.trim?.() ?? item?.imageUrl ?? "";
+  const resolvedMedia = await resolveItemMediaSource(item, "preview");
+  const imageUrl = resolvedMedia?.src?.trim?.() ?? resolvedMedia?.src ?? item?.imageUrl?.trim?.() ?? item?.imageUrl ?? "";
   if (!imageUrl) {
     return getNormalizedImageCrop(item);
   }
@@ -1289,6 +1290,81 @@ function useDeferredItemMedia(item, variant = "preview") {
       }
     };
   }, [immediateSrc, item?.id, variant]);
+
+  return resolvedMedia;
+}
+
+function useResolvedItemMediaSource(item, variant = "preview", preferDataUrl = false) {
+  const [resolvedMedia, setResolvedMedia] = useState(() => ({
+    src: "",
+    blob: null,
+    width: 0,
+    height: 0,
+    fileSize: 0,
+    mimeType: "",
+    originalFilename: ""
+  }));
+
+  useEffect(() => {
+    const synchronousSrc = getManagedItemImageSrc(item, variant);
+
+    if (!item?.id && !synchronousSrc) {
+      setResolvedMedia({
+        src: "",
+        blob: null,
+        width: 0,
+        height: 0,
+        fileSize: 0,
+        mimeType: "",
+        originalFilename: ""
+      });
+      return undefined;
+    }
+
+    let cancelled = false;
+    let revoke = null;
+
+    async function resolveMedia() {
+      try {
+        const media = await resolveItemMediaSource(item, variant, { preferDataUrl });
+
+        if (cancelled) {
+          media?.revoke?.();
+          return;
+        }
+
+        revoke = media?.revoke ?? null;
+        setResolvedMedia({
+          src: media?.src ?? "",
+          blob: media?.blob ?? null,
+          width: Math.max(Number(media?.width) || 0, 0),
+          height: Math.max(Number(media?.height) || 0, 0),
+          fileSize: Math.max(Number(media?.fileSize) || 0, 0),
+          mimeType: media?.mimeType ?? "",
+          originalFilename: media?.originalFilename ?? ""
+        });
+      } catch {
+        if (!cancelled) {
+          setResolvedMedia({
+            src: "",
+            blob: null,
+            width: 0,
+            height: 0,
+            fileSize: 0,
+            mimeType: "",
+            originalFilename: ""
+          });
+        }
+      }
+    }
+
+    void resolveMedia();
+
+    return () => {
+      cancelled = true;
+      revoke?.();
+    };
+  }, [item, item?.id, preferDataUrl, variant]);
 
   return resolvedMedia;
 }
@@ -2974,7 +3050,14 @@ function extractDominantColorsFromImage(image, maxColors = 3) {
 
 async function extractItemPalette(item) {
   try {
-    const image = await loadImage(resolveImageUrl(getManagedItemImageSrc(item, "preview")));
+    const resolvedMedia = await resolveItemMediaSource(item, "preview");
+    const imageUrl = resolveImageUrl(resolvedMedia?.src || getManagedItemImageSrc(item, "preview"));
+
+    if (!imageUrl) {
+      return [getFallbackPaletteColor(item)];
+    }
+
+    const image = await loadImage(imageUrl);
     const colors = extractDominantColorsFromImage(image);
     return colors.length ? colors : [getFallbackPaletteColor(item)];
   } catch {
@@ -3930,7 +4013,10 @@ export default function App() {
     [items, tagDebugItems]
   );
   const allLibraryTags = useMemo(() => getAllTags(tagDebugSourceItems), [tagDebugSourceItems]);
-  const cropEditorImageMetrics = useImageMetrics(draft.imageUrl);
+  const draftResolvedPreviewMedia = useResolvedItemMediaSource(editingId ? draft : null, "preview");
+  const cropEditorResolvedMedia = useResolvedItemMediaSource(cropEditorState ? draft : null, "preview");
+  const cropEditorImageUrl = resolveImageUrl(cropEditorResolvedMedia.src || draft.imageUrl);
+  const cropEditorImageMetrics = useImageMetrics(cropEditorImageUrl);
 
   function renderOutfitDebugPanel(panelClassName = "") {
     const className = ["outfit-debug-panel", panelClassName].filter(Boolean).join(" ");
@@ -4053,7 +4139,12 @@ export default function App() {
     [draft, resolvedTypeDefaults]
   );
   const advancedOverrideSet = useMemo(() => new Set(advancedOverrideFields), [advancedOverrideFields]);
-  const canRemoveDraftBackground = isLocalDataImage(draft.imageUrl);
+  const draftBackgroundRemovalMedia = useResolvedItemMediaSource(
+    editingId === "new" || draft?.id ? draft : null,
+    "preview",
+    true
+  );
+  const canRemoveDraftBackground = isLocalDataImage(draftBackgroundRemovalMedia.src || draftResolvedPreviewMedia.src || draft.imageUrl);
   const normalizedWardrobeFilters = normalizeWardrobeFilterState(wardrobeFilters);
   const activeWardrobeFilterCount =
     countActiveFilterValues({
@@ -5185,32 +5276,6 @@ export default function App() {
           }
         }
 
-        void (async () => {
-          try {
-            const storedItems = await loadItems();
-            const { items: hydratedItems } = await prepareLoadedItems(
-              storedItems,
-              storedAppState,
-              getItemRepositoryDependencies(),
-              {
-                includeWeightMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
-                includeTagMigration: (storedAppState?.itemDefaultsMigrationVersion ?? 0) >= ITEM_DEFAULTS_MIGRATION_VERSION,
-                includeStyleWeightMappingMigration: true
-              }
-            );
-
-            if (cancelled) {
-              return;
-            }
-
-            fallbackItems = hydratedItems;
-            startTransition(() => {
-              setItems(hydratedItems);
-            });
-          } catch (hydrationError) {
-            console.error("Failed to hydrate full library records after metadata-first startup.", hydrationError);
-          }
-        })();
       } catch (error) {
         if (cancelled) {
           return;
@@ -6262,25 +6327,38 @@ async function handleExportBackup() {
       return;
     }
 
+    let loadedEntries = [];
+
     try {
-      const loadedEntries = await Promise.all(
+      loadedEntries = await Promise.all(
         exportEntries.map(async ({ image, item }) => ({
           image,
           item,
-          asset: await loadImage(resolveImageUrl(getManagedItemImageSrc(item, "original")))
+          media: await resolveItemMediaSource(item, "original")
         }))
       );
-      const renderedEntries = loadedEntries.map(({ image: boardImage, item, asset }) => {
-        const renderMetadata = buildBoardRenderMetadata(
-          {
-            ...item,
-            rotation: boardImage.rotation
-          },
-          {
-            naturalWidth: Math.max(item.imageWidth || asset.naturalWidth, 1),
-            naturalHeight: Math.max(item.imageHeight || asset.naturalHeight, 1)
-          }
-        );
+      const renderedEntries = await Promise.all(
+        loadedEntries.map(async ({ image: boardImage, item, media }) => {
+          const asset = await loadImage(resolveImageUrl(media?.src));
+
+          return {
+            boardImage,
+            item,
+            asset,
+            renderMetadata: buildBoardRenderMetadata(
+              {
+                ...item,
+                rotation: boardImage.rotation
+              },
+              {
+                naturalWidth: Math.max(item.imageWidth || asset.naturalWidth, 1),
+                naturalHeight: Math.max(item.imageHeight || asset.naturalHeight, 1)
+              }
+            )
+          };
+        })
+      );
+      const renderedEntriesWithBounds = renderedEntries.map(({ boardImage, item, asset, renderMetadata }) => {
         const bounds = getBoardItemRenderedBounds(boardImage, renderMetadata);
 
         return {
@@ -6291,14 +6369,14 @@ async function handleExportBackup() {
           bounds
         };
       });
-      const cropLeft = Math.max(Math.min(...renderedEntries.map(({ bounds }) => bounds.collisionRect.left)) - margin, 0);
-      const cropTop = Math.max(Math.min(...renderedEntries.map(({ bounds }) => bounds.collisionRect.top)) - margin, 0);
+      const cropLeft = Math.max(Math.min(...renderedEntriesWithBounds.map(({ bounds }) => bounds.collisionRect.left)) - margin, 0);
+      const cropTop = Math.max(Math.min(...renderedEntriesWithBounds.map(({ bounds }) => bounds.collisionRect.top)) - margin, 0);
       const cropRight = Math.min(
-        Math.max(...renderedEntries.map(({ bounds }) => bounds.collisionRect.right)) + margin,
+        Math.max(...renderedEntriesWithBounds.map(({ bounds }) => bounds.collisionRect.right)) + margin,
         board.width
       );
       const cropBottom = Math.min(
-        Math.max(...renderedEntries.map(({ bounds }) => bounds.collisionRect.bottom)) + margin,
+        Math.max(...renderedEntriesWithBounds.map(({ bounds }) => bounds.collisionRect.bottom)) + margin,
         board.height
       );
       const cropWidth = Math.max(cropRight - cropLeft, 1);
@@ -6310,7 +6388,7 @@ async function handleExportBackup() {
       context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#f7f7f7";
       context.fillRect(0, 0, cropWidth, cropHeight);
 
-      renderedEntries.forEach(({ item, asset, bounds, renderMetadata }) => {
+      renderedEntriesWithBounds.forEach(({ item, asset, bounds, renderMetadata }) => {
         drawManagedImageToCanvas(
           context,
           item,
@@ -6335,6 +6413,10 @@ async function handleExportBackup() {
       link.remove();
     } catch {
       window.alert("The moodboard image could not be exported.");
+    } finally {
+      loadedEntries.forEach(({ media }) => {
+        media?.revoke?.();
+      });
     }
   }
 
@@ -6367,15 +6449,24 @@ async function handleExportBackup() {
     context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#f7f7f7";
     context.fillRect(0, 0, canvasWidth, canvasHeight);
 
+    let loadedItems = [];
+
     try {
-      const loadedItems = await Promise.all(
+      loadedItems = await Promise.all(
         shuffledItems.map(async (item) => ({
           item,
-          image: await loadImage(resolveImageUrl(getManagedItemImageSrc(item, "original")))
+          media: await resolveItemMediaSource(item, "original")
+        }))
+      );
+      const loadedImages = await Promise.all(
+        loadedItems.map(async ({ item, media }) => ({
+          item,
+          media,
+          image: await loadImage(resolveImageUrl(media?.src))
         }))
       );
 
-      loadedItems.forEach(({ item, image }, index) => {
+      loadedImages.forEach(({ item, image }, index) => {
         const column = index % columns;
         const row = Math.floor(index / columns);
         const cellLeft = padding + column * cellSize;
@@ -6401,6 +6492,10 @@ async function handleExportBackup() {
       link.remove();
     } catch {
       window.alert("The library image could not be exported.");
+    } finally {
+      loadedItems.forEach(({ media }) => {
+        media?.revoke?.();
+      });
     }
   }
 
@@ -7884,7 +7979,7 @@ async function handleExportBackup() {
   }
 
   function openCropEditor() {
-    if (!draft.imageUrl.trim()) {
+    if (!draft.id && !draft.imageUrl.trim()) {
       return;
     }
 
@@ -8042,7 +8137,7 @@ async function handleExportBackup() {
   }
 
   async function removeDraftBackground() {
-    const originalImageUrl = draft.imageUrl.trim();
+    const originalImageUrl = (draftBackgroundRemovalMedia.src || draft.imageUrl).trim();
 
     if (!isLocalDataImage(originalImageUrl) || imageProcessing) {
       return;
@@ -9742,7 +9837,7 @@ async function handleExportBackup() {
     await handleDelete(referencePreview.id);
   }
 
-  const cropEditorBody = cropEditorState && draft.imageUrl.trim() ? (
+  const cropEditorBody = cropEditorState && cropEditorImageUrl ? (
     <div className="crop-editor-modal" role="dialog" aria-modal="true" aria-label="Crop reference image">
       <div className="crop-editor-header">
         <strong>Crop reference</strong>
@@ -9762,7 +9857,7 @@ async function handleExportBackup() {
           }}
         >
           <img
-            src={resolveImageUrl(draft.imageUrl)}
+            src={cropEditorImageUrl}
             alt=""
             className="crop-editor-image"
           />
@@ -9839,7 +9934,8 @@ async function handleExportBackup() {
   const referencePreviewExcluded = Boolean(referencePreview?.id && excluded[referencePreview.id]);
   const isSideEditorOpen = Boolean(isBulkSelectionEditing || (editingId && editorReturnTarget !== "outfit"));
   const isMobileFullscreenEditorOpen = Boolean((editingId || isBulkSelectionEditing) && isMobileViewport);
-  const draftImageUrl = draft.imageUrl.trim();
+  const draftImageUrl = (draftResolvedPreviewMedia.src || draft.imageUrl).trim();
+  const isDraftImageLoading = Boolean(editingId && draft.id && !draftImageUrl);
   const draftImageCrop = getNormalizedImageCrop(draft);
   const hasDraftImagePresentationAdjustments = Boolean(draftImageUrl) && (
     normalizeImageFrameScale(draft.imageFrameScale) !== 100 ||
@@ -9970,6 +10066,8 @@ async function handleExportBackup() {
         <div className="item-image-preview">
           {draftImageUrl ? (
             <ManagedItemImage item={draft} alt="" frameRef={editorImageFrameRef} imageRef={editorImageRef} />
+          ) : isDraftImageLoading ? (
+            <span>Loading image…</span>
           ) : (
             <span>No image selected</span>
           )}
