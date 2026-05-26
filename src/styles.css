@@ -3648,6 +3648,14 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   font-size: 0.62rem;
 }
 
+.wardrobe-controls .tag-tree-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .wardrobe-controls .tag-tree-hint {
   font-size: 0.62rem;
 }
@@ -3655,6 +3663,40 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 .wardrobe-controls .tag-tree-sort-button {
   padding: 2px 7px;
   font-size: 0.6rem;
+}
+
+.wardrobe-tag-match-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--surface-solid);
+}
+
+.wardrobe-tag-match-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.wardrobe-tag-match-option.is-active {
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .wardrobe-controls .tag-tree-list {

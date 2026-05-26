@@ -2417,6 +2417,7 @@ function TagTree({
                 {areAllGroupsExpanded ? "Collapse" : "Expand"}
               </button>
             ) : null}
+            {headerActions}
           </div>
         </div>
       )}
@@ -11003,6 +11004,34 @@ async function handleExportBackup() {
                                 storageKey="library-filters"
                                 noTagsCount={filteredLibraryNoTagsCount}
                                 searchQuery={wardrobeFilterSearchQuery}
+                                headerActions={(
+                                  <div className="wardrobe-tag-match-toggle" role="group" aria-label="Tag matching">
+                                    <button
+                                      type="button"
+                                      className={`wardrobe-tag-match-option ${normalizedWardrobeFilters.tagMatchMode === "any" ? "is-active" : ""}`}
+                                      onClick={(event) => {
+                                        stopNestedTagTreeEvent(event);
+                                        setWardrobeFilters((current) => ({ ...current, tagMatchMode: "any" }));
+                                      }}
+                                      aria-pressed={normalizedWardrobeFilters.tagMatchMode === "any"}
+                                      title="Match any selected tag."
+                                    >
+                                      Any
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={`wardrobe-tag-match-option ${normalizedWardrobeFilters.tagMatchMode === "all" ? "is-active" : ""}`}
+                                      onClick={(event) => {
+                                        stopNestedTagTreeEvent(event);
+                                        setWardrobeFilters((current) => ({ ...current, tagMatchMode: "all" }));
+                                      }}
+                                      aria-pressed={normalizedWardrobeFilters.tagMatchMode === "all"}
+                                      title="Require all selected tags."
+                                    >
+                                      All
+                                    </button>
+                                  </div>
+                                )}
                               />
                             ) : (
                               <p className="wardrobe-filter-empty">No tags match this search.</p>
@@ -11071,30 +11100,6 @@ async function handleExportBackup() {
                                 aria-pressed={normalizedWardrobeFilters.laundry === "hide"}
                               >
                                 Hide excluded
-                              </button>
-                            </div>
-                          </details>
-
-                          <details className="wardrobe-filter-row wardrobe-inline-filter-match">
-                            <summary>
-                              <span>Match</span>
-                            </summary>
-                            <div className="wardrobe-filter-row-options" role="group" aria-label="Tag matching">
-                              <button
-                                type="button"
-                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.tagMatchMode === "all" ? "is-active" : ""}`}
-                                onClick={() => setWardrobeFilters((current) => ({ ...current, tagMatchMode: "all" }))}
-                                aria-pressed={normalizedWardrobeFilters.tagMatchMode === "all"}
-                              >
-                                All tags
-                              </button>
-                              <button
-                                type="button"
-                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.tagMatchMode === "any" ? "is-active" : ""}`}
-                                onClick={() => setWardrobeFilters((current) => ({ ...current, tagMatchMode: "any" }))}
-                                aria-pressed={normalizedWardrobeFilters.tagMatchMode === "any"}
-                              >
-                                Any tag
                               </button>
                             </div>
                           </details>
