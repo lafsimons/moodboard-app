@@ -12330,7 +12330,7 @@ async function handleExportBackup() {
                   </div>
                 );
               })()}
-              <div className="reference-preview-stage">
+              <div className={`reference-preview-stage ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}>
                 <button
                   type="button"
                   className={`reference-preview-image-button ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}

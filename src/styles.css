@@ -4589,6 +4589,14 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   flex: 1 1 auto;
   min-height: 0;
   place-items: center;
+  overflow: hidden;
+}
+
+.reference-preview-stage.is-zoomed {
+  display: block;
+  width: min(100%, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 112px);
   overflow: auto;
 }
 
@@ -4606,6 +4614,9 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
 .reference-preview-image-button.is-zoomed {
   cursor: zoom-out;
+  display: block;
+  width: max-content;
+  min-width: 100%;
 }
 
 .reference-preview-stage .managed-image {
@@ -4618,8 +4629,8 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
 .reference-preview-image-button.is-zoomed .managed-image {
   width: max(
-    calc(100vw - 96px),
-    calc((100vh - 120px) * var(--managed-crop-aspect, 1))
+    calc((100vw - 120px) * 2),
+    calc((100vh - 160px) * var(--managed-crop-aspect, 1) * 2)
   );
   max-width: none;
   max-height: none;
