@@ -548,8 +548,79 @@ function interpolateProfile(start, end, progress) {
   };
 }
 
-export function getBoardLayoutProfile(imageCount = 0) {
+function clampBoardLayoutMetric(value, minimum = 1) {
+  return Math.max(minimum, roundProfileValue(value));
+}
+
+function normalizeBoardLayoutViewportClass(value) {
+  return value === "phonePortrait" ? "phonePortrait" : "default";
+}
+
+export function resolveBoardLayoutViewportClass({ viewportWidth, viewportHeight } = {}) {
+  const normalizedViewportWidth = Number(viewportWidth);
+  const normalizedViewportHeight = Number(viewportHeight);
+
+  if (
+    Number.isFinite(normalizedViewportWidth) &&
+    Number.isFinite(normalizedViewportHeight) &&
+    normalizedViewportWidth <= 600 &&
+    normalizedViewportHeight > normalizedViewportWidth
+  ) {
+    return "phonePortrait";
+  }
+
+  return "default";
+}
+
+function applyPhonePortraitLayoutProfile(baseProfile, imageCount) {
   const normalizedImageCount = Math.max(1, Math.round(Number(imageCount) || 1));
+
+  if (normalizedImageCount <= 10) {
+    return baseProfile;
+  }
+
+  const progress =
+    normalizedImageCount <= 20
+      ? (normalizedImageCount - 10) / 10
+      : normalizedImageCount <= 30
+        ? 1 + (normalizedImageCount - 20) / 10
+        : 2;
+  const innerWidthMultiplier = progress <= 1
+    ? interpolateValue(1, 0.78, progress)
+    : interpolateValue(0.78, 0.67, progress - 1);
+  const innerHeightMultiplier = progress <= 1
+    ? interpolateValue(1, 1.04, progress)
+    : interpolateValue(1.04, 1.08, progress - 1);
+  const frameBaseWidthMultiplier = progress <= 1
+    ? interpolateValue(1, 1.03, progress)
+    : interpolateValue(1.03, 1.04, progress - 1);
+  const minWidthMultiplier = progress <= 1
+    ? interpolateValue(1, 1.03, progress)
+    : interpolateValue(1.03, 1.04, progress - 1);
+  const maxWidthMultiplier = progress <= 1
+    ? interpolateValue(1, 1.03, progress)
+    : interpolateValue(1.03, 1.04, progress - 1);
+  const paddingOffset = progress <= 1
+    ? interpolateValue(0, -8, progress)
+    : interpolateValue(-8, -10, progress - 1);
+  const gapOffset = progress <= 1
+    ? interpolateValue(0, -1, progress)
+    : interpolateValue(-1, -2, progress - 1);
+
+  return {
+    innerWidth: clampBoardLayoutMetric(baseProfile.innerWidth * innerWidthMultiplier),
+    innerHeight: clampBoardLayoutMetric(baseProfile.innerHeight * innerHeightMultiplier),
+    frameBaseWidth: clampBoardLayoutMetric(baseProfile.frameBaseWidth * frameBaseWidthMultiplier),
+    minWidth: clampBoardLayoutMetric(baseProfile.minWidth * minWidthMultiplier),
+    maxWidth: clampBoardLayoutMetric(baseProfile.maxWidth * maxWidthMultiplier),
+    padding: clampBoardLayoutMetric(baseProfile.padding + paddingOffset),
+    gap: clampBoardLayoutMetric(baseProfile.gap + gapOffset)
+  };
+}
+
+export function getBoardLayoutProfile(imageCount = 0, context = {}) {
+  const normalizedImageCount = Math.max(1, Math.round(Number(imageCount) || 1));
+  const viewportClass = normalizeBoardLayoutViewportClass(context?.viewportClass);
   const compactProfile = {
     frameBaseWidth: 279,
     minWidth: 180,
@@ -559,7 +630,7 @@ export function getBoardLayoutProfile(imageCount = 0) {
   };
 
   if (normalizedImageCount <= 4) {
-    return {
+    const baseProfile = {
       innerWidth: 940 + normalizedImageCount * 90,
       innerHeight: 680 + normalizedImageCount * 70,
       frameBaseWidth: roundProfileValue(Math.min(420, Math.max(220, Math.min(1120 + normalizedImageCount * 90, 860 + normalizedImageCount * 70) * 0.225))),
@@ -568,14 +639,18 @@ export function getBoardLayoutProfile(imageCount = 0) {
       gap: BOARD_LAYOUT_GUTTER,
       padding: 90
     };
+
+    return viewportClass === "phonePortrait" ? applyPhonePortraitLayoutProfile(baseProfile, normalizedImageCount) : baseProfile;
   }
 
   if (normalizedImageCount <= 10) {
-    return {
+    const baseProfile = {
       innerWidth: 1140 + normalizedImageCount * 78,
       innerHeight: 800 + normalizedImageCount * 64,
       ...compactProfile
     };
+
+    return viewportClass === "phonePortrait" ? applyPhonePortraitLayoutProfile(baseProfile, normalizedImageCount) : baseProfile;
   }
 
   const mediumAnchor = {
@@ -589,7 +664,7 @@ export function getBoardLayoutProfile(imageCount = 0) {
   };
 
   if (normalizedImageCount <= 20) {
-    return interpolateProfile(
+    const baseProfile = interpolateProfile(
       {
         innerWidth: 1920,
         innerHeight: 1440,
@@ -598,6 +673,8 @@ export function getBoardLayoutProfile(imageCount = 0) {
       mediumAnchor,
       (normalizedImageCount - 10) / 10
     );
+
+    return viewportClass === "phonePortrait" ? applyPhonePortraitLayoutProfile(baseProfile, normalizedImageCount) : baseProfile;
   }
 
   const largeAnchor = {
@@ -611,12 +688,13 @@ export function getBoardLayoutProfile(imageCount = 0) {
   };
 
   if (normalizedImageCount <= 30) {
-    return interpolateProfile(mediumAnchor, largeAnchor, (normalizedImageCount - 20) / 10);
+    const baseProfile = interpolateProfile(mediumAnchor, largeAnchor, (normalizedImageCount - 20) / 10);
+
+    return viewportClass === "phonePortrait" ? applyPhonePortraitLayoutProfile(baseProfile, normalizedImageCount) : baseProfile;
   }
 
   const overflowCount = normalizedImageCount - 30;
-
-  return {
+  const baseProfile = {
     innerWidth: largeAnchor.innerWidth + overflowCount * 36,
     innerHeight: largeAnchor.innerHeight + overflowCount * 28,
     frameBaseWidth: largeAnchor.frameBaseWidth + overflowCount * 4,
@@ -625,10 +703,12 @@ export function getBoardLayoutProfile(imageCount = 0) {
     gap: largeAnchor.gap,
     padding: largeAnchor.padding
   };
+
+  return viewportClass === "phonePortrait" ? applyPhonePortraitLayoutProfile(baseProfile, normalizedImageCount) : baseProfile;
 }
 
 function getBoardLayoutBounds(imageCount = 0, layoutOptions = {}) {
-  const profile = getBoardLayoutProfile(imageCount);
+  const profile = getBoardLayoutProfile(imageCount, layoutOptions);
   const derivedWidth = profile.innerWidth + profile.padding * 2;
   const derivedHeight = profile.innerHeight + profile.padding * 2;
 
@@ -685,8 +765,8 @@ function clampFrameToBounds(frame, bounds) {
   };
 }
 
-function createBoardFrameTemplates(imageCount, width, height, aspectRatios, sizeMultipliers, rotations = []) {
-  const profile = getBoardLayoutProfile(imageCount);
+function createBoardFrameTemplates(imageCount, width, height, aspectRatios, sizeMultipliers, rotations = [], context = {}) {
+  const profile = getBoardLayoutProfile(imageCount, context);
   const baseWidth = profile.frameBaseWidth;
 
   return Array.from({ length: imageCount }, (_, index) => {
@@ -969,7 +1049,7 @@ function createMasonryBoardFrames(templates, bounds, gap, renderMetadataList) {
 }
 
 function createRandomBoardFrames(imageCount, layoutOptions = {}) {
-  const profile = getBoardLayoutProfile(imageCount);
+  const profile = getBoardLayoutProfile(imageCount, layoutOptions);
   const { width: baseWidth, height: baseHeight, padding } = getBoardLayoutBounds(imageCount, layoutOptions);
   const aspectRatios = Array.isArray(layoutOptions.aspectRatios) ? layoutOptions.aspectRatios : [];
   const sizeMultipliers = Array.isArray(layoutOptions.sizeMultipliers) ? layoutOptions.sizeMultipliers : [];
@@ -983,7 +1063,15 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
     };
   }
 
-  const templates = createBoardFrameTemplates(imageCount, baseWidth, baseHeight, aspectRatios, sizeMultipliers, rotations)
+  const templates = createBoardFrameTemplates(
+    imageCount,
+    baseWidth,
+    baseHeight,
+    aspectRatios,
+    sizeMultipliers,
+    rotations,
+    layoutOptions
+  )
     .sort((left, right) => right.height * right.width - left.height * left.width);
   const baseGap = profile.gap;
   let workingWidth = baseWidth;

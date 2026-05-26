@@ -15,6 +15,7 @@ import {
   pickNextItemForGeneration,
   relayoutBoardImages,
   rememberRecentOutfit,
+  resolveBoardLayoutViewportClass,
   rerollBoardImage,
   summarizeGuidedDebugPayload,
   summarizeGuidedExplanation
@@ -1608,6 +1609,28 @@ test("board layout profile smooths the 10 to 11 and 20 to 21 density transitions
   assert.ok(Math.abs(profile21.innerHeight - profile20.innerHeight) < 10);
 });
 
+test("board layout viewport class detects phone portrait separately from tablet and desktop", () => {
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 390, viewportHeight: 844 }), "phonePortrait");
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 844, viewportHeight: 390 }), "default");
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 768, viewportHeight: 1024 }), "default");
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 1440, viewportHeight: 1024 }), "default");
+});
+
+test("phone portrait board profile is narrower and no smaller in frame size for 12 15 and 21 images", () => {
+  for (const imageCount of [12, 15, 21]) {
+    const defaultProfile = getBoardLayoutProfile(imageCount);
+    const phoneProfile = getBoardLayoutProfile(imageCount, { viewportClass: "phonePortrait" });
+
+    assert.ok(phoneProfile.innerWidth < defaultProfile.innerWidth);
+    assert.ok(phoneProfile.frameBaseWidth >= defaultProfile.frameBaseWidth);
+  }
+
+  assert.deepEqual(
+    getBoardLayoutProfile(15),
+    getBoardLayoutProfile(15, { viewportClass: "default" })
+  );
+});
+
 test("generated board density stays tighter for mobile 12 and 15 image boards", () => {
   for (const imageCount of [12, 15]) {
     const references = buildBoardGenerationReferences(imageCount);
@@ -1641,6 +1664,65 @@ test("generated board density stays tighter for mobile 12 and 15 image boards", 
       }) >= 0.12,
       `expected ${imageCount}-image mobile board to occupy the viewport more naturally`
     );
+  }
+});
+
+test("phone portrait generated boards use a denser narrower profile than default while desktop and tablet stay unchanged", () => {
+  for (const imageCount of [12, 15, 21]) {
+    const references = buildBoardGenerationReferences(imageCount);
+    const defaultBoard = withSeed(210 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true }
+      }).board
+    );
+    const phoneBoard = withSeed(210 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true },
+        layoutOptions: { viewportClass: "phonePortrait" }
+      }).board
+    );
+
+    assertNoRenderedBoundsOverlap(phoneBoard.images);
+    assertBoardImagesStayWithinBoard(phoneBoard);
+    assert.ok(phoneBoard.width < defaultBoard.width, `expected ${imageCount}-image phone portrait board to be narrower`);
+    assert.ok(phoneBoard.height <= defaultBoard.height * 1.1, `expected ${imageCount}-image phone portrait board height to stay controlled`);
+    assert.ok(
+      getBoardFitZoom({
+        boardWidth: phoneBoard.width,
+        boardHeight: phoneBoard.height,
+        viewportWidth: 390,
+        viewportHeight: 844,
+        boardImageCount: imageCount,
+        isMobileViewport: true
+      }) >= getBoardFitZoom({
+        boardWidth: defaultBoard.width,
+        boardHeight: defaultBoard.height,
+        viewportWidth: 390,
+        viewportHeight: 844,
+        boardImageCount: imageCount,
+        isMobileViewport: true
+      }),
+      `expected ${imageCount}-image phone portrait board to fit at least as closely as the default profile`
+    );
+  }
+
+  for (const imageCount of [12, 15, 21]) {
+    const defaultProfile = getBoardLayoutProfile(imageCount);
+    const tabletProfile = getBoardLayoutProfile(
+      imageCount,
+      { viewportClass: resolveBoardLayoutViewportClass({ viewportWidth: 768, viewportHeight: 1024 }) }
+    );
+    const desktopProfile = getBoardLayoutProfile(
+      imageCount,
+      { viewportClass: resolveBoardLayoutViewportClass({ viewportWidth: 1440, viewportHeight: 1024 }) }
+    );
+
+    assert.deepEqual(tabletProfile, defaultProfile);
+    assert.deepEqual(desktopProfile, defaultProfile);
   }
 });
 

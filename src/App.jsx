@@ -71,6 +71,7 @@ import {
   pickRandom,
   relayoutBoardImages,
   rememberRecentOutfit,
+  resolveBoardLayoutViewportClass,
   rerollBoardImage,
   summarizeGuidedDebugPayload,
   visibleSlots
@@ -674,6 +675,14 @@ function getViewportWidth() {
   }
 
   return window.innerWidth;
+}
+
+function getViewportHeight() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.innerHeight;
 }
 
 const garmentTypes = [
@@ -5064,6 +5073,15 @@ export default function App() {
       Object.entries(boardLayoutMetadataByReferenceId).map(([referenceId, value]) => [referenceId, value.renderMetadata])
     )
   }), [boardLayoutMetadataByReferenceId]);
+  function getCurrentBoardLayoutOptions(baseOptions = boardLayoutOptions) {
+    return {
+      ...baseOptions,
+      viewportClass: resolveBoardLayoutViewportClass({
+        viewportWidth: getViewportWidth(),
+        viewportHeight: getViewportHeight()
+      })
+    };
+  }
   const boardRenderLayoutSignature = useMemo(
     () =>
       JSON.stringify(
@@ -5083,7 +5101,7 @@ export default function App() {
     [tagManagerEntries]
   );
 
-  function relayoutBoardStateImages(boardImages, layoutOptionsOverride = boardLayoutOptions) {
+  function relayoutBoardStateImages(boardImages, layoutOptionsOverride = getCurrentBoardLayoutOptions()) {
     const nextImages = (Array.isArray(boardImages) ? boardImages : []).filter((image) => image?.referenceId);
 
     if (!nextImages.length) {
@@ -5123,7 +5141,7 @@ export default function App() {
       generationMode: options.generationMode ?? defaultGenerationMode,
       outfitAffinity: options.outfitAffinity ?? {},
       recentOutfits: options.recentOutfits ?? [],
-      layoutOptions: boardLayoutOptions,
+      layoutOptions: getCurrentBoardLayoutOptions(),
       debugHooks: perfSession,
       boardFilters: options.metadataFilters ?? null,
       boardGuidedOptions: {
@@ -5139,7 +5157,7 @@ export default function App() {
 
     if (validReferenceIds.length) {
       return createBoardFromReferenceIds(validReferenceIds, {
-        ...boardLayoutOptions,
+        ...getCurrentBoardLayoutOptions(),
         itemsByReferenceId: sourceItemsById
       });
     }
@@ -8963,27 +8981,29 @@ async function handleExportBackup() {
 
   function getBoardLayoutOptionsWithMetricOverride(referenceId, metrics) {
     if (!referenceId || !metrics?.naturalWidth || !metrics?.naturalHeight) {
-      return boardLayoutOptions;
+      return getCurrentBoardLayoutOptions();
     }
 
     const item = itemsById[referenceId];
     if (!item) {
-      return boardLayoutOptions;
+      return getCurrentBoardLayoutOptions();
     }
 
     const renderMetadata = buildBoardRenderMetadata(item, metrics);
+    const nextLayoutOptions = getCurrentBoardLayoutOptions();
 
     return {
+      ...nextLayoutOptions,
       aspectRatiosByReferenceId: {
-        ...boardLayoutOptions.aspectRatiosByReferenceId,
+        ...nextLayoutOptions.aspectRatiosByReferenceId,
         [referenceId]: getItemPresentationAspectRatio(item, metrics)
       },
       sizeMultipliersByReferenceId: {
-        ...boardLayoutOptions.sizeMultipliersByReferenceId,
+        ...nextLayoutOptions.sizeMultipliersByReferenceId,
         [referenceId]: renderMetadata.sizeMultiplier
       },
       renderMetadataByReferenceId: {
-        ...boardLayoutOptions.renderMetadataByReferenceId,
+        ...nextLayoutOptions.renderMetadataByReferenceId,
         [referenceId]: renderMetadata
       }
     };
