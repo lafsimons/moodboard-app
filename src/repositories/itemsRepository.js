@@ -2,10 +2,12 @@ import {
   deleteItem as deleteStoredItem,
   deleteItems as deleteStoredItems,
   loadItemMediaAssetById as loadStoredItemMediaAssetById,
+  loadMediaIntegritySnapshot as loadStoredMediaIntegritySnapshot,
   loadItems as loadStoredItems,
   loadStartupItemMetadata as loadStoredStartupItemMetadata,
   saveItem as saveStoredItem
 } from "../lib/storage.js";
+import { runMediaIntegrityCheck as analyzeStoredMediaIntegrity } from "../lib/mediaIntegrity.js";
 import { normalizeItemImages } from "../lib/itemImages.js";
 
 export async function loadItems() {
@@ -18,6 +20,10 @@ export async function loadStartupItemMetadata(options = {}) {
 
 export async function loadItemMediaAssetById(itemId, variant = "preview") {
   return loadStoredItemMediaAssetById(itemId, variant);
+}
+
+export async function runMediaIntegrityCheck() {
+  return analyzeStoredMediaIntegrity(loadStoredMediaIntegritySnapshot);
 }
 
 function readBlobAsDataUrl(blob) {

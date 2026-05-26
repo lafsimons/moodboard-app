@@ -159,6 +159,7 @@ import {
   loadStartupItemMetadata,
   prepareLoadedItems,
   resolveItemMediaSource,
+  runMediaIntegrityCheck,
   saveItem,
   saveItems
 } from "./repositories/itemsRepository.js";
@@ -183,6 +184,34 @@ const imageAssetEntries = Object.entries(imageAssets)
       : null;
   })
   .filter(Boolean);
+
+function formatMediaIntegritySample(sample) {
+  const itemId = typeof sample?.id === "string" ? sample.id.trim() : "";
+  const name = typeof sample?.name === "string" ? sample.name.trim() : "";
+
+  if (itemId && name) {
+    return `${itemId}: ${name}`;
+  }
+
+  if (itemId) {
+    return itemId;
+  }
+
+  if (typeof sample?.itemId === "string" && sample.itemId.trim()) {
+    const variant = typeof sample?.variant === "string" && sample.variant.trim() ? ` (${sample.variant.trim()})` : "";
+    return `${sample.itemId.trim()}${variant}`;
+  }
+
+  if (typeof sample?.itemUuid === "string" && sample.itemUuid.trim()) {
+    return sample.itemUuid.trim();
+  }
+
+  if (typeof sample?.compositeKey === "string" && sample.compositeKey.trim()) {
+    return sample.compositeKey.trim();
+  }
+
+  return "";
+}
 const imageUrlByFilename = Object.fromEntries(
   imageAssetEntries.map((image) => [image.filename, image.imageUrl])
 );
@@ -3558,6 +3587,9 @@ export default function App() {
   const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
+  const [mediaIntegrityReport, setMediaIntegrityReport] = useState(null);
+  const [mediaIntegrityError, setMediaIntegrityError] = useState("");
+  const [isMediaIntegrityChecking, setIsMediaIntegrityChecking] = useState(false);
   const [isBackupPackageExporting, setIsBackupPackageExporting] = useState(false);
   const [backupPackageExportProgress, setBackupPackageExportProgress] = useState(null);
   const [isBackupPackageImporting, setIsBackupPackageImporting] = useState(false);
@@ -6560,6 +6592,24 @@ async function handleExportBackup() {
       loadedItems.forEach(({ media }) => {
         media?.revoke?.();
       });
+    }
+  }
+
+  async function handleRunMediaIntegrityCheck() {
+    if (isMediaIntegrityChecking) {
+      return;
+    }
+
+    setMediaIntegrityError("");
+    setIsMediaIntegrityChecking(true);
+
+    try {
+      const report = await runMediaIntegrityCheck();
+      setMediaIntegrityReport(report);
+    } catch (error) {
+      setMediaIntegrityError(error instanceof Error ? error.message : "Failed to run media integrity check.");
+    } finally {
+      setIsMediaIntegrityChecking(false);
     }
   }
 
@@ -9784,6 +9834,30 @@ async function handleExportBackup() {
 
   const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
   const backupPackageImportProgressLabel = getBackupPackageImportProgressLabel(backupPackageImportProgress);
+  const mediaIntegritySummaryEntries = mediaIntegrityReport
+    ? [
+        ["Items", mediaIntegrityReport.summary.items],
+        ["Preview assets", mediaIntegrityReport.summary.previewAssets],
+        ["Thumbnail assets", mediaIntegrityReport.summary.thumbnailAssets],
+        ["Original blobs", mediaIntegrityReport.summary.originalBlobs],
+        ["Orphaned records", mediaIntegrityReport.summary.orphanedRecords],
+        ["Missing preview", mediaIntegrityReport.summary.missingPreviewMediaItems],
+        ["Missing any media", mediaIntegrityReport.summary.missingAnyMediaSourceItems],
+        ["Duplicate media groups", mediaIntegrityReport.summary.duplicateMediaAssetGroups],
+        ["Inline payload items", mediaIntegrityReport.summary.inlineMediaPayloadItems],
+        ["Blob-backed imported previews", mediaIntegrityReport.summary.packageImportedBlobPreviewAssets]
+      ]
+    : [];
+  const mediaIntegrityIssueEntries = mediaIntegrityReport
+    ? [
+        ["Missing preview media", mediaIntegrityReport.issues.itemsMissingPreviewMedia],
+        ["Missing any media source", mediaIntegrityReport.issues.itemsMissingAnyMediaSource],
+        ["Orphaned preview/thumbnail rows", mediaIntegrityReport.issues.orphanedItemMediaAssets],
+        ["Orphaned original blobs", mediaIntegrityReport.issues.orphanedOriginalImageBlobs],
+        ["Duplicate media rows", mediaIntegrityReport.issues.duplicateItemMediaAssetEntries],
+        ["Inline payloads still persisted", mediaIntegrityReport.issues.itemsWithInlineMediaPayloads]
+      ].filter(([, entry]) => entry.count > 0)
+    : [];
 
   function renderBoardCanvas() {
     return (
@@ -10885,6 +10959,44 @@ async function handleExportBackup() {
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportMetadataBackup}>
                             Export metadata backup
                           </button>
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={handleRunMediaIntegrityCheck}
+                            disabled={isMediaIntegrityChecking}
+                          >
+                            {isMediaIntegrityChecking ? "Running media integrity check..." : "Run media integrity check"}
+                          </button>
+                          {mediaIntegrityError ? <p className="form-error tag-manager-feedback">{mediaIntegrityError}</p> : null}
+                          {mediaIntegrityReport ? (
+                            <section className="media-integrity-report" aria-label="Media integrity results">
+                              <p className={`media-integrity-status ${mediaIntegrityReport.warningsFound ? "has-warnings" : "is-healthy"}`}>
+                                {mediaIntegrityReport.warningsFound ? "Warnings found" : "Healthy"}
+                              </p>
+                              <div className="media-integrity-summary">
+                                {mediaIntegritySummaryEntries.map(([label, value]) => (
+                                  <p key={label} className="media-integrity-summary-row">
+                                    <span>{label}</span>
+                                    <strong>{value}</strong>
+                                  </p>
+                                ))}
+                              </div>
+                              {mediaIntegrityIssueEntries.length ? (
+                                <div className="media-integrity-issues">
+                                  {mediaIntegrityIssueEntries.map(([label, entry]) => (
+                                    <div key={label} className="media-integrity-issue">
+                                      <p className="media-integrity-issue-title">{label}: {entry.count}</p>
+                                      {entry.samples.length ? (
+                                        <p className="media-integrity-issue-samples">
+                                          {entry.samples.map((sample) => formatMediaIntegritySample(sample)).filter(Boolean).join(", ")}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </section>
+                          ) : null}
                           <button
                             type="button"
                             className="ghost-button wardrobe-manage-action"
