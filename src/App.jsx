@@ -126,6 +126,10 @@ import {
   applySavedLibraryViewToMetadataFilters,
   createSavedLibraryViewSnapshot,
   deleteSavedLibraryView,
+  markBackupExported,
+  markBackupImported,
+  markLibraryEdited,
+  normalizeLibraryProvenance,
   doesSavedLibraryViewMatchMetadataState,
   doesSavedLibraryViewMatchState,
   normalizeSavedLibraryViews,
@@ -533,6 +537,25 @@ function formatCreatedAt(value) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(normalizedValue));
+}
+
+function formatLibraryProvenanceValue(value) {
+  return formatCreatedAt(value) || "Never";
+}
+
+function formatBackupSchemaLabel(provenance) {
+  const source = typeof provenance?.lastImportedBackupSource === "string" ? provenance.lastImportedBackupSource.trim() : "";
+  const version = typeof provenance?.lastImportedBackupSchemaVersion === "string" ? provenance.lastImportedBackupSchemaVersion.trim() : "";
+
+  if (source && version) {
+    return `${source} v${version}`;
+  }
+
+  if (version) {
+    return `v${version}`;
+  }
+
+  return "";
 }
 
 function normalizeFileMetadataText(value) {
@@ -3630,6 +3653,7 @@ export default function App() {
   const [wardrobeManageOpen, setWardrobeManageOpen] = useState(false);
   const [wardrobeAddOpen, setWardrobeAddOpen] = useState(false);
   const [savedLibraryViews, setSavedLibraryViews] = useState([]);
+  const [provenance, setProvenance] = useState(() => normalizeLibraryProvenance());
   const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
@@ -5261,6 +5285,9 @@ export default function App() {
       const defaultState = appStateOverride ?? defaultData.appState;
       const normalizedPanelLayoutState = normalizePanelLayoutState(defaultState.panelLayoutState, getViewportWidth());
       const normalizedItems = sourceItems.length ? sourceItems : defaultData.items.map(normalizeItem);
+      const normalizedProvenance = normalizeLibraryProvenance(defaultState.provenance, {
+        itemCountSnapshot: normalizedItems.length
+      });
       const generatedBoard = buildGeneratedBoard(normalizedItems, {
         imageCount: normalizeImageCount(defaultState.imageCount),
         excluded: {},
@@ -5295,6 +5322,7 @@ export default function App() {
       setLibrarySearch(normalizeLibrarySearch(defaultState.librarySearch));
       setWardrobeSort(normalizeWardrobeSort(defaultState.wardrobeSort));
       setSavedLibraryViews(normalizeSavedLibraryViews(defaultState.savedLibraryViews));
+      setProvenance(normalizedProvenance);
       setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
       setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
       const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
@@ -5339,6 +5367,9 @@ export default function App() {
           const normalizedOutfitFilters = normalizeOutfitFilters(storedAppState.outfitFilters);
           const normalizedOutfitAffinity = normalizeOutfitAffinity(storedAppState.outfitAffinity);
           const normalizedRecentOutfits = normalizeRecentOutfits(storedAppState.recentOutfits);
+          const normalizedProvenance = normalizeLibraryProvenance(storedAppState.provenance, {
+            itemCountSnapshot: effectiveItems.length
+          });
           setLayering(Boolean(storedAppState.layering));
           setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
           setLocked(storedAppState.locked ?? {});
@@ -5385,6 +5416,7 @@ export default function App() {
           setLibrarySearch(normalizeLibrarySearch(storedAppState.librarySearch));
           setWardrobeSort(normalizedWardrobeSort);
           setSavedLibraryViews(normalizeSavedLibraryViews(storedAppState.savedLibraryViews));
+          setProvenance(normalizedProvenance);
           setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
           setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
           setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
@@ -5487,6 +5519,9 @@ export default function App() {
       librarySearch,
       wardrobeSort,
       savedLibraryViews,
+      provenance: normalizeLibraryProvenance(provenance, {
+        itemCountSnapshot: items.length
+      }),
       libraryUiState: {
         libraryOpen: activePanel === "wardrobe",
         wardrobeFiltersOpen,
@@ -5522,6 +5557,7 @@ export default function App() {
       librarySearch,
       wardrobeSort,
       savedLibraryViews,
+      provenance,
       activePanel,
       wardrobeFiltersOpen,
       wardrobeSavedOpen,
@@ -5530,7 +5566,8 @@ export default function App() {
       outfitFilters,
       weatherSettings,
       weatherData,
-      fitpics
+      fitpics,
+      items.length
     ]
   );
 
@@ -5661,6 +5698,43 @@ export default function App() {
     };
 
     return flushQueuedState();
+  }
+
+  function applyProvenanceUpdate(buildNextProvenance, options = {}) {
+    const itemCountSnapshot = Math.max(0, Math.round(Number(options.itemCountSnapshot) || 0));
+    const baseProvenance = normalizeLibraryProvenance(
+      currentPersistedAppStateRef.current?.provenance ?? provenance,
+      { itemCountSnapshot }
+    );
+    const nextProvenance = normalizeLibraryProvenance(buildNextProvenance(baseProvenance), {
+      itemCountSnapshot
+    });
+
+    setProvenance(nextProvenance);
+
+    if (options.immediate) {
+      void enqueueAppStateSave({
+        ...(currentPersistedAppStateRef.current ?? currentPersistedAppState),
+        provenance: nextProvenance
+      }, options.reason ?? "provenance");
+    }
+
+    return nextProvenance;
+  }
+
+  function buildImportedAppStateWithProvenance(nextAppState, options = {}) {
+    const itemCountSnapshot = Math.max(0, Math.round(Number(options.itemCountSnapshot) || 0));
+
+    return {
+      ...(nextAppState ?? {}),
+      provenance: markBackupImported(nextAppState?.provenance, {
+        importedAt: options.importedAt,
+        lastImportedBackupName: options.lastImportedBackupName,
+        lastImportedBackupSource: options.lastImportedBackupSource,
+        lastImportedBackupSchemaVersion: options.lastImportedBackupSchemaVersion,
+        itemCountSnapshot
+      })
+    };
   }
 
   useEffect(() => {
@@ -6234,6 +6308,9 @@ export default function App() {
     setLibrarySearch(normalizeLibrarySearch(nextAppState?.librarySearch));
     setWardrobeSort(normalizedWardrobeSort);
     setSavedLibraryViews(normalizeSavedLibraryViews(nextAppState?.savedLibraryViews));
+    setProvenance(normalizeLibraryProvenance(nextAppState?.provenance, {
+      itemCountSnapshot: effectiveItems.length
+    }));
     setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
     setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
     setOutfitFilters(normalizedOutfitFilters);
@@ -6364,6 +6441,14 @@ async function handleExportBackup() {
         resolvePreviewAsset: resolvePreviewAssetForBackupPackageExport,
         onProgress: updateBackupPackageExportProgress
       });
+      applyProvenanceUpdate(
+        (current) => markBackupExported(current, { itemCountSnapshot: items.length }),
+        {
+          itemCountSnapshot: items.length,
+          immediate: true,
+          reason: "backupPackageExport"
+        }
+      );
 
       clearBackupPackageExportProgress();
       setBackupExportStatus("Scalable backup package saved.");
@@ -6398,6 +6483,13 @@ async function handleExportBackup() {
       const preparedPackage = await prepareBackupPackageImportFromDirectory(directoryHandle, {
         onProgress: updateBackupPackageImportProgress
       });
+      const importedAppState = buildImportedAppStateWithProvenance(preparedPackage.appState, {
+        importedAt: new Date().toISOString(),
+        lastImportedBackupName: preparedPackage.backupName || directoryHandle?.name || "",
+        lastImportedBackupSource: preparedPackage.source,
+        lastImportedBackupSchemaVersion: String(preparedPackage.version ?? ""),
+        itemCountSnapshot: preparedPackage.items.length
+      });
 
       const confirmed = await requestConfirmation({
         title: "Import scalable backup package?",
@@ -6416,8 +6508,11 @@ async function handleExportBackup() {
         completed: preparedPackage.items.length,
         total: preparedPackage.items.length
       });
-      await replaceWithPreparedBackupPackage(preparedPackage);
-      await applyLoadedData(preparedPackage.items, preparedPackage.appState);
+      await replaceWithPreparedBackupPackage({
+        ...preparedPackage,
+        appState: importedAppState
+      });
+      await applyLoadedData(preparedPackage.items, importedAppState);
       clearBackupPackageImportProgress();
       setBackupExportStatus("Scalable backup package imported.");
     } catch (error) {
@@ -6489,6 +6584,14 @@ async function handleExportBackup() {
       return;
     }
 
+    const importedAppState = buildImportedAppStateWithProvenance(preparedBackup.appState, {
+      importedAt: new Date().toISOString(),
+      lastImportedBackupName: file.name || "",
+      lastImportedBackupSource: preparedBackup.source,
+      lastImportedBackupSchemaVersion: String(preparedBackup.version ?? ""),
+      itemCountSnapshot: preparedBackup.items.length
+    });
+
     const confirmed = await requestConfirmation({
       title: "Import backup?",
       message: "This will replace all library data in this browser.",
@@ -6500,8 +6603,11 @@ async function handleExportBackup() {
     }
 
     try {
-      await replaceWithPreparedBackup(preparedBackup);
-      await applyLoadedData(preparedBackup.items, preparedBackup.appState);
+      await replaceWithPreparedBackup({
+        ...preparedBackup,
+        appState: importedAppState
+      });
+      await applyLoadedData(preparedBackup.items, importedAppState);
       window.alert("Backup imported.");
     } catch (error) {
       window.alert(error?.message || "This backup could not be imported.");
@@ -7304,6 +7410,10 @@ async function handleExportBackup() {
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
     setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+    applyProvenanceUpdate(
+      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+      { itemCountSnapshot: items.length }
+    );
   }
 
   async function applyGlobalTagUpdate(buildNextTags) {
@@ -7328,6 +7438,10 @@ async function handleExportBackup() {
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
     setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+    applyProvenanceUpdate(
+      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+      { itemCountSnapshot: items.length }
+    );
     return updatedItems.length;
   }
 
@@ -8038,6 +8152,10 @@ async function handleExportBackup() {
       await deleteItem(draft.id);
     }
 
+    const nextItemCount = duplicate || editingId === "new"
+      ? items.length + 1
+      : items.length;
+
     setItems((current) => {
       const existingIndex = current.findIndex((item) =>
         item.id === (duplicate || editingId === "new" ? nextItem.id : draft.id)
@@ -8051,6 +8169,10 @@ async function handleExportBackup() {
       clone[existingIndex] = nextItem;
       return clone;
     });
+    applyProvenanceUpdate(
+      (current) => markLibraryEdited(current, { itemCountSnapshot: nextItemCount }),
+      { itemCountSnapshot: nextItemCount }
+    );
 
     if (!duplicate && editingId !== "new" && draft.id !== nextItem.id) {
       setOutfit((current) =>
@@ -8164,9 +8286,14 @@ async function handleExportBackup() {
         console.error(`Reference import failed for ${file?.name || "unknown file"}.`, error);
       });
 
-    if (result.successfulItems.length) {
-      setItems((current) => [...current, ...result.successfulItems]);
-    }
+      if (result.successfulItems.length) {
+        const nextItemCount = items.length + result.successfulItems.length;
+        setItems((current) => [...current, ...result.successfulItems]);
+        applyProvenanceUpdate(
+          (current) => markLibraryEdited(current, { itemCountSnapshot: nextItemCount }),
+          { itemCountSnapshot: nextItemCount }
+        );
+      }
 
       setImageUploadError(getReferenceImportMessage(result));
     } finally {
@@ -8382,6 +8509,10 @@ async function handleExportBackup() {
     setItems((current) => current.map((item) => item.id === persistedDraft.id ? persistedDraft : item));
     setReferencePreview((current) => current?.id === persistedDraft.id ? persistedDraft : current);
     void saveItem(persistedDraft);
+    applyProvenanceUpdate(
+      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+      { itemCountSnapshot: items.length }
+    );
 
     if (closeEditor) {
       cancelEdit();
@@ -8597,9 +8728,14 @@ async function handleExportBackup() {
     }
 
     const deletedReferenceIdSet = new Set(uniqueReferenceIds);
+    const nextItemCount = items.filter((item) => !deletedReferenceIdSet.has(item.id)).length;
 
     await deleteItems(uniqueReferenceIds);
     setItems((current) => current.filter((item) => !deletedReferenceIdSet.has(item.id)));
+    applyProvenanceUpdate(
+      (current) => markLibraryEdited(current, { itemCountSnapshot: nextItemCount }),
+      { itemCountSnapshot: nextItemCount }
+    );
     setSelectedReferenceSelection((current) => ({
       ids: Object.fromEntries(
         Object.entries(current.ids).filter(([itemId, isSelected]) => !deletedReferenceIdSet.has(itemId) && isSelected)
@@ -10103,6 +10239,20 @@ async function handleExportBackup() {
 
   const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
   const backupPackageImportProgressLabel = getBackupPackageImportProgressLabel(backupPackageImportProgress);
+  const normalizedProvenance = normalizeLibraryProvenance(provenance, {
+    itemCountSnapshot: items.length
+  });
+  const packageSchemaLabel = formatBackupSchemaLabel(normalizedProvenance);
+  const lastBackupImportLabel = normalizedProvenance.lastImportedBackupName
+    ? `${formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt)} (${normalizedProvenance.lastImportedBackupName})`
+    : formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt);
+  const provenanceStatusEntries = [
+    ["Library updated", formatLibraryProvenanceValue(normalizedProvenance.lastLibraryEditAt)],
+    ["Last backup export", formatLibraryProvenanceValue(normalizedProvenance.lastBackupExportAt)],
+    ["Last backup import", lastBackupImportLabel],
+    ["Items", String(normalizedProvenance.itemCountSnapshot || items.length || 0)],
+    ["Package schema", packageSchemaLabel || "Unknown"]
+  ];
   const mediaIntegritySummaryEntries = mediaIntegrityReport
     ? [
         ["Items", mediaIntegrityReport.summary.items],
@@ -10361,6 +10511,10 @@ async function handleExportBackup() {
     await saveItem(nextReferencePreview);
     setItems((current) => current.map((item) => item.id === nextReferencePreview.id ? nextReferencePreview : item));
     setReferencePreview(nextReferencePreview);
+    applyProvenanceUpdate(
+      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+      { itemCountSnapshot: items.length }
+    );
   }
 
   async function deleteReferencePreviewItem() {
@@ -11344,6 +11498,20 @@ async function handleExportBackup() {
                           className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`}
                           aria-label="Library management"
                         >
+                          <section className="wardrobe-manage-section provenance-status-section" aria-label="Archive status">
+                            <div className="wardrobe-manage-section-header">
+                              <strong>Archive status</strong>
+                              <span>Local provenance</span>
+                            </div>
+                            <div className="provenance-status-list">
+                              {provenanceStatusEntries.map(([label, value]) => (
+                                <p key={label} className="provenance-status-row">
+                                  <span>{label}</span>
+                                  <strong>{value}</strong>
+                                </p>
+                              ))}
+                            </div>
+                          </section>
                           <button type="button" className="ghost-button wardrobe-manage-action" onClick={handleExportWardrobeImage}>
                             Export library image
                           </button>

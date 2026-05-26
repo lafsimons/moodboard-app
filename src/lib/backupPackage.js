@@ -384,6 +384,7 @@ export async function prepareBackupPackageImportFromDirectory(rootHandle, option
     source: manifest.source,
     version: manifest.version,
     exportedAt: manifest.exportedAt,
+    backupName: typeof rootHandle?.name === "string" ? rootHandle.name.trim() : "",
     appState,
     items: stagedItems,
     itemMediaAssets: stagedPreviewFiles

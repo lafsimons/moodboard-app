@@ -355,6 +355,10 @@ test("getBackupPackagePreviewFileName uses .bin only when the extension is genui
 
 test("buildBackupPackageAppState preserves current backup app-state sanitization", () => {
   const appState = buildBackupPackageAppState({
+    provenance: {
+      lastBackupExportAt: "2026-05-26T12:00:00.000Z",
+      itemCountSnapshot: 3
+    },
     board: {
       id: "board-1",
       images: [
@@ -369,6 +373,8 @@ test("buildBackupPackageAppState preserves current backup app-state sanitization
   });
 
   assert.equal("imageUrl" in appState.board.images[0], false);
+  assert.equal(appState.provenance.lastBackupExportAt, "2026-05-26T12:00:00.000Z");
+  assert.equal(appState.provenance.itemCountSnapshot, 3);
 });
 
 test("isFileSystemAccessSupported reflects directory-picker support", () => {
@@ -570,6 +576,7 @@ async function createValidImportPackageRoot() {
 
 test("prepareBackupPackageImportFromDirectory stages metadata-only items and preview blobs", async () => {
   const rootHandle = await createValidImportPackageRoot();
+  rootHandle.name = "mba-archive-package";
   const progressEvents = [];
 
   const prepared = await prepareBackupPackageImportFromDirectory(rootHandle, {
@@ -587,6 +594,7 @@ test("prepareBackupPackageImportFromDirectory stages metadata-only items and pre
   assert.equal(prepared.itemMediaAssets[0].itemId, "item-1");
   assert.equal(prepared.itemMediaAssets[0].variant, "preview");
   assert.equal(prepared.itemMediaAssets[0].asset.blob instanceof Blob, true);
+  assert.equal(prepared.backupName, "mba-archive-package");
   assert.deepEqual(progressEvents, [
     { phase: "reading-manifest", completed: 0, total: 0 },
     { phase: "reading-app-state", completed: 0, total: 0 },

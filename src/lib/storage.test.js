@@ -1357,6 +1357,16 @@ test("saveAppState skips oversized persisted payloads", async () => {
     savedOutfits: [],
     itemDefaultsMigrationVersion: 0,
     imagePresentationMigrationVersion: 0,
+    provenance: {
+      lastLibraryEditAt: "",
+      lastBackupExportAt: "",
+      lastBackupImportAt: "",
+      lastImportedBackupName: "",
+      lastImportedBackupSource: "",
+      lastImportedBackupSchemaVersion: "",
+      itemCountSnapshot: 0,
+      appVersion: ""
+    },
     outfit: {},
     board: null
   });
@@ -1686,6 +1696,16 @@ test("prepareBackupImport normalizes legacy backups and fills source identity de
   assert.ok(prepared.items[0].itemUuid);
   assert.deepEqual(prepared.appState, {
     savedOutfits: [],
+    provenance: {
+      lastLibraryEditAt: "",
+      lastBackupExportAt: "",
+      lastBackupImportAt: "",
+      lastImportedBackupName: "",
+      lastImportedBackupSource: "",
+      lastImportedBackupSchemaVersion: "",
+      itemCountSnapshot: 0,
+      appVersion: ""
+    },
     recentOutfits: []
   });
 });
@@ -1718,6 +1738,16 @@ test("prepareBackupImport accepts moodboard-app backups", () => {
   assert.equal(prepared.appState.board, undefined);
   assert.deepEqual(prepared.appState, {
     savedOutfits: [],
+    provenance: {
+      lastLibraryEditAt: "",
+      lastBackupExportAt: "",
+      lastBackupImportAt: "",
+      lastImportedBackupName: "",
+      lastImportedBackupSource: "",
+      lastImportedBackupSchemaVersion: "",
+      itemCountSnapshot: 0,
+      appVersion: ""
+    },
     recentOutfits: []
   });
 });
@@ -2506,4 +2536,87 @@ test("loadItems does not overwrite moodboard-app-db when the new database alread
   assert.equal(items[0].id, "current-item");
   assert.equal(newDatabase.stores.get("items").records.size, 1);
   assert.equal(newDatabase.stores.get("items").records.has("legacy-item"), false);
+});
+
+test("saveAppState persists provenance metadata and loadStartupAppState returns it", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    savedOutfits: [],
+    provenance: {
+      lastLibraryEditAt: "2026-05-26T11:00:00.000Z",
+      lastBackupExportAt: "2026-05-26T12:00:00.000Z",
+      lastBackupImportAt: "2026-05-26T13:00:00.000Z",
+      lastImportedBackupName: "mba-package",
+      lastImportedBackupSource: "moodboard-app-package",
+      lastImportedBackupSchemaVersion: 1,
+      itemCountSnapshot: 4
+    }
+  });
+
+  const loaded = await loadAppState();
+  const startupLoaded = await loadStartupAppState();
+
+  assert.deepEqual(loaded.provenance, {
+    lastLibraryEditAt: "2026-05-26T11:00:00.000Z",
+    lastBackupExportAt: "2026-05-26T12:00:00.000Z",
+    lastBackupImportAt: "2026-05-26T13:00:00.000Z",
+    lastImportedBackupName: "mba-package",
+    lastImportedBackupSource: "moodboard-app-package",
+    lastImportedBackupSchemaVersion: "1",
+    itemCountSnapshot: 4,
+    appVersion: ""
+  });
+  assert.deepEqual(startupLoaded.provenance, loaded.provenance);
+});
+
+test("replaceWithPreparedBackup preserves imported provenance metadata and old app states still load", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "ref.webp"
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      provenance: {
+        lastBackupImportAt: "2026-05-26T13:00:00.000Z",
+        lastImportedBackupName: "backup.json",
+        lastImportedBackupSource: "moodboard-app",
+        lastImportedBackupSchemaVersion: 2,
+        itemCountSnapshot: 1
+      }
+    }
+  });
+
+  const importedState = await loadAppState();
+  assert.equal(importedState.provenance.lastBackupImportAt, "2026-05-26T13:00:00.000Z");
+  assert.equal(importedState.provenance.lastImportedBackupName, "backup.json");
+  assert.equal(importedState.provenance.lastImportedBackupSource, "moodboard-app");
+  assert.equal(importedState.provenance.lastImportedBackupSchemaVersion, "2");
+  assert.equal(importedState.provenance.itemCountSnapshot, 1);
+
+  await saveAppState({
+    savedOutfits: []
+  });
+  const oldState = await loadAppState();
+  assert.deepEqual(oldState.provenance, {
+    lastLibraryEditAt: "",
+    lastBackupExportAt: "",
+    lastBackupImportAt: "",
+    lastImportedBackupName: "",
+    lastImportedBackupSource: "",
+    lastImportedBackupSchemaVersion: "",
+    itemCountSnapshot: 0,
+    appVersion: ""
+  });
 });

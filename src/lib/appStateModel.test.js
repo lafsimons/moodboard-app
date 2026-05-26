@@ -10,6 +10,10 @@ import {
   defaultWardrobeSort,
   doesSavedLibraryViewMatchMetadataState,
   emptyWardrobeFilters,
+  markBackupExported,
+  markBackupImported,
+  markLibraryEdited,
+  normalizeLibraryProvenance,
   normalizeSavedLibraryViews,
   normalizeLibrarySearch,
   normalizeLibraryUiState,
@@ -263,4 +267,73 @@ test("renameSavedLibraryView and deleteSavedLibraryView update the saved view li
       sort: "newest"
     }
   ]);
+});
+
+test("normalizeLibraryProvenance loads old app states safely and keeps additive fields", () => {
+  assert.deepEqual(
+    normalizeLibraryProvenance(undefined, { itemCountSnapshot: 12 }),
+    {
+      lastLibraryEditAt: "",
+      lastBackupExportAt: "",
+      lastBackupImportAt: "",
+      lastImportedBackupName: "",
+      lastImportedBackupSource: "",
+      lastImportedBackupSchemaVersion: "",
+      itemCountSnapshot: 12,
+      appVersion: ""
+    }
+  );
+
+  assert.deepEqual(
+    normalizeLibraryProvenance({
+      lastLibraryEditAt: "2026-05-26T10:00:00.000Z",
+      lastImportedBackupName: "Archive MBA",
+      lastImportedBackupSource: "moodboard-app-package",
+      lastImportedBackupSchemaVersion: 1,
+      itemCountSnapshot: "7",
+      customField: "keep-me"
+    }),
+    {
+      lastLibraryEditAt: "2026-05-26T10:00:00.000Z",
+      lastBackupExportAt: "",
+      lastBackupImportAt: "",
+      lastImportedBackupName: "Archive MBA",
+      lastImportedBackupSource: "moodboard-app-package",
+      lastImportedBackupSchemaVersion: "1",
+      itemCountSnapshot: 7,
+      appVersion: "",
+      customField: "keep-me"
+    }
+  );
+});
+
+test("provenance helper updates track edits exports and imports additively", () => {
+  const afterEdit = markLibraryEdited(undefined, {
+    editedAt: "2026-05-26T11:00:00.000Z",
+    itemCountSnapshot: 5
+  });
+  assert.equal(afterEdit.lastLibraryEditAt, "2026-05-26T11:00:00.000Z");
+  assert.equal(afterEdit.itemCountSnapshot, 5);
+
+  const afterExport = markBackupExported(afterEdit, {
+    exportedAt: "2026-05-26T12:00:00.000Z",
+    itemCountSnapshot: 5
+  });
+  assert.equal(afterExport.lastLibraryEditAt, "2026-05-26T11:00:00.000Z");
+  assert.equal(afterExport.lastBackupExportAt, "2026-05-26T12:00:00.000Z");
+
+  const afterImport = markBackupImported(afterExport, {
+    importedAt: "2026-05-26T13:00:00.000Z",
+    lastImportedBackupName: "mba-package",
+    lastImportedBackupSource: "moodboard-app-package",
+    lastImportedBackupSchemaVersion: 1,
+    itemCountSnapshot: 9
+  });
+  assert.equal(afterImport.lastLibraryEditAt, "2026-05-26T13:00:00.000Z");
+  assert.equal(afterImport.lastBackupExportAt, "2026-05-26T12:00:00.000Z");
+  assert.equal(afterImport.lastBackupImportAt, "2026-05-26T13:00:00.000Z");
+  assert.equal(afterImport.lastImportedBackupName, "mba-package");
+  assert.equal(afterImport.lastImportedBackupSource, "moodboard-app-package");
+  assert.equal(afterImport.lastImportedBackupSchemaVersion, "1");
+  assert.equal(afterImport.itemCountSnapshot, 9);
 });

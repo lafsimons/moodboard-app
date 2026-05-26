@@ -2687,6 +2687,31 @@ button:disabled {
   background: var(--surface-soft);
 }
 
+.provenance-status-list {
+  display: grid;
+  gap: 6px;
+}
+
+.provenance-status-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.provenance-status-row span {
+  color: var(--muted);
+}
+
+.provenance-status-row strong {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
+
 .media-integrity-status,
 .media-integrity-summary-row,
 .media-integrity-issue-title,

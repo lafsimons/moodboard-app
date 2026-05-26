@@ -18,6 +18,107 @@ export const defaultLibraryUiState = {
 
 export const emptySavedLibraryViews = [];
 
+export const emptyLibraryProvenance = {
+  lastLibraryEditAt: "",
+  lastBackupExportAt: "",
+  lastBackupImportAt: "",
+  lastImportedBackupName: "",
+  lastImportedBackupSource: "",
+  lastImportedBackupSchemaVersion: "",
+  itemCountSnapshot: 0,
+  appVersion: ""
+};
+
+function normalizeLibraryProvenanceText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeLibraryProvenanceVersion(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return normalizeLibraryProvenanceText(value);
+}
+
+function normalizeLibraryProvenanceTimestamp(value) {
+  const normalizedValue = normalizeLibraryProvenanceText(value);
+
+  if (!normalizedValue) {
+    return "";
+  }
+
+  const parsedValue = Date.parse(normalizedValue);
+  return Number.isFinite(parsedValue) ? new Date(parsedValue).toISOString() : "";
+}
+
+function normalizeLibraryProvenanceCount(value, fallback = 0) {
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) && parsedValue >= 0 ? Math.round(parsedValue) : fallback;
+}
+
+export function normalizeLibraryProvenance(value, options = {}) {
+  const fallbackItemCount = normalizeLibraryProvenanceCount(options.itemCountSnapshot, 0);
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      ...emptyLibraryProvenance,
+      itemCountSnapshot: fallbackItemCount
+    };
+  }
+
+  return {
+    ...emptyLibraryProvenance,
+    ...value,
+    lastLibraryEditAt: normalizeLibraryProvenanceTimestamp(value.lastLibraryEditAt),
+    lastBackupExportAt: normalizeLibraryProvenanceTimestamp(value.lastBackupExportAt),
+    lastBackupImportAt: normalizeLibraryProvenanceTimestamp(value.lastBackupImportAt),
+    lastImportedBackupName: normalizeLibraryProvenanceText(value.lastImportedBackupName),
+    lastImportedBackupSource: normalizeLibraryProvenanceText(value.lastImportedBackupSource),
+    lastImportedBackupSchemaVersion: normalizeLibraryProvenanceVersion(value.lastImportedBackupSchemaVersion),
+    itemCountSnapshot: normalizeLibraryProvenanceCount(value.itemCountSnapshot, fallbackItemCount),
+    appVersion: normalizeLibraryProvenanceText(value.appVersion)
+  };
+}
+
+function getLibraryProvenanceTimestamp(timestamp = new Date().toISOString()) {
+  return normalizeLibraryProvenanceTimestamp(timestamp) || new Date().toISOString();
+}
+
+export function markLibraryEdited(provenance, options = {}) {
+  const normalizedTimestamp = getLibraryProvenanceTimestamp(options.editedAt);
+
+  return normalizeLibraryProvenance({
+    ...normalizeLibraryProvenance(provenance, options),
+    lastLibraryEditAt: normalizedTimestamp,
+    itemCountSnapshot: options.itemCountSnapshot
+  }, options);
+}
+
+export function markBackupExported(provenance, options = {}) {
+  const normalizedTimestamp = getLibraryProvenanceTimestamp(options.exportedAt);
+
+  return normalizeLibraryProvenance({
+    ...normalizeLibraryProvenance(provenance, options),
+    lastBackupExportAt: normalizedTimestamp,
+    itemCountSnapshot: options.itemCountSnapshot
+  }, options);
+}
+
+export function markBackupImported(provenance, options = {}) {
+  const normalizedTimestamp = getLibraryProvenanceTimestamp(options.importedAt);
+
+  return normalizeLibraryProvenance({
+    ...normalizeLibraryProvenance(provenance, options),
+    lastLibraryEditAt: normalizedTimestamp,
+    lastBackupImportAt: normalizedTimestamp,
+    lastImportedBackupName: normalizeLibraryProvenanceText(options.lastImportedBackupName),
+    lastImportedBackupSource: normalizeLibraryProvenanceText(options.lastImportedBackupSource),
+    lastImportedBackupSchemaVersion: normalizeLibraryProvenanceVersion(options.lastImportedBackupSchemaVersion),
+    itemCountSnapshot: options.itemCountSnapshot
+  }, options);
+}
+
 export function normalizeMetadataFilterState(filters) {
   return {
     tags: uniqueTags(filters?.tags),
