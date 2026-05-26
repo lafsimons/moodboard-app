@@ -116,6 +116,7 @@ import {
   buildBoardRenderMetadata,
   getBoardItemRenderedBounds
 } from "./lib/boardBounds.js";
+import { getFittedBoardViewForViewport } from "./lib/boardView.js";
 import {
   exportBackupPackageToDirectory,
   isFileSystemAccessSupported
@@ -9088,31 +9089,16 @@ async function handleExportBackup() {
     }
 
     const viewportRect = boardViewportRef.current.getBoundingClientRect();
-    const viewportWidth = Math.max(1, viewportRect.width - 24);
-    const viewportHeight = Math.max(1, viewportRect.height - 24);
-    const widthZoom = viewportWidth / nextBoard.width;
-    const heightZoom = viewportHeight / nextBoard.height;
-    const fittedZoom = Math.min(widthZoom, heightZoom);
-    const boardImageCount = Array.isArray(nextBoard.images) ? nextBoard.images.length : 0;
-    const relaxedZoom =
-      boardImageCount >= 12 && boardImageCount <= 15
-        ? Math.min(0.62, Math.max(0.6, fittedZoom * 1.55))
-        : boardImageCount > 15
-        ? fittedZoom >= 0.34
-          ? Math.min(0.62, Math.max(0.52, fittedZoom * 1.46))
-          : fittedZoom * 1.22
-        : fittedZoom >= 0.82
-          ? 1
-          : fittedZoom >= 0.62
-            ? fittedZoom * 1.12
-            : fittedZoom * 1.05;
-    const nextZoom = Math.min(BOARD_ZOOM_MAX, Math.max(BOARD_ZOOM_MIN, Math.round(relaxedZoom * 1000) / 1000));
-
-    return {
-      x: Math.round((nextBoard.width * (1 - nextZoom) * 0.5) * 1000) / 1000,
-      y: Math.round((nextBoard.height * (1 - nextZoom) * 0.5) * 1000) / 1000,
-      zoom: nextZoom
-    };
+    return getFittedBoardViewForViewport({
+      boardWidth: nextBoard.width,
+      boardHeight: nextBoard.height,
+      viewportWidth: viewportRect.width,
+      viewportHeight: viewportRect.height,
+      boardImageCount: Array.isArray(nextBoard.images) ? nextBoard.images.length : 0,
+      isMobileViewport,
+      minZoom: BOARD_ZOOM_MIN,
+      maxZoom: BOARD_ZOOM_MAX
+    });
   }
 
   function zoomBoardView(nextZoomOrUpdater, anchor = null) {
