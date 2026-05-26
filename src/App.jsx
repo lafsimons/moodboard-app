@@ -2417,6 +2417,7 @@ function TagTree({
                 {areAllGroupsExpanded ? "Collapse" : "Expand"}
               </button>
             ) : null}
+            {headerActions}
           </div>
         </div>
       )}
@@ -2453,7 +2454,7 @@ function hasActiveFilterValue(value) {
 function countActiveFilterValues(filters) {
   return Object.entries(filters ?? {}).filter(([key, value]) => {
     if (key === "tagMatchMode") {
-      return value === "all";
+      return value === "all" || value === "grouped";
     }
 
     return hasActiveFilterValue(value);
@@ -4177,7 +4178,7 @@ export default function App() {
       laundry: normalizedWardrobeFilters.laundry,
       favorite: normalizedWardrobeFilters.favorite,
       tagMatchMode:
-        normalizedWardrobeFilters.tags.length > 1 && normalizedWardrobeFilters.tagMatchMode === "any"
+        normalizedWardrobeFilters.tags.length > 1 && normalizedWardrobeFilters.tagMatchMode !== "any"
           ? normalizedWardrobeFilters.tagMatchMode
           : ""
     });
@@ -11003,6 +11004,46 @@ async function handleExportBackup() {
                                 storageKey="library-filters"
                                 noTagsCount={filteredLibraryNoTagsCount}
                                 searchQuery={wardrobeFilterSearchQuery}
+                                headerActions={(
+                                  <div className="wardrobe-tag-match-toggle" role="group" aria-label="Tag matching">
+                                    <button
+                                      type="button"
+                                      className={`wardrobe-tag-match-option ${normalizedWardrobeFilters.tagMatchMode === "any" ? "is-active" : ""}`}
+                                      onClick={(event) => {
+                                        stopNestedTagTreeEvent(event);
+                                        setWardrobeFilters((current) => ({ ...current, tagMatchMode: "any" }));
+                                      }}
+                                      aria-pressed={normalizedWardrobeFilters.tagMatchMode === "any"}
+                                      title="Match any selected tag."
+                                    >
+                                      Any
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={`wardrobe-tag-match-option ${normalizedWardrobeFilters.tagMatchMode === "grouped" ? "is-active" : ""}`}
+                                      onClick={(event) => {
+                                        stopNestedTagTreeEvent(event);
+                                        setWardrobeFilters((current) => ({ ...current, tagMatchMode: "grouped" }));
+                                      }}
+                                      aria-pressed={normalizedWardrobeFilters.tagMatchMode === "grouped"}
+                                      title="Require every selected top-level tag group to match, while allowing any selected tag within each group."
+                                    >
+                                      Grouped
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={`wardrobe-tag-match-option ${normalizedWardrobeFilters.tagMatchMode === "all" ? "is-active" : ""}`}
+                                      onClick={(event) => {
+                                        stopNestedTagTreeEvent(event);
+                                        setWardrobeFilters((current) => ({ ...current, tagMatchMode: "all" }));
+                                      }}
+                                      aria-pressed={normalizedWardrobeFilters.tagMatchMode === "all"}
+                                      title="Require all selected tags."
+                                    >
+                                      All
+                                    </button>
+                                  </div>
+                                )}
                               />
                             ) : (
                               <p className="wardrobe-filter-empty">No tags match this search.</p>
@@ -11071,30 +11112,6 @@ async function handleExportBackup() {
                                 aria-pressed={normalizedWardrobeFilters.laundry === "hide"}
                               >
                                 Hide excluded
-                              </button>
-                            </div>
-                          </details>
-
-                          <details className="wardrobe-filter-row wardrobe-inline-filter-match">
-                            <summary>
-                              <span>Match</span>
-                            </summary>
-                            <div className="wardrobe-filter-row-options" role="group" aria-label="Tag matching">
-                              <button
-                                type="button"
-                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.tagMatchMode === "all" ? "is-active" : ""}`}
-                                onClick={() => setWardrobeFilters((current) => ({ ...current, tagMatchMode: "all" }))}
-                                aria-pressed={normalizedWardrobeFilters.tagMatchMode === "all"}
-                              >
-                                All tags
-                              </button>
-                              <button
-                                type="button"
-                                className={`wardrobe-filter-option ${normalizedWardrobeFilters.tagMatchMode === "any" ? "is-active" : ""}`}
-                                onClick={() => setWardrobeFilters((current) => ({ ...current, tagMatchMode: "any" }))}
-                                aria-pressed={normalizedWardrobeFilters.tagMatchMode === "any"}
-                              >
-                                Any tag
                               </button>
                             </div>
                           </details>
@@ -11222,6 +11239,8 @@ async function handleExportBackup() {
                                       placeholder={libraryTagActionMode === "add" ? "Add tag" : "Remove tag"}
                                       autoFocus
                                       showAllSuggestionsOnFocus
+                                      className="selection-action-tag-input"
+                                      suggestionsClassName="selection-action-tag-input-suggestions"
                                     />
                                   </div>
                                 ) : (

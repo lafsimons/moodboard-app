@@ -41,13 +41,6 @@ export function getTagInputKeyIntent({
     };
   }
 
-  if (key === "Enter" && suggestionsOpen && highlightedSuggestion) {
-    return {
-      type: "commitSuggestion",
-      value: highlightedSuggestion
-    };
-  }
-
   if ((key === "," || key === "Enter") && normalizedInput) {
     return {
       type: "commitInput",
@@ -164,7 +157,7 @@ export function matchesTagFilter(
   const normalizedItemTags = uniqueTags(itemTags);
   const normalizedIncludeTags = uniqueTags(includeTags);
   const normalizedExcludeTags = uniqueTags(excludeTags);
-  const normalizedMatchMode = matchMode === "any" ? "any" : "all";
+  const normalizedMatchMode = matchMode === "any" || matchMode === "grouped" ? matchMode : "all";
   const includesNoTags = normalizedIncludeTags.includes(noTagsToken);
   const excludesNoTags = normalizedExcludeTags.includes(noTagsToken);
   const includedTags = normalizedIncludeTags.filter((tag) => tag !== noTagsToken);
@@ -186,6 +179,28 @@ export function matchesTagFilter(
     return (
       (includesNoTags && normalizedItemTags.length === 0) ||
       includedTags.some((tag) => normalizedItemTags.includes(tag))
+    );
+  }
+
+  if (normalizedMatchMode === "grouped") {
+    if (includesNoTags && normalizedItemTags.length !== 0) {
+      return false;
+    }
+
+    const groupedIncludedTags = includedTags.reduce((groups, tag) => {
+      const [topLevelGroup, ...rest] = String(tag ?? "").split("/");
+      const groupKey = rest.length ? topLevelGroup : String(tag ?? "");
+
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, []);
+      }
+
+      groups.get(groupKey).push(tag);
+      return groups;
+    }, new Map());
+
+    return [...groupedIncludedTags.values()].every((groupTags) =>
+      groupTags.some((tag) => normalizedItemTags.includes(tag))
     );
   }
 

@@ -12,19 +12,19 @@ import {
   matchesTagFilter
 } from "./taggingUx.js";
 
-test("getTagInputKeyIntent uses Enter to accept the highlighted suggestion when suggestions are open", () => {
+test("getTagInputKeyIntent keeps Enter committing the typed input even when suggestions are highlighted", () => {
   assert.deepEqual(
     getTagInputKeyIntent({
       key: "Enter",
-      inputValue: "vintage",
+      inputValue: "ig",
       suggestionsOpen: true,
-      highlightedSuggestion: "vintage american",
+      highlightedSuggestion: "ig/garment",
       isFocused: true,
       selectedTags: []
     }),
     {
-      type: "commitSuggestion",
-      value: "vintage american"
+      type: "commitInput",
+      value: "ig"
     }
   );
 });
@@ -33,15 +33,15 @@ test("getTagInputKeyIntent uses Tab to accept the highlighted suggestion", () =>
   assert.deepEqual(
     getTagInputKeyIntent({
       key: "Tab",
-      inputValue: "vin",
+      inputValue: "ig",
       suggestionsOpen: true,
-      highlightedSuggestion: "vintage american",
+      highlightedSuggestion: "ig/garment",
       isFocused: true,
       selectedTags: []
     }),
     {
       type: "commitSuggestion",
-      value: "vintage american"
+      value: "ig/garment"
     }
   );
 });
@@ -59,6 +59,23 @@ test("getTagInputKeyIntent keeps Enter committing typed input when no suggestion
     {
       type: "commitInput",
       value: "vintage"
+    }
+  );
+});
+
+test("getTagInputKeyIntent keeps comma committing the exact typed input when suggestions are open", () => {
+  assert.deepEqual(
+    getTagInputKeyIntent({
+      key: ",",
+      inputValue: "ig",
+      suggestionsOpen: true,
+      highlightedSuggestion: "ig/garment",
+      isFocused: true,
+      selectedTags: []
+    }),
+    {
+      type: "commitInput",
+      value: "ig"
     }
   );
 });
@@ -367,6 +384,36 @@ test("matchesTagFilter supports match-all and match-any include behavior", () =>
   );
 });
 
+test("matchesTagFilter supports grouped matching with OR within a top-level group and AND across groups", () => {
+  const itemTags = ["collection/aw21", "source/lookbook", "color/black"];
+
+  assert.equal(
+    matchesTagFilter(itemTags, {
+      includeTags: ["collection/aw21", "source/lookbook", "source/fit"],
+      matchMode: "grouped"
+    }),
+    true
+  );
+
+  assert.equal(
+    matchesTagFilter(itemTags, {
+      includeTags: ["collection/aw21", "source/fit", "website/editorial"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+});
+
+test("matchesTagFilter grouped mode uses the first path segment as the group key", () => {
+  assert.equal(
+    matchesTagFilter(["collection/aw21", "ig/lookbook"], {
+      includeTags: ["collection/aw21", "ig/lookbook", "website/fit"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+});
+
 test("matchesTagFilter excludes tags and can hide untagged items", () => {
   assert.equal(
     matchesTagFilter(["style/formal", "color/black"], {
@@ -388,5 +435,52 @@ test("matchesTagFilter excludes tags and can hide untagged items", () => {
       matchMode: "any"
     }),
     true
+  );
+});
+
+test("matchesTagFilter keeps exclusions stronger than grouped inclusion", () => {
+  assert.equal(
+    matchesTagFilter(["collection/aw21", "website/fit"], {
+      includeTags: ["collection/aw21", "website/fit"],
+      excludeTags: ["website/fit"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+});
+
+test("matchesTagFilter keeps parent-child matching exact even in grouped mode", () => {
+  assert.equal(
+    matchesTagFilter(["ig/garment"], {
+      includeTags: ["ig"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+
+  assert.equal(
+    matchesTagFilter(["ig/garment"], {
+      includeTags: ["ig/garment"],
+      matchMode: "grouped"
+    }),
+    true
+  );
+});
+
+test("matchesTagFilter leaves flat non-nested grouped filters behaving like exact all-groups matching", () => {
+  assert.equal(
+    matchesTagFilter(["aw21", "lookbook"], {
+      includeTags: ["aw21", "lookbook"],
+      matchMode: "grouped"
+    }),
+    true
+  );
+
+  assert.equal(
+    matchesTagFilter(["aw21"], {
+      includeTags: ["aw21", "lookbook"],
+      matchMode: "grouped"
+    }),
+    false
   );
 });
