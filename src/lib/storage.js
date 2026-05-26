@@ -1159,6 +1159,22 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
   return null;
 }
 
+export async function loadMediaIntegritySnapshot() {
+  return withStores([ITEM_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE], "readonly", async ({ items, itemMediaAssets, originalImageBlobs }) => {
+    const [itemRecords, itemMediaRecords, originalBlobRecords] = await Promise.all([
+      requestToPromise(items.getAll()),
+      requestToPromise(itemMediaAssets.getAll()),
+      requestToPromise(originalImageBlobs.getAll())
+    ]);
+
+    return {
+      items: Array.isArray(itemRecords) ? itemRecords : [],
+      itemMediaAssets: Array.isArray(itemMediaRecords) ? itemMediaRecords : [],
+      originalImageBlobs: Array.isArray(originalBlobRecords) ? originalBlobRecords : []
+    };
+  });
+}
+
 export async function loadItems(options = {}) {
   const items = await withStore(ITEM_STORE, "readonly", (store) => store.getAll());
 
