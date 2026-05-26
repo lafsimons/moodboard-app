@@ -6,6 +6,7 @@ import {
   buildNextOutfit,
   buildNextOutfitWithDebug,
   generateBoard,
+  getBoardLayoutProfile,
   getCurrentOutfitClimateChip,
   getEligibleSlotPool,
   getGuidedScoreBreakdown,
@@ -22,6 +23,7 @@ import {
   getBoardItemRenderedBounds,
   rectanglesIntersect
 } from "./boardBounds.js";
+import { getBoardFitZoom } from "./boardView.js";
 import { hasTypeDefaults, resolveTypeDefaults } from "./typeDefaults.js";
 
 const syntheticWardrobe = [
@@ -226,6 +228,34 @@ function assertNoRenderedBoundsOverlap(images, renderMetadataByReferenceId = {},
       );
     }
   }
+}
+
+function assertBoardImagesStayWithinBoard(board, renderMetadataByReferenceId = {}) {
+  for (const image of board.images) {
+    const bounds = getBoardItemRenderedBounds(image, {
+      ...(renderMetadataByReferenceId[image.referenceId] ?? {}),
+      rotation: image.rotation ?? renderMetadataByReferenceId[image.referenceId]?.rotation ?? 0
+    }).collisionRect;
+
+    assert.ok(bounds.left >= 0, `Expected ${image.id} to stay inside the board left edge, received ${bounds.left}`);
+    assert.ok(bounds.top >= 0, `Expected ${image.id} to stay inside the board top edge, received ${bounds.top}`);
+    assert.ok(bounds.right <= board.width, `Expected ${image.id} to stay inside the board right edge, received ${bounds.right}`);
+    assert.ok(bounds.bottom <= board.height, `Expected ${image.id} to stay inside the board bottom edge, received ${bounds.bottom}`);
+  }
+}
+
+function buildBoardGenerationReferences(count, overrides = {}) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `density_layout_ref_${count}_${index}`,
+    name: `Density Layout Ref ${count} ${index}`,
+    type: "T-Shirt",
+    garmentType: "Top",
+    layerType: "Inner",
+    weight: "Light",
+    styleTags: ["Casual"],
+    list: "Wardrobe",
+    ...overrides
+  }));
 }
 
 function eligiblePoolIds(slot, outfitFilters = { style: [], climate: [] }, outfit = {}, layering = true) {
@@ -1545,7 +1575,113 @@ test("generateBoard expands board footprint for higher image counts without over
   assertNoRenderedBoundsOverlap(board.images);
   assert.ok(board.width > 2400, `expected expanded board width, received ${board.width}`);
   assert.ok(board.height > 1800, `expected expanded board height, received ${board.height}`);
-  assert.ok(bounds.maxX - bounds.minX > 1600, "expected wider distributed collage footprint");
+  assert.ok(bounds.maxX - bounds.minX > 1500, "expected wider distributed collage footprint");
+});
+
+test("board layout profile smooths the 10 to 11 and 20 to 21 density transitions", () => {
+  const profile10 = getBoardLayoutProfile(10);
+  const profile11 = getBoardLayoutProfile(11);
+  const profile20 = getBoardLayoutProfile(20);
+  const profile21 = getBoardLayoutProfile(21);
+
+  assert.deepEqual(profile11, {
+    innerWidth: 2074,
+    innerHeight: 1566,
+    frameBaseWidth: 287,
+    minWidth: 175,
+    maxWidth: 330,
+    padding: 94,
+    gap: 21
+  });
+  assert.deepEqual(profile21, {
+    innerWidth: 3488,
+    innerHeight: 2704,
+    frameBaseWidth: 364,
+    minWidth: 128,
+    maxWidth: 239,
+    padding: 127,
+    gap: 26
+  });
+  assert.ok(profile11.innerWidth - profile10.innerWidth < 200);
+  assert.ok(profile11.innerHeight - profile10.innerHeight < 160);
+  assert.ok(profile21.innerWidth - profile20.innerWidth < 30);
+  assert.ok(Math.abs(profile21.innerHeight - profile20.innerHeight) < 10);
+});
+
+test("generated board density stays tighter for mobile 12 and 15 image boards", () => {
+  for (const imageCount of [12, 15]) {
+    const references = buildBoardGenerationReferences(imageCount);
+    const { board } = withSeed(80 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true }
+      })
+    );
+
+    assert.equal(board.images.length, imageCount);
+    assertNoRenderedBoundsOverlap(board.images);
+    assertBoardImagesStayWithinBoard(board);
+    assert.ok(
+      imageCount === 12 ? board.width < 2968 : board.width < 3250,
+      `expected ${imageCount}-image board width to tighten from the previous baseline`
+    );
+    assert.ok(
+      imageCount === 12 ? board.height < 2336 : board.height < 2570,
+      `expected ${imageCount}-image board height to tighten from the previous baseline`
+    );
+    assert.ok(
+      getBoardFitZoom({
+        boardWidth: board.width,
+        boardHeight: board.height,
+        viewportWidth: 390,
+        viewportHeight: 844,
+        boardImageCount: imageCount,
+        isMobileViewport: true
+      }) >= 0.12,
+      `expected ${imageCount}-image mobile board to occupy the viewport more naturally`
+    );
+  }
+});
+
+test("desktop medium-large generated boards stay denser without clipping", () => {
+  const expectedByCount = {
+    20: { width: 3720, height: 2960, minFit: 0.41, maxFit: 0.42 },
+    21: { width: 3742, height: 2958, minFit: 0.41, maxFit: 0.42 },
+    25: { width: 3830, height: 2950, minFit: 0.41, maxFit: 0.42 },
+    30: { width: 3940, height: 2940, minFit: 0.52, maxFit: 0.52 }
+  };
+
+  for (const imageCount of [20, 21, 25, 30]) {
+    const references = buildBoardGenerationReferences(imageCount);
+    const { board } = withSeed(110 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true }
+      })
+    );
+    const expected = expectedByCount[imageCount];
+    const desktopFit = getBoardFitZoom({
+      boardWidth: board.width,
+      boardHeight: board.height,
+      viewportWidth: 1440,
+      viewportHeight: 1024,
+      boardImageCount: imageCount,
+      isMobileViewport: false
+    });
+
+    assert.equal(board.images.length, imageCount);
+    assertNoRenderedBoundsOverlap(board.images);
+    assertBoardImagesStayWithinBoard(board);
+    assert.equal(board.width, expected.width);
+    assert.equal(board.height, expected.height);
+    assert.ok(desktopFit >= expected.minFit && desktopFit <= expected.maxFit);
+    if (imageCount > 20) {
+      assert.ok(board.width < { 21: 4216, 25: 4600, 30: 5080 }[imageCount]);
+      assert.ok(board.height < { 21: 3362, 25: 3690, 30: 4100 }[imageCount]);
+    }
+  }
 });
 
 test("relayoutBoardImages preserves ids and removes overlap after board updates", () => {

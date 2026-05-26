@@ -528,30 +528,114 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, parsed));
 }
 
-function getBoardLayoutBounds(imageCount = 0, layoutOptions = {}) {
+function roundProfileValue(value) {
+  return Math.round(value);
+}
+
+function interpolateValue(start, end, progress) {
+  return start + (end - start) * progress;
+}
+
+function interpolateProfile(start, end, progress) {
+  return {
+    innerWidth: roundProfileValue(interpolateValue(start.innerWidth, end.innerWidth, progress)),
+    innerHeight: roundProfileValue(interpolateValue(start.innerHeight, end.innerHeight, progress)),
+    frameBaseWidth: roundProfileValue(interpolateValue(start.frameBaseWidth, end.frameBaseWidth, progress)),
+    minWidth: roundProfileValue(interpolateValue(start.minWidth, end.minWidth, progress)),
+    maxWidth: roundProfileValue(interpolateValue(start.maxWidth, end.maxWidth, progress)),
+    padding: roundProfileValue(interpolateValue(start.padding, end.padding, progress)),
+    gap: roundProfileValue(interpolateValue(start.gap, end.gap, progress))
+  };
+}
+
+export function getBoardLayoutProfile(imageCount = 0) {
   const normalizedImageCount = Math.max(1, Math.round(Number(imageCount) || 1));
-  const derivedWidth =
-    normalizedImageCount <= 4
-      ? 1120 + normalizedImageCount * 90
-      : normalizedImageCount <= 10
-        ? 1320 + normalizedImageCount * 78
-        : normalizedImageCount <= 20
-          ? 1840 + normalizedImageCount * 94
-          : 2200 + normalizedImageCount * 96;
-  const derivedHeight =
-    normalizedImageCount <= 4
-      ? 860 + normalizedImageCount * 70
-      : normalizedImageCount <= 10
-        ? 980 + normalizedImageCount * 64
-        : normalizedImageCount <= 20
-          ? 1400 + normalizedImageCount * 78
-          : 1640 + normalizedImageCount * 82;
-  const derivedPadding = normalizedImageCount <= 10 ? 90 : normalizedImageCount <= 20 ? 128 : 130;
+  const compactProfile = {
+    frameBaseWidth: 279,
+    minWidth: 180,
+    maxWidth: 340,
+    gap: BOARD_LAYOUT_GUTTER,
+    padding: 90
+  };
+
+  if (normalizedImageCount <= 4) {
+    return {
+      innerWidth: 940 + normalizedImageCount * 90,
+      innerHeight: 680 + normalizedImageCount * 70,
+      frameBaseWidth: roundProfileValue(Math.min(420, Math.max(220, Math.min(1120 + normalizedImageCount * 90, 860 + normalizedImageCount * 70) * 0.225))),
+      minWidth: 220,
+      maxWidth: 420,
+      gap: BOARD_LAYOUT_GUTTER,
+      padding: 90
+    };
+  }
+
+  if (normalizedImageCount <= 10) {
+    return {
+      innerWidth: 1140 + normalizedImageCount * 78,
+      innerHeight: 800 + normalizedImageCount * 64,
+      ...compactProfile
+    };
+  }
+
+  const mediumAnchor = {
+    innerWidth: 3464,
+    innerHeight: 2704,
+    frameBaseWidth: 361,
+    minWidth: 128,
+    maxWidth: 240,
+    gap: BOARD_LAYOUT_GUTTER + 6,
+    padding: 128
+  };
+
+  if (normalizedImageCount <= 20) {
+    return interpolateProfile(
+      {
+        innerWidth: 1920,
+        innerHeight: 1440,
+        ...compactProfile
+      },
+      mediumAnchor,
+      (normalizedImageCount - 10) / 10
+    );
+  }
+
+  const largeAnchor = {
+    innerWidth: 3700,
+    innerHeight: 2700,
+    frameBaseWidth: 390,
+    minWidth: 124,
+    maxWidth: 232,
+    gap: BOARD_LAYOUT_GUTTER + 2,
+    padding: 120
+  };
+
+  if (normalizedImageCount <= 30) {
+    return interpolateProfile(mediumAnchor, largeAnchor, (normalizedImageCount - 20) / 10);
+  }
+
+  const overflowCount = normalizedImageCount - 30;
+
+  return {
+    innerWidth: largeAnchor.innerWidth + overflowCount * 36,
+    innerHeight: largeAnchor.innerHeight + overflowCount * 28,
+    frameBaseWidth: largeAnchor.frameBaseWidth + overflowCount * 4,
+    minWidth: largeAnchor.minWidth,
+    maxWidth: largeAnchor.maxWidth + overflowCount * 2,
+    gap: largeAnchor.gap,
+    padding: largeAnchor.padding
+  };
+}
+
+function getBoardLayoutBounds(imageCount = 0, layoutOptions = {}) {
+  const profile = getBoardLayoutProfile(imageCount);
+  const derivedWidth = profile.innerWidth + profile.padding * 2;
+  const derivedHeight = profile.innerHeight + profile.padding * 2;
 
   return {
     width: clampNumber(layoutOptions.width, 900, 5400, derivedWidth),
     height: clampNumber(layoutOptions.height, 700, 4600, derivedHeight),
-    padding: clampNumber(layoutOptions.padding, 0, 260, derivedPadding)
+    padding: clampNumber(layoutOptions.padding, 0, 260, profile.padding)
   };
 }
 
@@ -593,42 +677,6 @@ function framesOverlapWithGap(frame, otherFrame, gap = 0) {
   );
 }
 
-function getBoardSizeProfile(imageCount) {
-  if (imageCount <= 4) {
-    return {
-      widthScale: 0.225,
-      minWidth: 220,
-      maxWidth: 420,
-      gap: BOARD_LAYOUT_GUTTER
-    };
-  }
-
-  if (imageCount <= 10) {
-    return {
-      widthScale: 0.172,
-      minWidth: 180,
-      maxWidth: 340,
-      gap: BOARD_LAYOUT_GUTTER
-    };
-  }
-
-  if (imageCount <= 20) {
-    return {
-      widthScale: 0.122,
-      minWidth: 128,
-      maxWidth: 240,
-      gap: BOARD_LAYOUT_GUTTER + 6
-    };
-  }
-
-  return {
-    widthScale: 0.112,
-    minWidth: 124,
-    maxWidth: 232,
-    gap: BOARD_LAYOUT_GUTTER
-  };
-}
-
 function clampFrameToBounds(frame, bounds) {
   return {
     ...frame,
@@ -638,8 +686,8 @@ function clampFrameToBounds(frame, bounds) {
 }
 
 function createBoardFrameTemplates(imageCount, width, height, aspectRatios, sizeMultipliers, rotations = []) {
-  const profile = getBoardSizeProfile(imageCount);
-  const baseWidth = Math.round(Math.min(width, height) * profile.widthScale);
+  const profile = getBoardLayoutProfile(imageCount);
+  const baseWidth = profile.frameBaseWidth;
 
   return Array.from({ length: imageCount }, (_, index) => {
     const sizeMultiplier = Math.max(0.8, Math.min(1.3, Number(sizeMultipliers[index]) || 1));
@@ -921,6 +969,7 @@ function createMasonryBoardFrames(templates, bounds, gap, renderMetadataList) {
 }
 
 function createRandomBoardFrames(imageCount, layoutOptions = {}) {
+  const profile = getBoardLayoutProfile(imageCount);
   const { width: baseWidth, height: baseHeight, padding } = getBoardLayoutBounds(imageCount, layoutOptions);
   const aspectRatios = Array.isArray(layoutOptions.aspectRatios) ? layoutOptions.aspectRatios : [];
   const sizeMultipliers = Array.isArray(layoutOptions.sizeMultipliers) ? layoutOptions.sizeMultipliers : [];
@@ -936,7 +985,7 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
 
   const templates = createBoardFrameTemplates(imageCount, baseWidth, baseHeight, aspectRatios, sizeMultipliers, rotations)
     .sort((left, right) => right.height * right.width - left.height * left.width);
-  const baseGap = getBoardSizeProfile(imageCount).gap;
+  const baseGap = profile.gap;
   let workingWidth = baseWidth;
   let workingHeight = baseHeight;
   let frames = null;
