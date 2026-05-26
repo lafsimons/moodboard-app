@@ -1,5 +1,6 @@
 import defaultWardrobe from "../data/defaultWardrobe.js";
 import defaultAppState from "../data/defaultAppState.js";
+import { normalizeLibraryProvenance } from "./appStateModel.js";
 import {
   BACKUP_SOURCE,
   INDEXED_DB_NAME,
@@ -125,6 +126,7 @@ function sanitizePersistedAppState(value = {}) {
     ...value,
     itemDefaultsMigrationVersion: Math.max(0, Math.round(Number(value.itemDefaultsMigrationVersion) || 0)),
     imagePresentationMigrationVersion: Math.max(0, Math.round(Number(value.imagePresentationMigrationVersion) || 0)),
+    provenance: normalizeLibraryProvenance(value.provenance),
     outfit: sanitizePersistedOutfit(value.outfit),
     board: sanitizePersistedBoard(value.board),
     savedOutfits: (Array.isArray(value.savedOutfits) ? value.savedOutfits : [])
@@ -1626,6 +1628,7 @@ function normalizeBackupAppState(appState) {
 
   return {
     ...sanitizedAppState,
+    provenance: normalizeLibraryProvenance(sanitizedAppState.provenance),
     ...(normalizedBoard === undefined ? {} : { board: normalizedBoard }),
     savedOutfits: Array.isArray(sanitizedAppState.savedOutfits)
       ? sanitizedAppState.savedOutfits.map(ensureSavedBoardUuid)
