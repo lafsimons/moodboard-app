@@ -22,10 +22,12 @@ import {
 } from "./generation.js";
 import {
   getBoardItemRenderedBounds,
+  buildBoardRenderMetadata,
   rectanglesIntersect
 } from "./boardBounds.js";
 import { getBoardFitZoom } from "./boardView.js";
 import { hasTypeDefaults, resolveTypeDefaults } from "./typeDefaults.js";
+import defaultWardrobe from "../data/defaultWardrobe.js";
 
 const syntheticWardrobe = [
   { id: "head_cap", type: "Cap", garmentType: "Headwear", layerType: "Both", weight: "Light", styleTags: ["Casual"] },
@@ -257,6 +259,33 @@ function buildBoardGenerationReferences(count, overrides = {}) {
     list: "Wardrobe",
     ...overrides
   }));
+}
+
+const defaultWardrobeBoardReferences = defaultWardrobe.filter((item) => item?.id);
+
+function buildPhonePortraitStressFixtures(count) {
+  const references = defaultWardrobeBoardReferences.slice(0, count);
+  const aspectRatiosByReferenceId = {};
+  const sizeMultipliersByReferenceId = {};
+  const renderMetadataByReferenceId = {};
+
+  references.forEach((item, index) => {
+    const renderMetadata = buildBoardRenderMetadata(item);
+    aspectRatiosByReferenceId[item.id] = renderMetadata.aspectRatio;
+    sizeMultipliersByReferenceId[item.id] = renderMetadata.sizeMultiplier;
+    renderMetadataByReferenceId[item.id] = renderMetadata;
+  });
+
+  return {
+    boardImages: references.map((item, index) => ({
+      id: `phone_portrait_stress_${count}_${index}`,
+      referenceId: item.id,
+      generationSlot: `StressSlot${index}`
+    })),
+    aspectRatiosByReferenceId,
+    sizeMultipliersByReferenceId,
+    renderMetadataByReferenceId
+  };
 }
 
 function eligiblePoolIds(slot, outfitFilters = { style: [], climate: [] }, outfit = {}, layering = true) {
@@ -1617,11 +1646,18 @@ test("board layout viewport class detects phone portrait separately from tablet 
 });
 
 test("phone portrait board profile is narrower and no smaller in frame size for 12 15 and 21 images", () => {
+  const previousPhoneInnerWidths = {
+    12: 2131,
+    15: 2396,
+    21: 2682
+  };
+
   for (const imageCount of [12, 15, 21]) {
     const defaultProfile = getBoardLayoutProfile(imageCount);
     const phoneProfile = getBoardLayoutProfile(imageCount, { viewportClass: "phonePortrait" });
 
     assert.ok(phoneProfile.innerWidth < defaultProfile.innerWidth);
+    assert.ok(phoneProfile.innerWidth < previousPhoneInnerWidths[imageCount]);
     assert.ok(phoneProfile.frameBaseWidth >= defaultProfile.frameBaseWidth);
   }
 
@@ -1629,6 +1665,19 @@ test("phone portrait board profile is narrower and no smaller in frame size for 
     getBoardLayoutProfile(15),
     getBoardLayoutProfile(15, { viewportClass: "default" })
   );
+});
+
+test("phone portrait profile keeps a localized relief band around 16 images", () => {
+  const profile15 = getBoardLayoutProfile(15, { viewportClass: "phonePortrait" });
+  const profile16 = getBoardLayoutProfile(16, { viewportClass: "phonePortrait" });
+  const profile18 = getBoardLayoutProfile(18, { viewportClass: "phonePortrait" });
+  const default16 = getBoardLayoutProfile(16);
+
+  assert.ok(profile16.innerWidth > profile15.innerWidth, "expected 16-image phone portrait profile to open extra width for solver relief");
+  assert.ok(profile16.innerWidth < default16.innerWidth, "expected 16-image phone portrait profile to stay denser than default");
+  assert.ok(profile16.innerHeight >= profile15.innerHeight, "expected 16-image phone portrait profile to allow at least as much vertical space");
+  assert.ok(profile16.frameBaseWidth >= default16.frameBaseWidth, "expected 16-image phone portrait profile to keep readable frames");
+  assert.ok(profile18.innerWidth >= profile16.innerWidth - 160, "expected relief band to taper rather than collapse");
 });
 
 test("generated board density stays tighter for mobile 12 and 15 image boards", () => {
@@ -1668,6 +1717,12 @@ test("generated board density stays tighter for mobile 12 and 15 image boards", 
 });
 
 test("phone portrait generated boards use a denser narrower profile than default while desktop and tablet stay unchanged", () => {
+  const phoneBoundsTargets = {
+    12: { maxWidth: 2100, minFit: 0.18 },
+    15: { maxWidth: 2250, minFit: 0.16 },
+    21: { maxWidth: 2100, minFit: 0.21 }
+  };
+
   for (const imageCount of [12, 15, 21]) {
     const references = buildBoardGenerationReferences(imageCount);
     const defaultBoard = withSeed(210 + imageCount, () =>
@@ -1690,24 +1745,28 @@ test("phone portrait generated boards use a denser narrower profile than default
     assertBoardImagesStayWithinBoard(phoneBoard);
     assert.ok(phoneBoard.width < defaultBoard.width, `expected ${imageCount}-image phone portrait board to be narrower`);
     assert.ok(phoneBoard.height <= defaultBoard.height * 1.1, `expected ${imageCount}-image phone portrait board height to stay controlled`);
-    assert.ok(
-      getBoardFitZoom({
-        boardWidth: phoneBoard.width,
-        boardHeight: phoneBoard.height,
-        viewportWidth: 390,
-        viewportHeight: 844,
-        boardImageCount: imageCount,
-        isMobileViewport: true
-      }) >= getBoardFitZoom({
-        boardWidth: defaultBoard.width,
-        boardHeight: defaultBoard.height,
-        viewportWidth: 390,
-        viewportHeight: 844,
-        boardImageCount: imageCount,
-        isMobileViewport: true
-      }),
-      `expected ${imageCount}-image phone portrait board to fit at least as closely as the default profile`
-    );
+    const phoneFit = getBoardFitZoom({
+      boardWidth: phoneBoard.width,
+      boardHeight: phoneBoard.height,
+      viewportWidth: 390,
+      viewportHeight: 844,
+      boardImageCount: imageCount,
+      isMobileViewport: true
+    });
+    const defaultFit = getBoardFitZoom({
+      boardWidth: defaultBoard.width,
+      boardHeight: defaultBoard.height,
+      viewportWidth: 390,
+      viewportHeight: 844,
+      boardImageCount: imageCount,
+      isMobileViewport: true
+    });
+
+    assert.ok(phoneBoard.width < defaultBoard.width, `expected ${imageCount}-image phone portrait board to be narrower`);
+    assert.ok(phoneBoard.width < phoneBoundsTargets[imageCount].maxWidth, `expected ${imageCount}-image phone portrait board width to tighten materially`);
+    assert.ok(phoneBoard.height <= defaultBoard.height * 1.1, `expected ${imageCount}-image phone portrait board height to stay controlled`);
+    assert.ok(phoneFit > defaultFit, `expected ${imageCount}-image phone portrait board fit to improve`);
+    assert.ok(phoneFit >= phoneBoundsTargets[imageCount].minFit, `expected ${imageCount}-image phone portrait fit to improve materially`);
   }
 
   for (const imageCount of [12, 15, 21]) {
@@ -1723,6 +1782,88 @@ test("phone portrait generated boards use a denser narrower profile than default
 
     assert.deepEqual(tabletProfile, defaultProfile);
     assert.deepEqual(desktopProfile, defaultProfile);
+  }
+});
+
+test("phone portrait relayout stays reliable for 12 15 16 18 21 and 30 images with heterogeneous metadata", () => {
+  const expectedPhoneFitByCount = {
+    12: 0.17,
+    15: 0.16,
+    16: 0.19,
+    18: 0.2,
+    21: 0.21,
+    30: 0.21
+  };
+  const expectedPhoneWidthByCount = {
+    12: 2050,
+    15: 2250,
+    16: 2300,
+    18: 2200,
+    21: 2100,
+    30: 2100
+  };
+
+  for (const imageCount of [12, 15, 16, 18, 21, 30]) {
+    const fixtures = buildPhonePortraitStressFixtures(imageCount);
+    const fits = [];
+    const widths = [];
+    let deterministicFallbackCount = 0;
+    let emergencyFallbackCount = 0;
+    let totalRuntimeMs = 0;
+
+    for (let seed = 0; seed < 30; seed += 1) {
+      const layoutDebug = {};
+      const startedAt = Date.now();
+      const relaidBoard = withSeed(7000 + imageCount * 100 + seed, () =>
+        relayoutBoardImages(fixtures.boardImages, {
+          viewportClass: "phonePortrait",
+          layoutDebug,
+          aspectRatiosByReferenceId: fixtures.aspectRatiosByReferenceId,
+          sizeMultipliersByReferenceId: fixtures.sizeMultipliersByReferenceId,
+          renderMetadataByReferenceId: fixtures.renderMetadataByReferenceId
+        })
+      );
+      totalRuntimeMs += Date.now() - startedAt;
+
+      assert.equal(relaidBoard.images.length, imageCount);
+      assertNoRenderedBoundsOverlap(relaidBoard.images, fixtures.renderMetadataByReferenceId);
+      assertBoardImagesStayWithinBoard(relaidBoard, fixtures.renderMetadataByReferenceId);
+      if (layoutDebug.usedDeterministicPortraitFallback) {
+        deterministicFallbackCount += 1;
+      }
+      if (layoutDebug.usedEmergencyFallback) {
+        emergencyFallbackCount += 1;
+      }
+      widths.push(relaidBoard.width);
+      fits.push(
+        getBoardFitZoom({
+          boardWidth: relaidBoard.width,
+          boardHeight: relaidBoard.height,
+          viewportWidth: 390,
+          viewportHeight: 844,
+          boardImageCount: imageCount,
+          isMobileViewport: true
+        })
+      );
+    }
+
+    assert.ok(
+      Math.max(...widths) <= expectedPhoneWidthByCount[imageCount],
+      `expected ${imageCount}-image phone portrait boards to stay visually dense while generating reliably`
+    );
+    assert.ok(
+      Math.min(...fits) >= expectedPhoneFitByCount[imageCount],
+      `expected ${imageCount}-image phone portrait boards to keep fitting naturally after the reliability fix`
+    );
+    assert.equal(emergencyFallbackCount, 0, `expected ${imageCount}-image phone portrait boards to avoid the emergency stack fallback`);
+
+    if (imageCount === 16) {
+      assert.equal(deterministicFallbackCount, 0, "expected 16-image phone portrait boards to stay on the normal collage path");
+    }
+
+    if (imageCount === 30) {
+      assert.ok(totalRuntimeMs / 30 <= 12, "expected 30-image phone portrait generation to remain responsive");
+    }
   }
 });
 

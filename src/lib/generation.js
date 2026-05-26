@@ -579,40 +579,46 @@ function applyPhonePortraitLayoutProfile(baseProfile, imageCount) {
     return baseProfile;
   }
 
-  const progress =
-    normalizedImageCount <= 20
-      ? (normalizedImageCount - 10) / 10
-      : normalizedImageCount <= 30
-        ? 1 + (normalizedImageCount - 20) / 10
-        : 2;
-  const innerWidthMultiplier = progress <= 1
-    ? interpolateValue(1, 0.78, progress)
-    : interpolateValue(0.78, 0.67, progress - 1);
-  const innerHeightMultiplier = progress <= 1
-    ? interpolateValue(1, 1.04, progress)
-    : interpolateValue(1.04, 1.08, progress - 1);
-  const frameBaseWidthMultiplier = progress <= 1
-    ? interpolateValue(1, 1.03, progress)
-    : interpolateValue(1.03, 1.04, progress - 1);
-  const minWidthMultiplier = progress <= 1
-    ? interpolateValue(1, 1.03, progress)
-    : interpolateValue(1.03, 1.04, progress - 1);
-  const maxWidthMultiplier = progress <= 1
-    ? interpolateValue(1, 1.03, progress)
-    : interpolateValue(1.03, 1.04, progress - 1);
-  const paddingOffset = progress <= 1
-    ? interpolateValue(0, -8, progress)
-    : interpolateValue(-8, -10, progress - 1);
-  const gapOffset = progress <= 1
-    ? interpolateValue(0, -1, progress)
-    : interpolateValue(-1, -2, progress - 1);
+  const compactProgress = Math.pow(Math.min(1, Math.max(0, (normalizedImageCount - 10) / 10)), 0.6);
+  const expandedProgress = normalizedImageCount <= 20
+    ? 0
+    : Math.sqrt(Math.min(1, Math.max(0, (normalizedImageCount - 20) / 10)));
+  const innerWidthMultiplier = normalizedImageCount <= 20
+    ? interpolateValue(1, 0.53, compactProgress)
+    : interpolateValue(0.53, 0.5, expandedProgress);
+  const innerHeightMultiplier = normalizedImageCount <= 20
+    ? interpolateValue(1, 1.045, compactProgress)
+    : interpolateValue(1.045, 1.065, expandedProgress);
+  const frameBaseWidthMultiplier = normalizedImageCount <= 20
+    ? interpolateValue(1, 1.06, compactProgress)
+    : interpolateValue(1.06, 1.07, expandedProgress);
+  const minWidthMultiplier = normalizedImageCount <= 20
+    ? interpolateValue(1, 1.05, compactProgress)
+    : interpolateValue(1.05, 1.06, expandedProgress);
+  const maxWidthMultiplier = normalizedImageCount <= 20
+    ? interpolateValue(1, 1.06, compactProgress)
+    : interpolateValue(1.06, 1.07, expandedProgress);
+  const paddingOffset = normalizedImageCount <= 20
+    ? interpolateValue(0, -8, compactProgress)
+    : interpolateValue(-8, -9, expandedProgress);
+  const gapOffset = normalizedImageCount <= 20
+    ? interpolateValue(0, -1, compactProgress)
+    : interpolateValue(-1, -1.5, expandedProgress);
+  const congestionRelief = normalizedImageCount <= 20
+    ? Math.max(0, 1 - Math.abs(normalizedImageCount - 16) / 3.5)
+    : 0;
+  const relievedInnerWidthMultiplier = innerWidthMultiplier + congestionRelief * 0.075;
+  const relievedInnerHeightMultiplier = innerHeightMultiplier + congestionRelief * 0.02;
+  const relievedFrameBaseWidthMultiplier = frameBaseWidthMultiplier - congestionRelief * 0.01;
+  const relievedMinWidthMultiplier = minWidthMultiplier - congestionRelief * 0.008;
+  const relievedMaxWidthMultiplier = maxWidthMultiplier - congestionRelief * 0.01;
 
   return {
-    innerWidth: clampBoardLayoutMetric(baseProfile.innerWidth * innerWidthMultiplier),
-    innerHeight: clampBoardLayoutMetric(baseProfile.innerHeight * innerHeightMultiplier),
-    frameBaseWidth: clampBoardLayoutMetric(baseProfile.frameBaseWidth * frameBaseWidthMultiplier),
-    minWidth: clampBoardLayoutMetric(baseProfile.minWidth * minWidthMultiplier),
-    maxWidth: clampBoardLayoutMetric(baseProfile.maxWidth * maxWidthMultiplier),
+    innerWidth: clampBoardLayoutMetric(baseProfile.innerWidth * relievedInnerWidthMultiplier),
+    innerHeight: clampBoardLayoutMetric(baseProfile.innerHeight * relievedInnerHeightMultiplier),
+    frameBaseWidth: clampBoardLayoutMetric(baseProfile.frameBaseWidth * relievedFrameBaseWidthMultiplier),
+    minWidth: clampBoardLayoutMetric(baseProfile.minWidth * relievedMinWidthMultiplier),
+    maxWidth: clampBoardLayoutMetric(baseProfile.maxWidth * relievedMaxWidthMultiplier),
     padding: clampBoardLayoutMetric(baseProfile.padding + paddingOffset),
     gap: clampBoardLayoutMetric(baseProfile.gap + gapOffset)
   };
@@ -844,6 +850,52 @@ function framesOverlapByRenderedBounds(frame, otherFrame, renderMetadata, otherR
   );
 }
 
+function updateBoardLayoutDebug(layoutOptions, patch = {}) {
+  if (!layoutOptions || typeof layoutOptions !== "object") {
+    return;
+  }
+
+  const target = layoutOptions.layoutDebug;
+
+  if (!target || typeof target !== "object") {
+    return;
+  }
+
+  Object.assign(target, patch);
+}
+
+function getBoardLayoutSolverSettings(layoutOptions = {}) {
+  if (normalizeBoardLayoutViewportClass(layoutOptions?.viewportClass) === "phonePortrait") {
+    return {
+      randomAttemptCount: 230,
+      compactAttemptCount: 95,
+      mediumAttemptCount: 165,
+      compactRadiusScale: 0.74,
+      mediumRadiusScale: 0.88,
+      wideRadiusScale: 1,
+      searchStepScale: 0.72,
+      searchMinStep: 12,
+      maxExpansionSteps: 12,
+      widthExpansionFactor: 1.14,
+      heightExpansionFactor: 1.14
+    };
+  }
+
+  return {
+    randomAttemptCount: 220,
+    compactAttemptCount: 120,
+    mediumAttemptCount: 180,
+    compactRadiusScale: 0.72,
+    mediumRadiusScale: 0.9,
+    wideRadiusScale: 1,
+    searchStepScale: 0.8,
+    searchMinStep: 16,
+    maxExpansionSteps: 12,
+    widthExpansionFactor: 1.16,
+    heightExpansionFactor: 1.16
+  };
+}
+
 function getCandidatePlacementScore(candidate, placedFrames, renderMetadata, placedRenderMetadataList) {
   const collisionRect = getRenderedCollisionRect(candidate, renderMetadata);
   const candidateCenterX = collisionRect.left + collisionRect.width / 2;
@@ -863,7 +915,7 @@ function getCandidatePlacementScore(candidate, placedFrames, renderMetadata, pla
   return centerDistance + nearestNeighborDistance * 0.42;
 }
 
-function placeBoardFramesRandomly(templates, bounds, gap, renderMetadataList) {
+function placeBoardFramesRandomly(templates, bounds, gap, renderMetadataList, solverSettings = getBoardLayoutSolverSettings()) {
   const placedFrames = [];
 
   for (const template of templates) {
@@ -871,8 +923,12 @@ function placeBoardFramesRandomly(templates, bounds, gap, renderMetadataList) {
     let bestCandidate = null;
     let bestScore = Number.POSITIVE_INFINITY;
 
-    for (let attempt = 0; attempt < 220; attempt += 1) {
-      const radiusScale = attempt < 120 ? 0.72 : attempt < 180 ? 0.9 : 1;
+    for (let attempt = 0; attempt < solverSettings.randomAttemptCount; attempt += 1) {
+      const radiusScale = attempt < solverSettings.compactAttemptCount
+        ? solverSettings.compactRadiusScale
+        : attempt < solverSettings.mediumAttemptCount
+          ? solverSettings.mediumRadiusScale
+          : solverSettings.wideRadiusScale;
       const candidate = createPlacementCandidate(template, bounds, radiusScale);
 
       if (!collisionRectFitsBounds(candidate, bounds, renderMetadata)) {
@@ -905,9 +961,9 @@ function placeBoardFramesRandomly(templates, bounds, gap, renderMetadataList) {
   return placedFrames;
 }
 
-function findNextFreePosition(template, bounds, gap, placedFrames, renderMetadataList) {
+function findNextFreePosition(template, bounds, gap, placedFrames, renderMetadataList, solverSettings = getBoardLayoutSolverSettings()) {
   const renderMetadata = getTemplateRenderMetadata(template, renderMetadataList);
-  const step = Math.max(16, Math.round(gap * 0.8));
+  const step = Math.max(solverSettings.searchMinStep, Math.round(gap * solverSettings.searchStepScale));
   const collisionRectAtOrigin = getRenderedCollisionRect(
     {
       x: 0,
@@ -949,7 +1005,7 @@ function findNextFreePosition(template, bounds, gap, placedFrames, renderMetadat
   return null;
 }
 
-function resolveBoardCollisions(frames, bounds, gap, renderMetadataList) {
+function resolveBoardCollisions(frames, bounds, gap, renderMetadataList, solverSettings = getBoardLayoutSolverSettings()) {
   const resolvedFrames = [];
 
   for (const frame of frames) {
@@ -962,7 +1018,7 @@ function resolveBoardCollisions(frames, bounds, gap, renderMetadataList) {
         framesOverlapByRenderedBounds(nextFrame, placedFrame, renderMetadata, renderMetadataList[placedFrame.index], gap)
       )
     ) {
-      nextFrame = findNextFreePosition(frame, bounds, gap, resolvedFrames, renderMetadataList);
+      nextFrame = findNextFreePosition(frame, bounds, gap, resolvedFrames, renderMetadataList, solverSettings);
     }
 
     if (!nextFrame) {
@@ -1048,8 +1104,127 @@ function createMasonryBoardFrames(templates, bounds, gap, renderMetadataList) {
   return frames;
 }
 
+function createPhonePortraitDeterministicFrames(templates, usableWidth, gap, renderMetadataList) {
+  const safeUsableWidth = Math.max(1, usableWidth);
+  const collisionRectsAtOrigin = templates.map((template) =>
+    getRenderedCollisionRect(
+      {
+        x: 0,
+        y: 0,
+        width: template.width,
+        height: template.height,
+        rotation: template.rotation
+      },
+      getTemplateRenderMetadata(template, renderMetadataList)
+    )
+  );
+  const maxCollisionWidth = Math.max(1, ...collisionRectsAtOrigin.map((collisionRect) => collisionRect.width));
+  const maxColumnCount = Math.max(1, Math.floor((safeUsableWidth + gap + 2) / (maxCollisionWidth + gap + 2)));
+  const preferredColumnCount = templates.length >= 24 ? 4 : templates.length >= 16 ? 3 : 2;
+  const columnCount = Math.max(1, Math.min(preferredColumnCount, maxColumnCount));
+  const columnPitch = columnCount > 1 ? maxCollisionWidth + gap + 2 : 0;
+  const columnCenters = Array.from(
+    { length: columnCount },
+    (_, index) => -((columnCount - 1) * columnPitch) / 2 + index * columnPitch
+  );
+  const columnHeights = Array.from({ length: columnCount }, () => 0);
+
+  return templates.map((template, index) => {
+    const collisionAtOrigin = collisionRectsAtOrigin[index];
+    const targetColumn = columnHeights.indexOf(Math.min(...columnHeights));
+    const collisionLeft = columnCenters[targetColumn] - collisionAtOrigin.width / 2;
+    const frameX = collisionLeft - collisionAtOrigin.left;
+    const frameY = columnHeights[targetColumn] - collisionAtOrigin.top;
+    const frame = {
+      ...template,
+      x: frameX,
+      y: frameY,
+      zIndex: template.index + 1
+    };
+    const collisionRect = getRenderedCollisionRect(frame, getTemplateRenderMetadata(template, renderMetadataList));
+
+    columnHeights[targetColumn] = collisionRect.bottom + gap + 1;
+    return frame;
+  });
+}
+
+function createPhonePortraitEmergencyStackFrames(templates, usableWidth, gap, renderMetadataList) {
+  const safeUsableWidth = Math.max(1, usableWidth);
+  let currentTop = 0;
+
+  return templates.map((template) => {
+    const collisionAtOrigin = getRenderedCollisionRect(
+      {
+        x: 0,
+        y: 0,
+        width: template.width,
+        height: template.height,
+        rotation: template.rotation
+      },
+      getTemplateRenderMetadata(template, renderMetadataList)
+    );
+    const collisionLeft = -Math.min(collisionAtOrigin.width, safeUsableWidth) / 2;
+    const frameX = collisionLeft - collisionAtOrigin.left;
+    const frameY = currentTop - collisionAtOrigin.top;
+    const frame = {
+      ...template,
+      x: frameX,
+      y: frameY,
+      zIndex: template.index + 1
+    };
+    const collisionRect = getRenderedCollisionRect(frame, getTemplateRenderMetadata(template, renderMetadataList));
+
+    currentTop = collisionRect.bottom + gap + 1;
+    return frame;
+  });
+}
+
+function finalizeBoardFrames(frames, {
+  baseWidth,
+  baseHeight,
+  workingWidth,
+  workingHeight,
+  padding,
+  renderMetadataList,
+  roundPositions = false
+}) {
+  const bounds = frames.reduce(
+    (current, frame) => ({
+      minX: Math.min(current.minX, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).left),
+      minY: Math.min(current.minY, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).top),
+      maxX: Math.max(current.maxX, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).right),
+      maxY: Math.max(current.maxY, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).bottom)
+    }),
+    {
+      minX: Number.POSITIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY
+    }
+  );
+  const requiredWidth = Math.max(baseWidth, Math.ceil(bounds.maxX - bounds.minX + padding * 2));
+  const requiredHeight = Math.max(baseHeight, Math.ceil(bounds.maxY - bounds.minY + padding * 2));
+  const finalWidth = Math.max(requiredWidth, workingWidth);
+  const finalHeight = Math.max(requiredHeight, workingHeight);
+  const offsetX = finalWidth / 2 - (bounds.minX + bounds.maxX) / 2;
+  const offsetY = finalHeight / 2 - (bounds.minY + bounds.maxY) / 2;
+  const finalizedFrames = frames.map((frame) => ({
+    ...frame,
+    x: roundPositions ? Math.round((frame.x + offsetX) * 1000) / 1000 : frame.x + offsetX,
+    y: roundPositions ? Math.round((frame.y + offsetY) * 1000) / 1000 : frame.y + offsetY
+  }));
+
+  return {
+    width: finalWidth,
+    height: finalHeight,
+    frames: finalizedFrames
+  };
+}
+
 function createRandomBoardFrames(imageCount, layoutOptions = {}) {
   const profile = getBoardLayoutProfile(imageCount, layoutOptions);
+  const solverSettings = getBoardLayoutSolverSettings(layoutOptions);
+  const isPhonePortrait = normalizeBoardLayoutViewportClass(layoutOptions?.viewportClass) === "phonePortrait";
   const { width: baseWidth, height: baseHeight, padding } = getBoardLayoutBounds(imageCount, layoutOptions);
   const aspectRatios = Array.isArray(layoutOptions.aspectRatios) ? layoutOptions.aspectRatios : [];
   const sizeMultipliers = Array.isArray(layoutOptions.sizeMultipliers) ? layoutOptions.sizeMultipliers : [];
@@ -1077,8 +1252,26 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
   let workingWidth = baseWidth;
   let workingHeight = baseHeight;
   let frames = null;
+  let usedEmergencyFallback = false;
 
-  for (let expansionStep = 0; expansionStep < 12; expansionStep += 1) {
+  updateBoardLayoutDebug(layoutOptions, {
+    viewportClass: normalizeBoardLayoutViewportClass(layoutOptions?.viewportClass),
+    usedEmergencyFallback: false,
+    usedDeterministicPortraitFallback: false,
+    placementStrategy: null,
+    primaryPlacementStrategy: null,
+    fallbackReason: null,
+    expansionStepsTried: 0,
+    boardWidth: baseWidth,
+    boardHeight: baseHeight
+  });
+
+  for (let expansionStep = 0; expansionStep < solverSettings.maxExpansionSteps; expansionStep += 1) {
+    updateBoardLayoutDebug(layoutOptions, {
+      expansionStepsTried: expansionStep + 1,
+      boardWidth: workingWidth,
+      boardHeight: workingHeight
+    });
     const bounds = {
       minX: -workingWidth / 2 + padding,
       maxX: workingWidth / 2 - padding,
@@ -1086,67 +1279,126 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
       maxY: workingHeight / 2 - padding
     };
     const expandedGap = baseGap;
-    const placedFrames = placeBoardFramesRandomly(templates, bounds, expandedGap, renderMetadataList);
+    const placedFrames = placeBoardFramesRandomly(templates, bounds, expandedGap, renderMetadataList, solverSettings);
     const resolvedFrames = placedFrames
-      ? resolveBoardCollisions(placedFrames, bounds, expandedGap, renderMetadataList)
+      ? resolveBoardCollisions(placedFrames, bounds, expandedGap, renderMetadataList, solverSettings)
       : null;
 
     if (resolvedFrames && !hasAnyRenderedOverlap(resolvedFrames, expandedGap, renderMetadataList)) {
       frames = resolvedFrames.sort((left, right) => left.zIndex - right.zIndex);
+      updateBoardLayoutDebug(layoutOptions, {
+        placementStrategy: "random",
+        primaryPlacementStrategy: "random"
+      });
       break;
     }
 
     const masonryFrames = createMasonryBoardFrames(templates, bounds, expandedGap, renderMetadataList);
-    const resolvedMasonryFrames = resolveBoardCollisions(masonryFrames, bounds, expandedGap, renderMetadataList);
+    const resolvedMasonryFrames = resolveBoardCollisions(masonryFrames, bounds, expandedGap, renderMetadataList, solverSettings);
 
     if (resolvedMasonryFrames && !hasAnyRenderedOverlap(resolvedMasonryFrames, expandedGap, renderMetadataList)) {
       frames = resolvedMasonryFrames.sort((left, right) => left.zIndex - right.zIndex);
+      updateBoardLayoutDebug(layoutOptions, {
+        placementStrategy: "masonry",
+        primaryPlacementStrategy: "masonry"
+      });
       break;
     }
 
-    workingWidth = Math.round(workingWidth * 1.16);
-    workingHeight = Math.round(workingHeight * 1.16);
+    workingWidth = Math.round(workingWidth * solverSettings.widthExpansionFactor);
+    workingHeight = Math.round(workingHeight * solverSettings.heightExpansionFactor);
+  }
+
+  if (!frames && isPhonePortrait) {
+    frames = createPhonePortraitDeterministicFrames(
+      templates,
+      Math.max(baseWidth, workingWidth) - padding * 2,
+      baseGap,
+      renderMetadataList
+    ).sort((left, right) => left.zIndex - right.zIndex);
+    updateBoardLayoutDebug(layoutOptions, {
+      usedDeterministicPortraitFallback: true,
+      placementStrategy: "phonePortraitDeterministic",
+      fallbackReason: "noSolution"
+    });
   }
 
   if (!frames) {
     throw new Error("Board layout could not be generated without overlaps.");
   }
 
-  const bounds = frames.reduce(
-    (current, frame) => ({
-      minX: Math.min(current.minX, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).left),
-      minY: Math.min(current.minY, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).top),
-      maxX: Math.max(current.maxX, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).right),
-      maxY: Math.max(current.maxY, getRenderedCollisionRect(frame, renderMetadataList[frame.index]).bottom)
-    }),
-    {
-      minX: Number.POSITIVE_INFINITY,
-      minY: Number.POSITIVE_INFINITY,
-      maxX: Number.NEGATIVE_INFINITY,
-      maxY: Number.NEGATIVE_INFINITY
-    }
-  );
-  const requiredWidth = Math.max(baseWidth, Math.ceil(bounds.maxX - bounds.minX + padding * 2));
-  const requiredHeight = Math.max(baseHeight, Math.ceil(bounds.maxY - bounds.minY + padding * 2));
-  const finalWidth = Math.max(requiredWidth, workingWidth);
-  const finalHeight = Math.max(requiredHeight, workingHeight);
-  const offsetX = finalWidth / 2 - (bounds.minX + bounds.maxX) / 2;
-  const offsetY = finalHeight / 2 - (bounds.minY + bounds.maxY) / 2;
-
-  frames.forEach((frame) => {
-    frame.x += offsetX;
-    frame.y += offsetY;
+  let finalizedBoard = finalizeBoardFrames(frames, {
+    baseWidth,
+    baseHeight,
+    workingWidth,
+    workingHeight,
+    padding,
+    renderMetadataList,
+    roundPositions: isPhonePortrait
   });
 
-  if (hasAnyRenderedOverlap(frames, baseGap, renderMetadataList)) {
+  if (hasAnyRenderedOverlap(finalizedBoard.frames, baseGap, renderMetadataList) && isPhonePortrait) {
+    const fallbackFrames = createPhonePortraitDeterministicFrames(
+      templates,
+      Math.max(baseWidth, workingWidth) - padding * 2,
+      baseGap,
+      renderMetadataList
+    );
+
+    finalizedBoard = finalizeBoardFrames(fallbackFrames, {
+      baseWidth,
+      baseHeight,
+      workingWidth,
+      workingHeight,
+      padding,
+      renderMetadataList,
+      roundPositions: true
+    });
+    updateBoardLayoutDebug(layoutOptions, {
+      usedDeterministicPortraitFallback: true,
+      placementStrategy: "phonePortraitDeterministic",
+      fallbackReason: "postFinalizeOverlap"
+    });
+  }
+
+  if (hasAnyRenderedOverlap(finalizedBoard.frames, baseGap, renderMetadataList)) {
+    if (isPhonePortrait) {
+      usedEmergencyFallback = true;
+      const emergencyFrames = createPhonePortraitEmergencyStackFrames(
+        templates,
+        Math.max(baseWidth, workingWidth) - padding * 2,
+        baseGap,
+        renderMetadataList
+      );
+
+      finalizedBoard = finalizeBoardFrames(emergencyFrames, {
+        baseWidth,
+        baseHeight,
+        workingWidth,
+        workingHeight,
+        padding,
+        renderMetadataList,
+        roundPositions: true
+      });
+      updateBoardLayoutDebug(layoutOptions, {
+        usedEmergencyFallback: true,
+        placementStrategy: "phonePortraitEmergencyStack",
+        fallbackReason: "deterministicFallbackOverlap"
+      });
+    }
+  }
+
+  if (hasAnyRenderedOverlap(finalizedBoard.frames, baseGap, renderMetadataList)) {
     throw new Error("Board layout could not be generated without rendered overlap.");
   }
 
-  return {
-    width: finalWidth,
-    height: finalHeight,
-    frames
-  };
+  updateBoardLayoutDebug(layoutOptions, {
+    usedEmergencyFallback,
+    finalWidth: finalizedBoard.width,
+    finalHeight: finalizedBoard.height
+  });
+
+  return finalizedBoard;
 }
 
 export function getBoardKey(board) {

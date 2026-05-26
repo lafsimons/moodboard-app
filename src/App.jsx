@@ -3754,6 +3754,7 @@ export default function App() {
   const selectedReferenceIds = selectedReferenceSelection.ids;
   const [isBoardGenerating, setIsBoardGenerating] = useState(false);
   const [showBoardGenerationBusy, setShowBoardGenerationBusy] = useState(false);
+  const [boardGenerationError, setBoardGenerationError] = useState("");
   const [runtimeImageMetricsByItemId, setRuntimeImageMetricsByItemId] = useState({});
   const [libraryGridViewport, setLibraryGridViewport] = useState({
     width: 0,
@@ -5221,9 +5222,11 @@ export default function App() {
 
   const scheduleBoardGeneration = useCallback((buildBoard, options = {}) => {
     if (boardGenerationInFlightRef.current) {
+      setShowBoardGenerationBusy(true);
       return;
     }
 
+    setBoardGenerationError("");
     boardGenerationInFlightRef.current = true;
     clearBoardGenerationFeedback();
     boardGenerationInFlightRef.current = true;
@@ -5248,6 +5251,7 @@ export default function App() {
         });
       } catch (error) {
         console.error("Board generation failed.", error);
+        setBoardGenerationError("Board generation failed. Try again.");
         clearBoardGenerationFeedback();
       }
     });
@@ -6153,6 +6157,7 @@ export default function App() {
 
   function handleGenerate() {
     if (isBoardGenerating || boardGenerationInFlightRef.current) {
+      setShowBoardGenerationBusy(true);
       return;
     }
 
@@ -10384,6 +10389,7 @@ async function handleExportBackup() {
           </button>
           <span className="board-canvas-zoom-readout">{Math.round(boardView.zoom * 100)}%</span>
           {showBoardGenerationBusy ? <span className="board-canvas-generation-status">Generating...</span> : null}
+          {boardGenerationError ? <span className="board-canvas-generation-status is-error">{boardGenerationError}</span> : null}
         </div>
 
         <div className="board-canvas-viewport" ref={boardViewportRef} onPointerDown={handleBoardViewportPointerDown} onWheel={handleBoardViewportWheel}>
