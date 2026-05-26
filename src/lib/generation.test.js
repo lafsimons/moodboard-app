@@ -6,6 +6,7 @@ import {
   buildNextOutfit,
   buildNextOutfitWithDebug,
   generateBoard,
+  getBoardLayoutProfile,
   getCurrentOutfitClimateChip,
   getEligibleSlotPool,
   getGuidedScoreBreakdown,
@@ -14,15 +15,19 @@ import {
   pickNextItemForGeneration,
   relayoutBoardImages,
   rememberRecentOutfit,
+  resolveBoardLayoutViewportClass,
   rerollBoardImage,
   summarizeGuidedDebugPayload,
   summarizeGuidedExplanation
 } from "./generation.js";
 import {
   getBoardItemRenderedBounds,
+  buildBoardRenderMetadata,
   rectanglesIntersect
 } from "./boardBounds.js";
+import { getBoardFitZoom } from "./boardView.js";
 import { hasTypeDefaults, resolveTypeDefaults } from "./typeDefaults.js";
+import defaultWardrobe from "../data/defaultWardrobe.js";
 
 const syntheticWardrobe = [
   { id: "head_cap", type: "Cap", garmentType: "Headwear", layerType: "Both", weight: "Light", styleTags: ["Casual"] },
@@ -226,6 +231,61 @@ function assertNoRenderedBoundsOverlap(images, renderMetadataByReferenceId = {},
       );
     }
   }
+}
+
+function assertBoardImagesStayWithinBoard(board, renderMetadataByReferenceId = {}) {
+  for (const image of board.images) {
+    const bounds = getBoardItemRenderedBounds(image, {
+      ...(renderMetadataByReferenceId[image.referenceId] ?? {}),
+      rotation: image.rotation ?? renderMetadataByReferenceId[image.referenceId]?.rotation ?? 0
+    }).collisionRect;
+
+    assert.ok(bounds.left >= 0, `Expected ${image.id} to stay inside the board left edge, received ${bounds.left}`);
+    assert.ok(bounds.top >= 0, `Expected ${image.id} to stay inside the board top edge, received ${bounds.top}`);
+    assert.ok(bounds.right <= board.width, `Expected ${image.id} to stay inside the board right edge, received ${bounds.right}`);
+    assert.ok(bounds.bottom <= board.height, `Expected ${image.id} to stay inside the board bottom edge, received ${bounds.bottom}`);
+  }
+}
+
+function buildBoardGenerationReferences(count, overrides = {}) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `density_layout_ref_${count}_${index}`,
+    name: `Density Layout Ref ${count} ${index}`,
+    type: "T-Shirt",
+    garmentType: "Top",
+    layerType: "Inner",
+    weight: "Light",
+    styleTags: ["Casual"],
+    list: "Wardrobe",
+    ...overrides
+  }));
+}
+
+const defaultWardrobeBoardReferences = defaultWardrobe.filter((item) => item?.id);
+
+function buildPhonePortraitStressFixtures(count) {
+  const references = defaultWardrobeBoardReferences.slice(0, count);
+  const aspectRatiosByReferenceId = {};
+  const sizeMultipliersByReferenceId = {};
+  const renderMetadataByReferenceId = {};
+
+  references.forEach((item, index) => {
+    const renderMetadata = buildBoardRenderMetadata(item);
+    aspectRatiosByReferenceId[item.id] = renderMetadata.aspectRatio;
+    sizeMultipliersByReferenceId[item.id] = renderMetadata.sizeMultiplier;
+    renderMetadataByReferenceId[item.id] = renderMetadata;
+  });
+
+  return {
+    boardImages: references.map((item, index) => ({
+      id: `phone_portrait_stress_${count}_${index}`,
+      referenceId: item.id,
+      generationSlot: `StressSlot${index}`
+    })),
+    aspectRatiosByReferenceId,
+    sizeMultipliersByReferenceId,
+    renderMetadataByReferenceId
+  };
 }
 
 function eligiblePoolIds(slot, outfitFilters = { style: [], climate: [] }, outfit = {}, layering = true) {
@@ -1545,7 +1605,306 @@ test("generateBoard expands board footprint for higher image counts without over
   assertNoRenderedBoundsOverlap(board.images);
   assert.ok(board.width > 2400, `expected expanded board width, received ${board.width}`);
   assert.ok(board.height > 1800, `expected expanded board height, received ${board.height}`);
-  assert.ok(bounds.maxX - bounds.minX > 1600, "expected wider distributed collage footprint");
+  assert.ok(bounds.maxX - bounds.minX > 1500, "expected wider distributed collage footprint");
+});
+
+test("board layout profile smooths the 10 to 11 and 20 to 21 density transitions", () => {
+  const profile10 = getBoardLayoutProfile(10);
+  const profile11 = getBoardLayoutProfile(11);
+  const profile20 = getBoardLayoutProfile(20);
+  const profile21 = getBoardLayoutProfile(21);
+
+  assert.deepEqual(profile11, {
+    innerWidth: 2074,
+    innerHeight: 1566,
+    frameBaseWidth: 287,
+    minWidth: 175,
+    maxWidth: 330,
+    padding: 94,
+    gap: 21
+  });
+  assert.deepEqual(profile21, {
+    innerWidth: 3488,
+    innerHeight: 2704,
+    frameBaseWidth: 364,
+    minWidth: 128,
+    maxWidth: 239,
+    padding: 127,
+    gap: 26
+  });
+  assert.ok(profile11.innerWidth - profile10.innerWidth < 200);
+  assert.ok(profile11.innerHeight - profile10.innerHeight < 160);
+  assert.ok(profile21.innerWidth - profile20.innerWidth < 30);
+  assert.ok(Math.abs(profile21.innerHeight - profile20.innerHeight) < 10);
+});
+
+test("board layout viewport class detects phone portrait separately from tablet and desktop", () => {
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 390, viewportHeight: 844 }), "phonePortrait");
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 844, viewportHeight: 390 }), "default");
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 768, viewportHeight: 1024 }), "default");
+  assert.equal(resolveBoardLayoutViewportClass({ viewportWidth: 1440, viewportHeight: 1024 }), "default");
+});
+
+test("phone portrait board profile is narrower and no smaller in frame size for 12 15 and 21 images", () => {
+  const previousPhoneInnerWidths = {
+    12: 2131,
+    15: 2396,
+    21: 2682
+  };
+
+  for (const imageCount of [12, 15, 21]) {
+    const defaultProfile = getBoardLayoutProfile(imageCount);
+    const phoneProfile = getBoardLayoutProfile(imageCount, { viewportClass: "phonePortrait" });
+
+    assert.ok(phoneProfile.innerWidth < defaultProfile.innerWidth);
+    assert.ok(phoneProfile.innerWidth < previousPhoneInnerWidths[imageCount]);
+    assert.ok(phoneProfile.frameBaseWidth >= defaultProfile.frameBaseWidth);
+  }
+
+  assert.deepEqual(
+    getBoardLayoutProfile(15),
+    getBoardLayoutProfile(15, { viewportClass: "default" })
+  );
+});
+
+test("phone portrait profile keeps a localized relief band around 16 images", () => {
+  const profile15 = getBoardLayoutProfile(15, { viewportClass: "phonePortrait" });
+  const profile16 = getBoardLayoutProfile(16, { viewportClass: "phonePortrait" });
+  const profile18 = getBoardLayoutProfile(18, { viewportClass: "phonePortrait" });
+  const default16 = getBoardLayoutProfile(16);
+
+  assert.ok(profile16.innerWidth > profile15.innerWidth, "expected 16-image phone portrait profile to open extra width for solver relief");
+  assert.ok(profile16.innerWidth < default16.innerWidth, "expected 16-image phone portrait profile to stay denser than default");
+  assert.ok(profile16.innerHeight >= profile15.innerHeight, "expected 16-image phone portrait profile to allow at least as much vertical space");
+  assert.ok(profile16.frameBaseWidth >= default16.frameBaseWidth, "expected 16-image phone portrait profile to keep readable frames");
+  assert.ok(profile18.innerWidth >= profile16.innerWidth - 160, "expected relief band to taper rather than collapse");
+});
+
+test("generated board density stays tighter for mobile 12 and 15 image boards", () => {
+  for (const imageCount of [12, 15]) {
+    const references = buildBoardGenerationReferences(imageCount);
+    const { board } = withSeed(80 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true }
+      })
+    );
+
+    assert.equal(board.images.length, imageCount);
+    assertNoRenderedBoundsOverlap(board.images);
+    assertBoardImagesStayWithinBoard(board);
+    assert.ok(
+      imageCount === 12 ? board.width < 2968 : board.width < 3250,
+      `expected ${imageCount}-image board width to tighten from the previous baseline`
+    );
+    assert.ok(
+      imageCount === 12 ? board.height < 2336 : board.height < 2570,
+      `expected ${imageCount}-image board height to tighten from the previous baseline`
+    );
+    assert.ok(
+      getBoardFitZoom({
+        boardWidth: board.width,
+        boardHeight: board.height,
+        viewportWidth: 390,
+        viewportHeight: 844,
+        boardImageCount: imageCount,
+        isMobileViewport: true
+      }) >= 0.12,
+      `expected ${imageCount}-image mobile board to occupy the viewport more naturally`
+    );
+  }
+});
+
+test("phone portrait generated boards use a denser narrower profile than default while desktop and tablet stay unchanged", () => {
+  const phoneBoundsTargets = {
+    12: { maxWidth: 2100, minFit: 0.18 },
+    15: { maxWidth: 2250, minFit: 0.16 },
+    21: { maxWidth: 2100, minFit: 0.21 }
+  };
+
+  for (const imageCount of [12, 15, 21]) {
+    const references = buildBoardGenerationReferences(imageCount);
+    const defaultBoard = withSeed(210 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true }
+      }).board
+    );
+    const phoneBoard = withSeed(210 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true },
+        layoutOptions: { viewportClass: "phonePortrait" }
+      }).board
+    );
+
+    assertNoRenderedBoundsOverlap(phoneBoard.images);
+    assertBoardImagesStayWithinBoard(phoneBoard);
+    assert.ok(phoneBoard.width < defaultBoard.width, `expected ${imageCount}-image phone portrait board to be narrower`);
+    assert.ok(phoneBoard.height <= defaultBoard.height * 1.1, `expected ${imageCount}-image phone portrait board height to stay controlled`);
+    const phoneFit = getBoardFitZoom({
+      boardWidth: phoneBoard.width,
+      boardHeight: phoneBoard.height,
+      viewportWidth: 390,
+      viewportHeight: 844,
+      boardImageCount: imageCount,
+      isMobileViewport: true
+    });
+    const defaultFit = getBoardFitZoom({
+      boardWidth: defaultBoard.width,
+      boardHeight: defaultBoard.height,
+      viewportWidth: 390,
+      viewportHeight: 844,
+      boardImageCount: imageCount,
+      isMobileViewport: true
+    });
+
+    assert.ok(phoneBoard.width < defaultBoard.width, `expected ${imageCount}-image phone portrait board to be narrower`);
+    assert.ok(phoneBoard.width < phoneBoundsTargets[imageCount].maxWidth, `expected ${imageCount}-image phone portrait board width to tighten materially`);
+    assert.ok(phoneBoard.height <= defaultBoard.height * 1.1, `expected ${imageCount}-image phone portrait board height to stay controlled`);
+    assert.ok(phoneFit > defaultFit, `expected ${imageCount}-image phone portrait board fit to improve`);
+    assert.ok(phoneFit >= phoneBoundsTargets[imageCount].minFit, `expected ${imageCount}-image phone portrait fit to improve materially`);
+  }
+
+  for (const imageCount of [12, 15, 21]) {
+    const defaultProfile = getBoardLayoutProfile(imageCount);
+    const tabletProfile = getBoardLayoutProfile(
+      imageCount,
+      { viewportClass: resolveBoardLayoutViewportClass({ viewportWidth: 768, viewportHeight: 1024 }) }
+    );
+    const desktopProfile = getBoardLayoutProfile(
+      imageCount,
+      { viewportClass: resolveBoardLayoutViewportClass({ viewportWidth: 1440, viewportHeight: 1024 }) }
+    );
+
+    assert.deepEqual(tabletProfile, defaultProfile);
+    assert.deepEqual(desktopProfile, defaultProfile);
+  }
+});
+
+test("phone portrait relayout stays reliable for 12 15 16 18 21 and 30 images with heterogeneous metadata", () => {
+  const expectedPhoneFitByCount = {
+    12: 0.17,
+    15: 0.16,
+    16: 0.19,
+    18: 0.2,
+    21: 0.21,
+    30: 0.21
+  };
+  const expectedPhoneWidthByCount = {
+    12: 2050,
+    15: 2250,
+    16: 2300,
+    18: 2200,
+    21: 2100,
+    30: 2100
+  };
+
+  for (const imageCount of [12, 15, 16, 18, 21, 30]) {
+    const fixtures = buildPhonePortraitStressFixtures(imageCount);
+    const fits = [];
+    const widths = [];
+    let deterministicFallbackCount = 0;
+    let emergencyFallbackCount = 0;
+    let totalRuntimeMs = 0;
+
+    for (let seed = 0; seed < 30; seed += 1) {
+      const layoutDebug = {};
+      const startedAt = Date.now();
+      const relaidBoard = withSeed(7000 + imageCount * 100 + seed, () =>
+        relayoutBoardImages(fixtures.boardImages, {
+          viewportClass: "phonePortrait",
+          layoutDebug,
+          aspectRatiosByReferenceId: fixtures.aspectRatiosByReferenceId,
+          sizeMultipliersByReferenceId: fixtures.sizeMultipliersByReferenceId,
+          renderMetadataByReferenceId: fixtures.renderMetadataByReferenceId
+        })
+      );
+      totalRuntimeMs += Date.now() - startedAt;
+
+      assert.equal(relaidBoard.images.length, imageCount);
+      assertNoRenderedBoundsOverlap(relaidBoard.images, fixtures.renderMetadataByReferenceId);
+      assertBoardImagesStayWithinBoard(relaidBoard, fixtures.renderMetadataByReferenceId);
+      if (layoutDebug.usedDeterministicPortraitFallback) {
+        deterministicFallbackCount += 1;
+      }
+      if (layoutDebug.usedEmergencyFallback) {
+        emergencyFallbackCount += 1;
+      }
+      widths.push(relaidBoard.width);
+      fits.push(
+        getBoardFitZoom({
+          boardWidth: relaidBoard.width,
+          boardHeight: relaidBoard.height,
+          viewportWidth: 390,
+          viewportHeight: 844,
+          boardImageCount: imageCount,
+          isMobileViewport: true
+        })
+      );
+    }
+
+    assert.ok(
+      Math.max(...widths) <= expectedPhoneWidthByCount[imageCount],
+      `expected ${imageCount}-image phone portrait boards to stay visually dense while generating reliably`
+    );
+    assert.ok(
+      Math.min(...fits) >= expectedPhoneFitByCount[imageCount],
+      `expected ${imageCount}-image phone portrait boards to keep fitting naturally after the reliability fix`
+    );
+    assert.equal(emergencyFallbackCount, 0, `expected ${imageCount}-image phone portrait boards to avoid the emergency stack fallback`);
+
+    if (imageCount === 16) {
+      assert.equal(deterministicFallbackCount, 0, "expected 16-image phone portrait boards to stay on the normal collage path");
+    }
+
+    if (imageCount === 30) {
+      assert.ok(totalRuntimeMs / 30 <= 12, "expected 30-image phone portrait generation to remain responsive");
+    }
+  }
+});
+
+test("desktop medium-large generated boards stay denser without clipping", () => {
+  const expectedByCount = {
+    20: { width: 3720, height: 2960, minFit: 0.41, maxFit: 0.42 },
+    21: { width: 3742, height: 2958, minFit: 0.41, maxFit: 0.42 },
+    25: { width: 3830, height: 2950, minFit: 0.41, maxFit: 0.42 },
+    30: { width: 3940, height: 2940, minFit: 0.52, maxFit: 0.52 }
+  };
+
+  for (const imageCount of [20, 21, 25, 30]) {
+    const references = buildBoardGenerationReferences(imageCount);
+    const { board } = withSeed(110 + imageCount, () =>
+      generateBoard({
+        items: references,
+        imageCount,
+        generationLists: { Wardrobe: true, Wishlist: true }
+      })
+    );
+    const expected = expectedByCount[imageCount];
+    const desktopFit = getBoardFitZoom({
+      boardWidth: board.width,
+      boardHeight: board.height,
+      viewportWidth: 1440,
+      viewportHeight: 1024,
+      boardImageCount: imageCount,
+      isMobileViewport: false
+    });
+
+    assert.equal(board.images.length, imageCount);
+    assertNoRenderedBoundsOverlap(board.images);
+    assertBoardImagesStayWithinBoard(board);
+    assert.equal(board.width, expected.width);
+    assert.equal(board.height, expected.height);
+    assert.ok(desktopFit >= expected.minFit && desktopFit <= expected.maxFit);
+    if (imageCount > 20) {
+      assert.ok(board.width < { 21: 4216, 25: 4600, 30: 5080 }[imageCount]);
+      assert.ok(board.height < { 21: 3362, 25: 3690, 30: 4100 }[imageCount]);
+    }
+  }
 });
 
 test("relayoutBoardImages preserves ids and removes overlap after board updates", () => {

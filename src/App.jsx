@@ -71,6 +71,7 @@ import {
   pickRandom,
   relayoutBoardImages,
   rememberRecentOutfit,
+  resolveBoardLayoutViewportClass,
   rerollBoardImage,
   summarizeGuidedDebugPayload,
   visibleSlots
@@ -116,6 +117,7 @@ import {
   buildBoardRenderMetadata,
   getBoardItemRenderedBounds
 } from "./lib/boardBounds.js";
+import { getFittedBoardViewForViewport } from "./lib/boardView.js";
 import {
   exportBackupPackageToDirectory,
   isFileSystemAccessSupported
@@ -673,6 +675,14 @@ function getViewportWidth() {
   }
 
   return window.innerWidth;
+}
+
+function getViewportHeight() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.innerHeight;
 }
 
 const garmentTypes = [
@@ -3744,6 +3754,7 @@ export default function App() {
   const selectedReferenceIds = selectedReferenceSelection.ids;
   const [isBoardGenerating, setIsBoardGenerating] = useState(false);
   const [showBoardGenerationBusy, setShowBoardGenerationBusy] = useState(false);
+  const [boardGenerationError, setBoardGenerationError] = useState("");
   const [runtimeImageMetricsByItemId, setRuntimeImageMetricsByItemId] = useState({});
   const [libraryGridViewport, setLibraryGridViewport] = useState({
     width: 0,
@@ -5063,6 +5074,15 @@ export default function App() {
       Object.entries(boardLayoutMetadataByReferenceId).map(([referenceId, value]) => [referenceId, value.renderMetadata])
     )
   }), [boardLayoutMetadataByReferenceId]);
+  function getCurrentBoardLayoutOptions(baseOptions = boardLayoutOptions) {
+    return {
+      ...baseOptions,
+      viewportClass: resolveBoardLayoutViewportClass({
+        viewportWidth: getViewportWidth(),
+        viewportHeight: getViewportHeight()
+      })
+    };
+  }
   const boardRenderLayoutSignature = useMemo(
     () =>
       JSON.stringify(
@@ -5082,7 +5102,7 @@ export default function App() {
     [tagManagerEntries]
   );
 
-  function relayoutBoardStateImages(boardImages, layoutOptionsOverride = boardLayoutOptions) {
+  function relayoutBoardStateImages(boardImages, layoutOptionsOverride = getCurrentBoardLayoutOptions()) {
     const nextImages = (Array.isArray(boardImages) ? boardImages : []).filter((image) => image?.referenceId);
 
     if (!nextImages.length) {
@@ -5122,7 +5142,7 @@ export default function App() {
       generationMode: options.generationMode ?? defaultGenerationMode,
       outfitAffinity: options.outfitAffinity ?? {},
       recentOutfits: options.recentOutfits ?? [],
-      layoutOptions: boardLayoutOptions,
+      layoutOptions: getCurrentBoardLayoutOptions(),
       debugHooks: perfSession,
       boardFilters: options.metadataFilters ?? null,
       boardGuidedOptions: {
@@ -5138,7 +5158,7 @@ export default function App() {
 
     if (validReferenceIds.length) {
       return createBoardFromReferenceIds(validReferenceIds, {
-        ...boardLayoutOptions,
+        ...getCurrentBoardLayoutOptions(),
         itemsByReferenceId: sourceItemsById
       });
     }
@@ -5202,9 +5222,11 @@ export default function App() {
 
   const scheduleBoardGeneration = useCallback((buildBoard, options = {}) => {
     if (boardGenerationInFlightRef.current) {
+      setShowBoardGenerationBusy(true);
       return;
     }
 
+    setBoardGenerationError("");
     boardGenerationInFlightRef.current = true;
     clearBoardGenerationFeedback();
     boardGenerationInFlightRef.current = true;
@@ -5229,6 +5251,7 @@ export default function App() {
         });
       } catch (error) {
         console.error("Board generation failed.", error);
+        setBoardGenerationError("Board generation failed. Try again.");
         clearBoardGenerationFeedback();
       }
     });
@@ -6134,6 +6157,7 @@ export default function App() {
 
   function handleGenerate() {
     if (isBoardGenerating || boardGenerationInFlightRef.current) {
+      setShowBoardGenerationBusy(true);
       return;
     }
 
@@ -8962,27 +8986,29 @@ async function handleExportBackup() {
 
   function getBoardLayoutOptionsWithMetricOverride(referenceId, metrics) {
     if (!referenceId || !metrics?.naturalWidth || !metrics?.naturalHeight) {
-      return boardLayoutOptions;
+      return getCurrentBoardLayoutOptions();
     }
 
     const item = itemsById[referenceId];
     if (!item) {
-      return boardLayoutOptions;
+      return getCurrentBoardLayoutOptions();
     }
 
     const renderMetadata = buildBoardRenderMetadata(item, metrics);
+    const nextLayoutOptions = getCurrentBoardLayoutOptions();
 
     return {
+      ...nextLayoutOptions,
       aspectRatiosByReferenceId: {
-        ...boardLayoutOptions.aspectRatiosByReferenceId,
+        ...nextLayoutOptions.aspectRatiosByReferenceId,
         [referenceId]: getItemPresentationAspectRatio(item, metrics)
       },
       sizeMultipliersByReferenceId: {
-        ...boardLayoutOptions.sizeMultipliersByReferenceId,
+        ...nextLayoutOptions.sizeMultipliersByReferenceId,
         [referenceId]: renderMetadata.sizeMultiplier
       },
       renderMetadataByReferenceId: {
-        ...boardLayoutOptions.renderMetadataByReferenceId,
+        ...nextLayoutOptions.renderMetadataByReferenceId,
         [referenceId]: renderMetadata
       }
     };
@@ -9088,31 +9114,16 @@ async function handleExportBackup() {
     }
 
     const viewportRect = boardViewportRef.current.getBoundingClientRect();
-    const viewportWidth = Math.max(1, viewportRect.width - 24);
-    const viewportHeight = Math.max(1, viewportRect.height - 24);
-    const widthZoom = viewportWidth / nextBoard.width;
-    const heightZoom = viewportHeight / nextBoard.height;
-    const fittedZoom = Math.min(widthZoom, heightZoom);
-    const boardImageCount = Array.isArray(nextBoard.images) ? nextBoard.images.length : 0;
-    const relaxedZoom =
-      boardImageCount >= 12 && boardImageCount <= 15
-        ? Math.min(0.62, Math.max(0.6, fittedZoom * 1.55))
-        : boardImageCount > 15
-        ? fittedZoom >= 0.34
-          ? Math.min(0.62, Math.max(0.52, fittedZoom * 1.46))
-          : fittedZoom * 1.22
-        : fittedZoom >= 0.82
-          ? 1
-          : fittedZoom >= 0.62
-            ? fittedZoom * 1.12
-            : fittedZoom * 1.05;
-    const nextZoom = Math.min(BOARD_ZOOM_MAX, Math.max(BOARD_ZOOM_MIN, Math.round(relaxedZoom * 1000) / 1000));
-
-    return {
-      x: Math.round((nextBoard.width * (1 - nextZoom) * 0.5) * 1000) / 1000,
-      y: Math.round((nextBoard.height * (1 - nextZoom) * 0.5) * 1000) / 1000,
-      zoom: nextZoom
-    };
+    return getFittedBoardViewForViewport({
+      boardWidth: nextBoard.width,
+      boardHeight: nextBoard.height,
+      viewportWidth: viewportRect.width,
+      viewportHeight: viewportRect.height,
+      boardImageCount: Array.isArray(nextBoard.images) ? nextBoard.images.length : 0,
+      isMobileViewport,
+      minZoom: BOARD_ZOOM_MIN,
+      maxZoom: BOARD_ZOOM_MAX
+    });
   }
 
   function zoomBoardView(nextZoomOrUpdater, anchor = null) {
@@ -10378,6 +10389,7 @@ async function handleExportBackup() {
           </button>
           <span className="board-canvas-zoom-readout">{Math.round(boardView.zoom * 100)}%</span>
           {showBoardGenerationBusy ? <span className="board-canvas-generation-status">Generating...</span> : null}
+          {boardGenerationError ? <span className="board-canvas-generation-status is-error">{boardGenerationError}</span> : null}
         </div>
 
         <div className="board-canvas-viewport" ref={boardViewportRef} onPointerDown={handleBoardViewportPointerDown} onWheel={handleBoardViewportWheel}>
