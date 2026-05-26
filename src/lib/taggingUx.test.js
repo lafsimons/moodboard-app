@@ -12,19 +12,19 @@ import {
   matchesTagFilter
 } from "./taggingUx.js";
 
-test("getTagInputKeyIntent uses Enter to accept the highlighted suggestion when suggestions are open", () => {
+test("getTagInputKeyIntent keeps Enter committing the typed input even when suggestions are highlighted", () => {
   assert.deepEqual(
     getTagInputKeyIntent({
       key: "Enter",
-      inputValue: "vintage",
+      inputValue: "ig",
       suggestionsOpen: true,
-      highlightedSuggestion: "vintage american",
+      highlightedSuggestion: "ig/garment",
       isFocused: true,
       selectedTags: []
     }),
     {
-      type: "commitSuggestion",
-      value: "vintage american"
+      type: "commitInput",
+      value: "ig"
     }
   );
 });
@@ -33,15 +33,15 @@ test("getTagInputKeyIntent uses Tab to accept the highlighted suggestion", () =>
   assert.deepEqual(
     getTagInputKeyIntent({
       key: "Tab",
-      inputValue: "vin",
+      inputValue: "ig",
       suggestionsOpen: true,
-      highlightedSuggestion: "vintage american",
+      highlightedSuggestion: "ig/garment",
       isFocused: true,
       selectedTags: []
     }),
     {
       type: "commitSuggestion",
-      value: "vintage american"
+      value: "ig/garment"
     }
   );
 });
@@ -59,6 +59,23 @@ test("getTagInputKeyIntent keeps Enter committing typed input when no suggestion
     {
       type: "commitInput",
       value: "vintage"
+    }
+  );
+});
+
+test("getTagInputKeyIntent keeps comma committing the exact typed input when suggestions are open", () => {
+  assert.deepEqual(
+    getTagInputKeyIntent({
+      key: ",",
+      inputValue: "ig",
+      suggestionsOpen: true,
+      highlightedSuggestion: "ig/garment",
+      isFocused: true,
+      selectedTags: []
+    }),
+    {
+      type: "commitInput",
+      value: "ig"
     }
   );
 });

@@ -41,13 +41,6 @@ export function getTagInputKeyIntent({
     };
   }
 
-  if (key === "Enter" && suggestionsOpen && highlightedSuggestion) {
-    return {
-      type: "commitSuggestion",
-      value: highlightedSuggestion
-    };
-  }
-
   if ((key === "," || key === "Enter") && normalizedInput) {
     return {
       type: "commitInput",

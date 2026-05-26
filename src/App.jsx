@@ -11222,6 +11222,8 @@ async function handleExportBackup() {
                                       placeholder={libraryTagActionMode === "add" ? "Add tag" : "Remove tag"}
                                       autoFocus
                                       showAllSuggestionsOnFocus
+                                      className="selection-action-tag-input"
+                                      suggestionsClassName="selection-action-tag-input-suggestions"
                                     />
                                   </div>
                                 ) : (

@@ -3290,7 +3290,7 @@ button:disabled {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 80;
+  z-index: 125;
   width: min(236px, calc(100vw - 48px));
   display: grid;
   gap: 0;
@@ -3301,13 +3301,14 @@ button:disabled {
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
   backdrop-filter: blur(18px);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .selection-action-editor {
   display: grid;
   gap: 8px;
-  padding: 8px;
+  padding: 8px 8px 10px;
+  overflow: visible;
 }
 
 .selection-action-back {
@@ -3358,6 +3359,15 @@ button:disabled {
 
 .selection-actions-popover .tag-input-suggestions {
   z-index: 120;
+}
+
+.selection-action-tag-input {
+  overflow: visible;
+}
+
+.selection-action-tag-input-suggestions {
+  max-height: min(220px, 40vh);
+  overflow-y: auto;
 }
 
 .selection-actions-popover-item {
