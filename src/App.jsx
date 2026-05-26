@@ -123,8 +123,10 @@ import {
 import { getBackupExportMaterializationPlan } from "./lib/backupExportPolicy.js";
 import {
   applySavedLibraryView,
+  applySavedLibraryViewToMetadataFilters,
   createSavedLibraryViewSnapshot,
   deleteSavedLibraryView,
+  doesSavedLibraryViewMatchMetadataState,
   doesSavedLibraryViewMatchState,
   normalizeSavedLibraryViews,
   normalizeLibrarySearch,
@@ -136,6 +138,10 @@ import {
   upsertSavedLibraryView
 } from "./lib/appStateModel.js";
 import { sortLibraryItems } from "./lib/librarySort.js";
+import {
+  loadStoredTagTreeCollapsedGroups,
+  saveStoredTagTreeCollapsedGroups
+} from "./lib/tagTreeState.js";
 import {
   pruneBoardForDeletedReferences,
   pruneOutfitForDeletedReferences,
@@ -2209,7 +2215,7 @@ function TagTree({
     const storedSortMode = window.localStorage.getItem(`tag-tree-sort:${storageKey}`);
     return storedSortMode === "alpha" ? "alpha" : "count";
   });
-  const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [collapsedGroups, setCollapsedGroups] = useState(() => loadStoredTagTreeCollapsedGroups(storageKey));
 
   if (!entries.length && !noTagsCount) {
     return null;
@@ -2271,6 +2277,14 @@ function TagTree({
 
     window.localStorage.setItem(`tag-tree-sort:${storageKey}`, sortMode);
   }, [sortMode, storageKey]);
+
+  useEffect(() => {
+    setCollapsedGroups(loadStoredTagTreeCollapsedGroups(storageKey));
+  }, [storageKey]);
+
+  useEffect(() => {
+    saveStoredTagTreeCollapsedGroups(storageKey, collapsedGroups);
+  }, [collapsedGroups, storageKey]);
 
   function toggleCollapsedGroup(groupKey) {
     const collapsedKey = `${storageKey}:${groupKey}`;
@@ -2417,14 +2431,30 @@ function TagTree({
           <div className="tag-tree-meta">
             <button
               type="button"
-              className="tag-tree-sort-button"
+              className="tag-tree-sort-button tag-tree-sort-mode-button"
               onClick={(event) => {
                 stopNestedTagTreeEvent(event);
                 setSortMode((current) => (current === "count" ? "alpha" : "count"));
               }}
+              aria-label={sortMode === "count" ? "Tag order: count" : "Tag order: A-Z"}
+              title={sortMode === "count" ? "Tag order: count" : "Tag order: A-Z"}
             >
-              {sortMode === "count" ? "Count" : "A-Z"}
+              <span aria-hidden="true">{sortMode === "count" ? "#" : "A"}</span>
             </button>
+            {allGroupKeys.length ? (
+              <button
+                type="button"
+                className="tag-tree-sort-button tag-tree-toggle-all-button"
+                onClick={(event) => {
+                  stopNestedTagTreeEvent(event);
+                  setAllGroupsExpanded(!areAllGroupsExpanded);
+                }}
+                aria-label={areAllGroupsExpanded ? "Collapse all tag groups" : "Expand all tag groups"}
+                title={areAllGroupsExpanded ? "Collapse all tag groups" : "Expand all tag groups"}
+              >
+                <span aria-hidden="true">{areAllGroupsExpanded ? "▾" : "▸"}</span>
+              </button>
+            ) : null}
             {headerActions}
           </div>
         </div>
@@ -2433,24 +2463,28 @@ function TagTree({
           <div className="tag-tree-meta">
             <button
               type="button"
-              className="tag-tree-sort-button"
+              className="tag-tree-sort-button tag-tree-sort-mode-button"
               onClick={(event) => {
                 stopNestedTagTreeEvent(event);
                 setSortMode((current) => (current === "count" ? "alpha" : "count"));
               }}
+              aria-label={sortMode === "count" ? "Tag order: count" : "Tag order: A-Z"}
+              title={sortMode === "count" ? "Tag order: count" : "Tag order: A-Z"}
             >
-              {sortMode === "count" ? "Count" : "A-Z"}
+              <span aria-hidden="true">{sortMode === "count" ? "#" : "A"}</span>
             </button>
             {allGroupKeys.length ? (
               <button
                 type="button"
-                className="tag-tree-sort-button"
+                className="tag-tree-sort-button tag-tree-toggle-all-button"
                 onClick={(event) => {
                   stopNestedTagTreeEvent(event);
                   setAllGroupsExpanded(!areAllGroupsExpanded);
                 }}
+                aria-label={areAllGroupsExpanded ? "Collapse all tag groups" : "Expand all tag groups"}
+                title={areAllGroupsExpanded ? "Collapse all tag groups" : "Expand all tag groups"}
                 >
-                {areAllGroupsExpanded ? "Collapse" : "Expand"}
+                <span aria-hidden="true">{areAllGroupsExpanded ? "▾" : "▸"}</span>
               </button>
             ) : null}
             {headerActions}
@@ -3539,6 +3573,7 @@ export default function App() {
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
   const wardrobeViewsPopoverRef = useRef(null);
+  const controlsViewsPopoverRef = useRef(null);
   const wardrobeManagePopoverRef = useRef(null);
   const wardrobeAddPopoverRef = useRef(null);
   const sideEditorResizeCleanupRef = useRef(null);
@@ -3591,6 +3626,7 @@ export default function App() {
   const [wardrobeWorthOpen, setWardrobeWorthOpen] = useState(false);
   const [wardrobeSavedOpen, setWardrobeSavedOpen] = useState(false);
   const [wardrobeViewsOpen, setWardrobeViewsOpen] = useState(false);
+  const [controlsViewsOpen, setControlsViewsOpen] = useState(false);
   const [wardrobeManageOpen, setWardrobeManageOpen] = useState(false);
   const [wardrobeAddOpen, setWardrobeAddOpen] = useState(false);
   const [savedLibraryViews, setSavedLibraryViews] = useState([]);
@@ -4310,6 +4346,13 @@ export default function App() {
       )?.id ?? "",
     [currentSavedLibraryViewSnapshot, savedLibraryViews]
   );
+  const matchingControlsSavedLibraryViewId = useMemo(
+    () =>
+      normalizeSavedLibraryViews(savedLibraryViews).find((view) =>
+        doesSavedLibraryViewMatchMetadataState(view, generationMetadataFilters)
+      )?.id ?? "",
+    [generationMetadataFilters, savedLibraryViews]
+  );
   const wardrobeFilterSearchQuery = normalizeTag(wardrobeFilterSearch);
   const allLibraryTagEntries = useMemo(() => getTagFrequencyEntries(tagDebugSourceItems), [tagDebugSourceItems]);
   const allLibraryNoTagsCount = useMemo(
@@ -4433,7 +4476,7 @@ export default function App() {
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
 
   useEffect(() => {
-    if (!wardrobeViewsOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
+    if (!wardrobeViewsOpen && !controlsViewsOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
       return undefined;
     }
 
@@ -4443,6 +4486,13 @@ export default function App() {
       if (
         wardrobeViewsOpen &&
         wardrobeViewsPopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      if (
+        controlsViewsOpen &&
+        controlsViewsPopoverRef.current?.contains(target)
       ) {
         return;
       }
@@ -4465,6 +4515,10 @@ export default function App() {
         setWardrobeViewsOpen(false);
       }
 
+      if (controlsViewsOpen) {
+        setControlsViewsOpen(false);
+      }
+
       if (wardrobeManageOpen) {
         setWardrobeManageOpen(false);
       }
@@ -4476,7 +4530,7 @@ export default function App() {
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [wardrobeAddOpen, wardrobeManageOpen, wardrobeViewsOpen]);
+  }, [controlsViewsOpen, wardrobeAddOpen, wardrobeManageOpen, wardrobeViewsOpen]);
 
   useEffect(() => {
     return () => {
@@ -5380,6 +5434,12 @@ export default function App() {
   }, []);
 
   useEffect(() => clearBoardGenerationFeedback, [clearBoardGenerationFeedback]);
+
+  useEffect(() => {
+    if (!generationMetadataFiltersOpen) {
+      setControlsViewsOpen(false);
+    }
+  }, [generationMetadataFiltersOpen]);
 
   useEffect(() => {
     if (!board?.images?.length || (typeof board.boardUuid === "string" && board.boardUuid.trim())) {
@@ -7593,6 +7653,15 @@ async function handleExportBackup() {
     }
   }
 
+  function applyControlsSavedLibraryView(savedView, event = null) {
+    setGenerationMetadataFilters(applySavedLibraryViewToMetadataFilters(savedView));
+    setControlsViewsOpen(false);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
   function handleSaveCurrentLibraryView(event = null) {
     const activeView = savedLibraryViews.find((view) => view.id === matchingSavedLibraryViewId) ?? null;
     const nextName = promptForSavedLibraryViewName(activeView?.name ?? "");
@@ -9486,11 +9555,21 @@ async function handleExportBackup() {
   function toggleWardrobeViews(event = null) {
     closeUtilityWindows();
     setWardrobeFiltersOpen(false);
+    setControlsViewsOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     cancelEditSavedOutfit();
     setWardrobeViewsOpen((current) => !current);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function toggleControlsViews(event = null) {
+    setWardrobeViewsOpen(false);
+    setControlsViewsOpen((current) => !current);
 
     if (event) {
       blurPointerActivatedControl(event);
@@ -10946,32 +11025,94 @@ async function handleExportBackup() {
                         noTagsCount={allLibraryNoTagsCount}
                         variant="compact"
                         headerActions={(
-                          <button
-                            type="button"
-                            className="ghost-button controls-reference-match-button"
-                            onClick={() =>
-                              setGenerationMetadataFilters((current) => ({
-                                ...current,
-                                tagMatchMode: current.tagMatchMode === "all" ? "any" : "all"
-                              }))
-                            }
-                            aria-label={
-                              generationMetadataFilters.tagMatchMode === "all"
-                                ? "Tag matching: all selected tags"
-                                : "Tag matching: any selected tag"
-                            }
-                            title={
-                              generationMetadataFilters.tagMatchMode === "all"
-                                ? "Require all selected tags."
-                                : "Match any selected tag."
-                            }
-                          >
-                            {generationMetadataFilters.tagMatchMode === "all" ? "Match: All" : "Match: Any"}
-                          </button>
+                          <div className="wardrobe-tag-match-toggle controls-reference-match-toggle" role="group" aria-label="Tag matching">
+                            <button
+                              type="button"
+                              className={`wardrobe-tag-match-option ${generationMetadataFilters.tagMatchMode === "any" ? "is-active" : ""}`}
+                              onClick={() =>
+                                setGenerationMetadataFilters((current) => ({
+                                  ...current,
+                                  tagMatchMode: "any"
+                                }))
+                              }
+                              aria-pressed={generationMetadataFilters.tagMatchMode === "any"}
+                              title="Match any selected tag."
+                            >
+                              Any
+                            </button>
+                            <button
+                              type="button"
+                              className={`wardrobe-tag-match-option ${generationMetadataFilters.tagMatchMode === "grouped" ? "is-active" : ""}`}
+                              onClick={() =>
+                                setGenerationMetadataFilters((current) => ({
+                                  ...current,
+                                  tagMatchMode: "grouped"
+                                }))
+                              }
+                              aria-pressed={generationMetadataFilters.tagMatchMode === "grouped"}
+                              title="Require every selected top-level tag group to match, while allowing any selected tag within each group."
+                            >
+                              Grouped
+                            </button>
+                            <button
+                              type="button"
+                              className={`wardrobe-tag-match-option ${generationMetadataFilters.tagMatchMode === "all" ? "is-active" : ""}`}
+                              onClick={() =>
+                                setGenerationMetadataFilters((current) => ({
+                                  ...current,
+                                  tagMatchMode: "all"
+                                }))
+                              }
+                              aria-pressed={generationMetadataFilters.tagMatchMode === "all"}
+                              title="Require all selected tags."
+                            >
+                              All
+                            </button>
+                          </div>
                         )}
                       />
 
                       <div className="controls-reference-filter-actions">
+                        <div ref={controlsViewsPopoverRef} className="library-popover-anchor">
+                          <button
+                            type="button"
+                            className={`ghost-button controls-reference-views-button ${controlsViewsOpen || matchingControlsSavedLibraryViewId ? "is-active" : ""}`}
+                            onClick={(event) => toggleControlsViews(event)}
+                            aria-expanded={controlsViewsOpen}
+                            aria-haspopup="dialog"
+                            aria-controls="controls-library-views-popover"
+                          >
+                            Views
+                          </button>
+                          <div
+                            id="controls-library-views-popover"
+                            className={`wardrobe-manage-window wardrobe-saved-views-window controls-saved-views-window ${controlsViewsOpen ? "is-open" : ""}`}
+                            aria-label="Saved library views for controls"
+                          >
+                            {savedLibraryViews.length ? (
+                              <div className="saved-library-views-list" aria-label="Saved library views list for controls">
+                                {savedLibraryViews.map((view) => {
+                                  const isCurrentView = view.id === matchingControlsSavedLibraryViewId;
+
+                                  return (
+                                    <div key={view.id} className={`saved-library-view-row ${isCurrentView ? "is-current" : ""}`}>
+                                      <button
+                                        type="button"
+                                        className="ghost-button saved-library-view-apply"
+                                        onClick={(event) => applyControlsSavedLibraryView(view, event)}
+                                      >
+                                        <span>{view.name}</span>
+                                        {isCurrentView ? <strong>Current</strong> : null}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="wardrobe-filter-empty saved-library-views-empty">No saved views yet.</p>
+                            )}
+                          </div>
+                        </div>
                         <button
                           type="button"
                           className={`ghost-button controls-reference-favorite-button ${generationMetadataFilters.favorite === "yes" ? "is-active" : ""}`}

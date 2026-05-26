@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   applySavedLibraryView,
+  applySavedLibraryViewToMetadataFilters,
   createSavedLibraryViewSnapshot,
   deleteSavedLibraryView,
   defaultLibraryUiState,
   defaultWardrobeSort,
+  doesSavedLibraryViewMatchMetadataState,
   emptyWardrobeFilters,
   normalizeSavedLibraryViews,
   normalizeLibrarySearch,
@@ -115,6 +117,41 @@ test("saved library view snapshot captures and reapplies MBA library filters and
     sort: "favorites"
   });
   assert.deepEqual(applySavedLibraryView(snapshot), snapshot);
+});
+
+test("saved library views can be applied to controls generation metadata filters by shared fields only", () => {
+  const savedView = {
+    id: "view-1",
+    name: "AW21 Sources",
+    searchQuery: "ignored-in-controls",
+    filters: {
+      tags: ["collection/aw21", "source/lookbook", "source/fit"],
+      excludedTags: ["color/red"],
+      tagMatchMode: "grouped",
+      favorite: "yes",
+      laundry: "hide"
+    },
+    sort: "tag"
+  };
+
+  assert.deepEqual(
+    applySavedLibraryViewToMetadataFilters(savedView),
+    {
+      tags: ["collection/aw21", "source/lookbook", "source/fit"],
+      excludedTags: ["color/red"],
+      tagMatchMode: "grouped",
+      favorite: "yes"
+    }
+  );
+  assert.equal(
+    doesSavedLibraryViewMatchMetadataState(savedView, {
+      tags: ["collection/aw21", "source/lookbook", "source/fit"],
+      excludedTags: ["color/red"],
+      tagMatchMode: "grouped",
+      favorite: "yes"
+    }),
+    true
+  );
 });
 
 test("normalizeSavedLibraryViews handles legacy aliases and missing saved views additively", () => {

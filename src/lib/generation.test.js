@@ -1622,6 +1622,61 @@ test("guided board filters act as a hard gate for controls matching", () => {
   assert.deepEqual(result.board.images.map((image) => image.referenceId), ["board_hard_filter_a"]);
 });
 
+test("guided board grouped filters use OR within a group and AND across groups", () => {
+  const references = [
+    createMoodboardReference("board_grouped_a", ["collection/aw21", "source/lookbook"], { favorite: true }),
+    createMoodboardReference("board_grouped_b", ["collection/aw21", "source/fit"]),
+    createMoodboardReference("board_grouped_c", ["collection/aw21", "website/fit"]),
+    createMoodboardReference("board_grouped_d", ["collection/ss22", "source/lookbook"])
+  ];
+
+  const result = withSeed(92, () =>
+    generateBoard({
+      items: references,
+      imageCount: 10,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardFilters: {
+        tags: ["collection/aw21", "source/lookbook", "source/fit"],
+        excludedTags: [],
+        tagMatchMode: "grouped",
+        favorite: ""
+      }
+    })
+  );
+
+  assert.equal(result.board.images.length, 2);
+  assert.deepEqual(
+    new Set(result.board.images.map((image) => image.referenceId)),
+    new Set(["board_grouped_a", "board_grouped_b"])
+  );
+});
+
+test("guided board grouped filters still short-circuit exclusions", () => {
+  const references = [
+    createMoodboardReference("board_grouped_excluded_a", ["collection/aw21", "source/lookbook"]),
+    createMoodboardReference("board_grouped_excluded_b", ["collection/aw21", "source/fit", "color/red"])
+  ];
+
+  const result = withSeed(93, () =>
+    generateBoard({
+      items: references,
+      imageCount: 10,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardFilters: {
+        tags: ["collection/aw21", "source/lookbook", "source/fit"],
+        excludedTags: ["color/red"],
+        tagMatchMode: "grouped",
+        favorite: ""
+      }
+    })
+  );
+
+  assert.equal(result.board.images.length, 1);
+  assert.deepEqual(result.board.images.map((image) => image.referenceId), ["board_grouped_excluded_a"]);
+});
+
 test("generateBoard returns a safe empty board when no references are available", () => {
   const result = withSeed(95, () =>
     generateBoard({

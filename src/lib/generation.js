@@ -209,7 +209,7 @@ function normalizeBoardFilterState(filters) {
   return {
     tags: uniqueBoardTags(filters?.tags),
     excludedTags: uniqueBoardTags(filters?.excludedTags),
-    tagMatchMode: filters?.tagMatchMode === "all" ? "all" : "any",
+    tagMatchMode: filters?.tagMatchMode === "all" || filters?.tagMatchMode === "grouped" ? filters.tagMatchMode : "any",
     favorite: filters?.favorite === "yes" || filters?.favorite === "no" ? filters.favorite : ""
   };
 }

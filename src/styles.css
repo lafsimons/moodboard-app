@@ -1989,6 +1989,24 @@ button:disabled {
   justify-self: start;
 }
 
+.tag-tree-toggle-all-button {
+  width: 24px;
+  padding: 2px;
+  font-size: 0.72rem;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.tag-tree-sort-mode-button {
+  width: 24px;
+  padding: 2px;
+  font-size: 0.72rem;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 .tag-tree-meta {
   display: inline-flex;
   align-items: center;
@@ -2205,9 +2223,15 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
+.controls-reference-match-toggle {
+  flex-wrap: nowrap;
+}
+
+.controls-reference-views-button,
 .controls-reference-favorite-button {
   display: inline-flex;
   align-items: center;
@@ -2223,6 +2247,7 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.controls-reference-views-button.is-active,
 .controls-reference-favorite-button.is-active {
   border-color: var(--primary);
   color: var(--primary);
@@ -2242,6 +2267,12 @@ button:disabled {
   font-weight: 500;
   line-height: 1.1;
   white-space: nowrap;
+}
+
+.controls-saved-views-window {
+  right: auto;
+  left: 0;
+  min-width: 220px;
 }
 
 .wardrobe-controls .tag-tree {

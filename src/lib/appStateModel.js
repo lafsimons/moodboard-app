@@ -128,8 +128,16 @@ export function applySavedLibraryView(savedView) {
   });
 }
 
+export function applySavedLibraryViewToMetadataFilters(savedView) {
+  return normalizeMetadataFilterState(applySavedLibraryView(savedView).filters);
+}
+
 export function doesSavedLibraryViewMatchState(savedView, currentState) {
   return JSON.stringify(applySavedLibraryView(savedView)) === JSON.stringify(createSavedLibraryViewSnapshot(currentState));
+}
+
+export function doesSavedLibraryViewMatchMetadataState(savedView, metadataFilters) {
+  return JSON.stringify(applySavedLibraryViewToMetadataFilters(savedView)) === JSON.stringify(normalizeMetadataFilterState(metadataFilters));
 }
 
 export function upsertSavedLibraryView(savedViews, name, currentState, options = {}) {
