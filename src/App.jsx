@@ -79,6 +79,10 @@ import {
   getReferenceImportMessage,
   importReferenceFiles
 } from "./lib/referenceImport";
+import {
+  getEffectiveReferencePreviewSource,
+  hasEffectiveReferencePreviewSource
+} from "./lib/referenceEditor.js";
 import { shouldShowLibraryCardTitle } from "./lib/libraryCards.js";
 import {
   applyPreviewImageFields,
@@ -124,6 +128,7 @@ import {
   normalizeWardrobeFilterState,
   normalizeWardrobeSort
 } from "./lib/appStateModel.js";
+import { sortLibraryItems } from "./lib/librarySort.js";
 import {
   pruneBoardForDeletedReferences,
   pruneOutfitForDeletedReferences,
@@ -4450,28 +4455,10 @@ export default function App() {
         (wardrobeFilters.laundry === "show" ? Boolean(excluded[item.id]) : !excluded[item.id]))
     );
 
-    const sortedItems = filtered
-      .map((item, index) => ({ item, index }))
-      .sort((a, b) => {
-        if (wardrobeSort === "favorites") {
-          return Number(Boolean(b.item.favorite)) - Number(Boolean(a.item.favorite)) || b.index - a.index;
-        }
-
-        if (wardrobeSort === "name") {
-          return buildDisplayName(a.item).localeCompare(buildDisplayName(b.item)) || a.index - b.index;
-        }
-
-        if (wardrobeSort === "newest") {
-          return compareItemsByCreatedAt(a.item, b.item, "desc") || b.index - a.index;
-        }
-
-        if (wardrobeSort === "oldest") {
-          return compareItemsByCreatedAt(a.item, b.item, "asc") || a.index - b.index;
-        }
-
-        return a.index - b.index;
-      })
-      .map(({ item }) => item);
+    const sortedItems = sortLibraryItems(filtered, wardrobeSort, {
+      getDisplayName: buildDisplayName,
+      compareCreatedAt: compareItemsByCreatedAt
+    });
 
     if (isLibraryPerfDebug && activePanel === "wardrobe" && !wardrobeSavedOpen) {
       libraryPerfRef.current?.mark("data preparation", {
@@ -7685,7 +7672,7 @@ async function handleExportBackup() {
     const normalizedImageCrop = getNormalizedImageCrop(draft);
     const normalizedQuantity = normalizeQuantity(draft.quantity);
 
-    if (!trimmedImageUrl) {
+    if (!hasEffectiveReferencePreviewSource(draft, draftResolvedPreviewMedia.src)) {
       setEditorAdvancedOpen(true);
       setImageUploadError("Choose an image or enter an image URL before saving this reference.");
       return;
@@ -10137,7 +10124,7 @@ async function handleExportBackup() {
   const referencePreviewExcluded = Boolean(referencePreview?.id && excluded[referencePreview.id]);
   const isSideEditorOpen = Boolean(isBulkSelectionEditing || (editingId && editorReturnTarget !== "outfit"));
   const isMobileFullscreenEditorOpen = Boolean((editingId || isBulkSelectionEditing) && isMobileViewport);
-  const draftImageUrl = (draftResolvedPreviewMedia.src || draft.imageUrl).trim();
+  const draftImageUrl = getEffectiveReferencePreviewSource(draft, draftResolvedPreviewMedia.src);
   const isDraftImageLoading = Boolean(editingId && draft.id && !draftImageUrl);
   const draftImageCrop = getNormalizedImageCrop(draft);
   const hasDraftImagePresentationAdjustments = Boolean(draftImageUrl) && (
@@ -10866,6 +10853,8 @@ async function handleExportBackup() {
                         >
                           <option value="favorites">Favorites first</option>
                           <option value="name">Name A-Z</option>
+                          <option value="name-desc">Name Z-A</option>
+                          <option value="tag">Tag A-Z</option>
                           <option value="newest">Newest</option>
                           <option value="oldest">Oldest</option>
                         </select>

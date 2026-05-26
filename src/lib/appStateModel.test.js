@@ -79,5 +79,7 @@ test("normalizeLibrarySearch and normalizeWardrobeSort stay additive", () => {
   assert.equal(normalizeLibrarySearch("  chrome lamp  "), "  chrome lamp  ");
   assert.equal(normalizeLibrarySearch(12), "");
   assert.equal(normalizeWardrobeSort("favorites"), "favorites");
+  assert.equal(normalizeWardrobeSort("name-desc"), "name-desc");
+  assert.equal(normalizeWardrobeSort("tag"), "tag");
   assert.equal(normalizeWardrobeSort("unsupported"), defaultWardrobeSort);
 });

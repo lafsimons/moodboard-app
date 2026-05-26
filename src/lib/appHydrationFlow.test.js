@@ -23,7 +23,8 @@ test("direct media consumers resolve metadata-only media on demand", () => {
 
 test("editor image controls key off resolver-backed draft preview state", () => {
   assert.match(appSource, /const draftResolvedPreviewMedia = useResolvedItemMediaSource\(editingId \? draft : null, "preview"\)/);
-  assert.match(appSource, /const draftImageUrl = \(draftResolvedPreviewMedia\.src \|\| draft\.imageUrl\)\.trim\(\)/);
+  assert.match(appSource, /const draftImageUrl = getEffectiveReferencePreviewSource\(draft, draftResolvedPreviewMedia\.src\)/);
+  assert.match(appSource, /if \(!hasEffectiveReferencePreviewSource\(draft, draftResolvedPreviewMedia\.src\)\) \{/);
   assert.match(appSource, /isDraftImageLoading/);
 });
 

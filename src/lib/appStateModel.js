@@ -36,7 +36,7 @@ export function normalizeWardrobeFilterState(filters) {
 }
 
 export function normalizeWardrobeSort(value) {
-  return ["newest", "oldest", "name", "favorites"].includes(value) ? value : defaultWardrobeSort;
+  return ["newest", "oldest", "name", "name-desc", "tag", "favorites"].includes(value) ? value : defaultWardrobeSort;
 }
 
 export function normalizeLibrarySearch(value) {

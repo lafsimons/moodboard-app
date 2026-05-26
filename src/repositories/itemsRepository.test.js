@@ -427,6 +427,55 @@ test("resolveItemMediaSource resolves out-of-line media for metadata-only items"
   }
 });
 
+test("metadata-only edited references stay metadata-only and still resolve preview media after save", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-save-tags",
+    itemUuid: "uuid-save-tags",
+    name: "Before",
+    tags: [],
+    imageUrl: "data:image/webp;base64,preview-save-tags",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-save-tags",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480
+      }
+    }
+  });
+
+  await saveItem({
+    id: "item-save-tags",
+    itemUuid: "uuid-save-tags",
+    name: "Before",
+    tags: ["archive"],
+    imageUrl: "",
+    images: {
+      preview: {
+        src: "",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480
+      }
+    }
+  });
+
+  const [metadataOnlyItem] = await loadStartupItemMetadata();
+  const resolvedPreviewMedia = await resolveItemMediaSource(metadataOnlyItem, "preview");
+  const [runtimeItem] = await loadItems();
+
+  assert.deepEqual(metadataOnlyItem.tags, ["archive"]);
+  assert.equal(metadataOnlyItem.imageUrl, "");
+  assert.equal(metadataOnlyItem.images.preview.src, "");
+  assert.deepEqual(runtimeItem.tags, ["archive"]);
+  assert.equal(runtimeItem.imageUrl, "");
+  assert.equal(runtimeItem.images.preview.src, "");
+  assert.equal(resolvedPreviewMedia.src, "data:image/webp;base64,preview-save-tags");
+  assert.equal(resolvedPreviewMedia.width, 640);
+  assert.equal(resolvedPreviewMedia.height, 480);
+});
+
 test("resolveItemMediaSource creates an object URL for blob-backed preview assets restored by scalable package import", async () => {
   const originalCreateObjectUrl = URL.createObjectURL;
   const originalRevokeObjectUrl = URL.revokeObjectURL;
