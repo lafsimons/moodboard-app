@@ -20,13 +20,19 @@ test("reference preview keyboard navigation uses arrow keys while the preview is
 
 test("reference preview zoom resets on close and item change", () => {
   assert.match(appSource, /const \[isReferencePreviewZoomed, setIsReferencePreviewZoomed\] = useState\(false\)/);
-  assert.match(appSource, /useEffect\(\(\) => \{[\s\S]*setIsReferencePreviewZoomed\(false\);[\s\S]*\}, \[referencePreview\?\.id\]\);/);
-  assert.match(appSource, /function closeReferencePreview\(\) \{[\s\S]*setIsReferencePreviewZoomed\(false\);[\s\S]*setReferencePreview\(null\);[\s\S]*\}/);
+  assert.match(appSource, /const \[referencePreviewZoomFocus, setReferencePreviewZoomFocus\] = useState\(null\)/);
+  assert.match(appSource, /useEffect\(\(\) => \{[\s\S]*setIsReferencePreviewZoomed\(false\);[\s\S]*setReferencePreviewZoomFocus\(null\);[\s\S]*referencePreviewStageRef\.current\.scrollLeft = 0;[\s\S]*\}, \[referencePreview\?\.id\]\);/);
+  assert.match(appSource, /function closeReferencePreview\(\) \{[\s\S]*setIsReferencePreviewZoomed\(false\);[\s\S]*setReferencePreviewZoomFocus\(null\);[\s\S]*referencePreviewStageRef\.current\.scrollLeft = 0;[\s\S]*setReferencePreview\(null\);[\s\S]*\}/);
 });
 
-test("reference preview image toggles simple zoom without pointer pan wiring", () => {
-  assert.match(appSource, /function toggleReferencePreviewZoom\(\) \{[\s\S]*setIsReferencePreviewZoomed\(\(current\) => !current\)/);
-  assert.match(appSource, /onClick=\{\(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*toggleReferencePreviewZoom\(\);[\s\S]*\}\}/);
+test("reference preview image stores click focus and centers native scroll on zoom enter without pointer pan wiring", () => {
+  assert.match(appSource, /function toggleReferencePreviewZoom\(event = null\) \{/);
+  assert.match(appSource, /const focusRatio = getReferencePreviewClickFocus\(\{[\s\S]*clientX: event\?\.clientX,[\s\S]*clientY: event\?\.clientY,[\s\S]*contentRect: referencePreviewImageFrameRef\.current\?\.getBoundingClientRect\?\.\(\) \?\? null/);
+  assert.match(appSource, /setReferencePreviewZoomFocus\(focusRatio\);[\s\S]*setIsReferencePreviewZoomed\(true\);/);
+  assert.match(appSource, /useEffect\(\(\) => \{[\s\S]*getReferencePreviewCenteredScrollPosition\(\{[\s\S]*focusRatio: referencePreviewZoomFocus,[\s\S]*containerWidth: stageElement\.clientWidth,[\s\S]*contentWidth: imageFrameElement\.offsetWidth/);
+  assert.match(appSource, /frameRef={referencePreviewImageFrameRef}/);
+  assert.match(appSource, /ref={referencePreviewStageRef}/);
+  assert.match(appSource, /onClick=\{\(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*toggleReferencePreviewZoom\(event\);[\s\S]*\}\}/);
   assert.doesNotMatch(appSource, /onPointerDown={handleReferencePreviewImagePointerDown}/);
   assert.doesNotMatch(appSource, /translate3d\(/);
   assert.doesNotMatch(appSource, /panReferencePreview\(/);

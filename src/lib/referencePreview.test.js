@@ -2,13 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  clampReferencePreviewPan,
-  createDefaultReferencePreviewZoomState,
-  createReferencePreviewZoomState,
-  getReferencePreviewNavigation,
-  getReferencePreviewPanLimits,
-  panReferencePreview,
-  REFERENCE_PREVIEW_ZOOM_SCALE
+  getReferencePreviewCenteredScrollPosition,
+  getReferencePreviewClickFocus,
+  getReferencePreviewNavigation
 } from "./referencePreview.js";
 
 test("getReferencePreviewNavigation follows the current visible library order", () => {
@@ -60,91 +56,58 @@ test("getReferencePreviewNavigation returns a safe empty state when the previewe
   assert.equal(navigation.hasNext, false);
 });
 
-test("createReferencePreviewZoomState uses the click point to center the zoom where possible", () => {
-  const zoomState = createReferencePreviewZoomState({
-    clientX: 340,
-    clientY: 180,
-    viewportRect: { width: 420, height: 320 },
-    contentRect: { left: 100, top: 40, width: 300, height: 240 }
+test("getReferencePreviewClickFocus calculates the clicked point as a ratio within the displayed image", () => {
+  const focusRatio = getReferencePreviewClickFocus({
+    clientX: 250,
+    clientY: 170,
+    contentRect: { left: 100, top: 50, width: 300, height: 240 }
   });
 
-  assert.equal(zoomState.isZoomed, true);
-  assert.equal(zoomState.scale, REFERENCE_PREVIEW_ZOOM_SCALE);
-  assert.equal(zoomState.contentWidth, 300);
-  assert.equal(zoomState.contentHeight, 240);
-  assert.equal(zoomState.offsetX, -90);
-  assert.equal(zoomState.offsetY, -40);
-});
-
-test("createReferencePreviewZoomState clamps click-centered zoom offsets at the image bounds", () => {
-  const zoomState = createReferencePreviewZoomState({
-    clientX: 100,
-    clientY: 40,
-    viewportRect: { width: 280, height: 220 },
-    contentRect: { left: 100, top: 40, width: 300, height: 240 }
-  });
-
-  assert.equal(zoomState.offsetX, 160);
-  assert.equal(zoomState.offsetY, 130);
-});
-
-test("panReferencePreview updates offsets and clamps panning so the image cannot disappear", () => {
-  const nextZoomState = panReferencePreview({
-    isZoomed: true,
-    scale: 2,
-    offsetX: -80,
-    offsetY: -20,
-    contentWidth: 300,
-    contentHeight: 240,
-    viewportWidth: 600,
-    viewportHeight: 400
-  }, 400, -300);
-
-  assert.equal(nextZoomState.offsetX, 0);
-  assert.equal(nextZoomState.offsetY, -40);
-});
-
-test("getReferencePreviewPanLimits reports available pan range from scaled image overflow", () => {
-  const limits = getReferencePreviewPanLimits({
-    contentWidth: 320,
-    contentHeight: 200,
-    viewportWidth: 400,
-    viewportHeight: 240,
-    scale: 2
-  });
-
-  assert.deepEqual(limits, {
-    maxOffsetX: 120,
-    maxOffsetY: 80
+  assert.deepEqual(focusRatio, {
+    xRatio: 0.5,
+    yRatio: 0.5
   });
 });
 
-test("clampReferencePreviewPan constrains offsets to the available pan range", () => {
-  const clampedOffsets = clampReferencePreviewPan({
-    offsetX: 500,
-    offsetY: -500,
-    contentWidth: 320,
-    contentHeight: 200,
-    viewportWidth: 400,
-    viewportHeight: 240,
-    scale: 2
+test("getReferencePreviewClickFocus clamps ratios safely near the image bounds", () => {
+  const focusRatio = getReferencePreviewClickFocus({
+    clientX: 600,
+    clientY: -20,
+    contentRect: { left: 100, top: 50, width: 300, height: 240 }
   });
 
-  assert.deepEqual(clampedOffsets, {
-    offsetX: 120,
-    offsetY: -80
+  assert.deepEqual(focusRatio, {
+    xRatio: 1,
+    yRatio: 0
   });
 });
 
-test("createDefaultReferencePreviewZoomState resets preview zoom back to fit mode", () => {
-  assert.deepEqual(createDefaultReferencePreviewZoomState(), {
-    isZoomed: false,
-    scale: 1,
-    offsetX: 0,
-    offsetY: 0,
-    contentWidth: 0,
-    contentHeight: 0,
-    viewportWidth: 0,
-    viewportHeight: 0
+test("getReferencePreviewCenteredScrollPosition centers the clicked point where possible", () => {
+  const scrollPosition = getReferencePreviewCenteredScrollPosition({
+    focusRatio: { xRatio: 0.75, yRatio: 0.25 },
+    containerWidth: 500,
+    containerHeight: 300,
+    contentWidth: 1200,
+    contentHeight: 900
+  });
+
+  assert.deepEqual(scrollPosition, {
+    scrollLeft: 650,
+    scrollTop: 75
+  });
+});
+
+test("getReferencePreviewCenteredScrollPosition clamps scroll positions to container bounds", () => {
+  const scrollPosition = getReferencePreviewCenteredScrollPosition({
+    focusRatio: { xRatio: 1, yRatio: 1 },
+    containerWidth: 500,
+    containerHeight: 300,
+    contentWidth: 700,
+    contentHeight: 450
+  });
+
+  assert.deepEqual(scrollPosition, {
+    scrollLeft: 200,
+    scrollTop: 150
   });
 });

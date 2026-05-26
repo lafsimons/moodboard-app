@@ -142,7 +142,11 @@ import {
   upsertSavedLibraryView
 } from "./lib/appStateModel.js";
 import { sortLibraryItems } from "./lib/librarySort.js";
-import { getReferencePreviewNavigation } from "./lib/referencePreview.js";
+import {
+  getReferencePreviewCenteredScrollPosition,
+  getReferencePreviewClickFocus,
+  getReferencePreviewNavigation
+} from "./lib/referencePreview.js";
 import {
   loadStoredTagTreeCollapsedGroups,
   saveStoredTagTreeCollapsedGroups
@@ -3587,6 +3591,8 @@ export default function App() {
   const boardPickerListRef = useRef(null);
   const generationMetadataFiltersPanelRef = useRef(null);
   const libraryPerfRef = useRef(null);
+  const referencePreviewStageRef = useRef(null);
+  const referencePreviewImageFrameRef = useRef(null);
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
   const currentPersistedAppStateRef = useRef(null);
@@ -3647,6 +3653,7 @@ export default function App() {
   const [fitpicPreview, setFitpicPreview] = useState(null);
   const [referencePreview, setReferencePreview] = useState(null);
   const [isReferencePreviewZoomed, setIsReferencePreviewZoomed] = useState(false);
+  const [referencePreviewZoomFocus, setReferencePreviewZoomFocus] = useState(null);
   const [wardrobeFiltersOpen, setWardrobeFiltersOpen] = useState(false);
   const [wardrobeWorthOpen, setWardrobeWorthOpen] = useState(false);
   const [wardrobeSavedOpen, setWardrobeSavedOpen] = useState(false);
@@ -4584,7 +4591,42 @@ export default function App() {
 
   useEffect(() => {
     setIsReferencePreviewZoomed(false);
+    setReferencePreviewZoomFocus(null);
+    if (referencePreviewStageRef.current) {
+      referencePreviewStageRef.current.scrollLeft = 0;
+      referencePreviewStageRef.current.scrollTop = 0;
+    }
   }, [referencePreview?.id]);
+
+  useEffect(() => {
+    if (!isReferencePreviewZoomed || !referencePreviewZoomFocus) {
+      return undefined;
+    }
+
+    let frameId = window.requestAnimationFrame(() => {
+      const stageElement = referencePreviewStageRef.current;
+      const imageFrameElement = referencePreviewImageFrameRef.current;
+
+      if (!stageElement || !imageFrameElement) {
+        return;
+      }
+
+      const nextScrollPosition = getReferencePreviewCenteredScrollPosition({
+        focusRatio: referencePreviewZoomFocus,
+        containerWidth: stageElement.clientWidth,
+        containerHeight: stageElement.clientHeight,
+        contentWidth: imageFrameElement.offsetWidth,
+        contentHeight: imageFrameElement.offsetHeight
+      });
+
+      stageElement.scrollLeft = nextScrollPosition.scrollLeft;
+      stageElement.scrollTop = nextScrollPosition.scrollTop;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [isReferencePreviewZoomed, referencePreviewZoomFocus]);
 
   function requestConfirmation({ title, message, confirmLabel = "Confirm" }) {
     return new Promise((resolve) => {
@@ -10530,6 +10572,11 @@ async function handleExportBackup() {
 
   function closeReferencePreview() {
     setIsReferencePreviewZoomed(false);
+    setReferencePreviewZoomFocus(null);
+    if (referencePreviewStageRef.current) {
+      referencePreviewStageRef.current.scrollLeft = 0;
+      referencePreviewStageRef.current.scrollTop = 0;
+    }
     setReferencePreview(null);
   }
 
@@ -10546,8 +10593,25 @@ async function handleExportBackup() {
     openReferencePreview(nextPreviewItem);
   }
 
-  function toggleReferencePreviewZoom() {
-    setIsReferencePreviewZoomed((current) => !current);
+  function toggleReferencePreviewZoom(event = null) {
+    if (isReferencePreviewZoomed) {
+      setIsReferencePreviewZoomed(false);
+      setReferencePreviewZoomFocus(null);
+      if (referencePreviewStageRef.current) {
+        referencePreviewStageRef.current.scrollLeft = 0;
+        referencePreviewStageRef.current.scrollTop = 0;
+      }
+      return;
+    }
+
+    const focusRatio = getReferencePreviewClickFocus({
+      clientX: event?.clientX,
+      clientY: event?.clientY,
+      contentRect: referencePreviewImageFrameRef.current?.getBoundingClientRect?.() ?? null
+    });
+
+    setReferencePreviewZoomFocus(focusRatio);
+    setIsReferencePreviewZoomed(true);
   }
 
   async function toggleReferencePreviewFavorite() {
@@ -12330,13 +12394,16 @@ async function handleExportBackup() {
                   </div>
                 );
               })()}
-              <div className={`reference-preview-stage ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}>
+              <div
+                ref={referencePreviewStageRef}
+                className={`reference-preview-stage ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+              >
                 <button
                   type="button"
                   className={`reference-preview-image-button ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    toggleReferencePreviewZoom();
+                    toggleReferencePreviewZoom(event);
                   }}
                   aria-pressed={isReferencePreviewZoomed}
                   aria-label={isReferencePreviewZoomed ? "Return reference preview to fit view" : "Zoom reference preview"}
@@ -12345,6 +12412,7 @@ async function handleExportBackup() {
                     item={referencePreview}
                     alt={buildDisplayName(referencePreview)}
                     dataItemId={referencePreview.id}
+                    frameRef={referencePreviewImageFrameRef}
                     variant="original"
                     useCrop
                     usePresentation
