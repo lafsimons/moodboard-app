@@ -122,11 +122,18 @@ import {
 } from "./lib/backupPackage.js";
 import { getBackupExportMaterializationPlan } from "./lib/backupExportPolicy.js";
 import {
+  applySavedLibraryView,
+  createSavedLibraryViewSnapshot,
+  deleteSavedLibraryView,
+  doesSavedLibraryViewMatchState,
+  normalizeSavedLibraryViews,
   normalizeLibrarySearch,
   normalizeLibraryUiState,
   normalizeMetadataFilterState,
   normalizeWardrobeFilterState,
-  normalizeWardrobeSort
+  normalizeWardrobeSort,
+  renameSavedLibraryView,
+  upsertSavedLibraryView
 } from "./lib/appStateModel.js";
 import { sortLibraryItems } from "./lib/librarySort.js";
 import {
@@ -3531,6 +3538,7 @@ export default function App() {
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
+  const wardrobeViewsPopoverRef = useRef(null);
   const wardrobeManagePopoverRef = useRef(null);
   const wardrobeAddPopoverRef = useRef(null);
   const sideEditorResizeCleanupRef = useRef(null);
@@ -3582,8 +3590,10 @@ export default function App() {
   const [wardrobeFiltersOpen, setWardrobeFiltersOpen] = useState(false);
   const [wardrobeWorthOpen, setWardrobeWorthOpen] = useState(false);
   const [wardrobeSavedOpen, setWardrobeSavedOpen] = useState(false);
+  const [wardrobeViewsOpen, setWardrobeViewsOpen] = useState(false);
   const [wardrobeManageOpen, setWardrobeManageOpen] = useState(false);
   const [wardrobeAddOpen, setWardrobeAddOpen] = useState(false);
+  const [savedLibraryViews, setSavedLibraryViews] = useState([]);
   const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
@@ -4203,6 +4213,14 @@ export default function App() {
   );
   const canRemoveDraftBackground = isLocalDataImage(draftBackgroundRemovalMedia.src || draftResolvedPreviewMedia.src || draft.imageUrl);
   const normalizedWardrobeFilters = normalizeWardrobeFilterState(wardrobeFilters);
+  const currentSavedLibraryViewSnapshot = useMemo(
+    () => createSavedLibraryViewSnapshot({
+      librarySearch,
+      wardrobeFilters,
+      wardrobeSort
+    }),
+    [librarySearch, wardrobeFilters, wardrobeSort]
+  );
   const activeWardrobeFilterCount =
     countActiveFilterValues({
       tags: normalizedWardrobeFilters.tags,
@@ -4281,6 +4299,17 @@ export default function App() {
         }]
       : [])
   ];
+  const matchingSavedLibraryViewId = useMemo(
+    () =>
+      normalizeSavedLibraryViews(savedLibraryViews).find((view) =>
+        doesSavedLibraryViewMatchState(view, {
+          librarySearch: currentSavedLibraryViewSnapshot.searchQuery,
+          wardrobeFilters: currentSavedLibraryViewSnapshot.filters,
+          wardrobeSort: currentSavedLibraryViewSnapshot.sort
+        })
+      )?.id ?? "",
+    [currentSavedLibraryViewSnapshot, savedLibraryViews]
+  );
   const wardrobeFilterSearchQuery = normalizeTag(wardrobeFilterSearch);
   const allLibraryTagEntries = useMemo(() => getTagFrequencyEntries(tagDebugSourceItems), [tagDebugSourceItems]);
   const allLibraryNoTagsCount = useMemo(
@@ -4404,12 +4433,19 @@ export default function App() {
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
 
   useEffect(() => {
-    if (!wardrobeManageOpen && !wardrobeAddOpen) {
+    if (!wardrobeViewsOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
       return undefined;
     }
 
     function handlePointerDown(event) {
       const target = event.target;
+
+      if (
+        wardrobeViewsOpen &&
+        wardrobeViewsPopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
 
       if (
         wardrobeManageOpen &&
@@ -4425,6 +4461,10 @@ export default function App() {
         return;
       }
 
+      if (wardrobeViewsOpen) {
+        setWardrobeViewsOpen(false);
+      }
+
       if (wardrobeManageOpen) {
         setWardrobeManageOpen(false);
       }
@@ -4436,7 +4476,7 @@ export default function App() {
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [wardrobeAddOpen, wardrobeManageOpen]);
+  }, [wardrobeAddOpen, wardrobeManageOpen, wardrobeViewsOpen]);
 
   useEffect(() => {
     return () => {
@@ -5200,6 +5240,7 @@ export default function App() {
       setWardrobeFilters(normalizeWardrobeFilterState(defaultState.wardrobeFilters));
       setLibrarySearch(normalizeLibrarySearch(defaultState.librarySearch));
       setWardrobeSort(normalizeWardrobeSort(defaultState.wardrobeSort));
+      setSavedLibraryViews(normalizeSavedLibraryViews(defaultState.savedLibraryViews));
       setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
       setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
       const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
@@ -5289,6 +5330,7 @@ export default function App() {
           setWardrobeFilters(normalizedWardrobeFilters);
           setLibrarySearch(normalizeLibrarySearch(storedAppState.librarySearch));
           setWardrobeSort(normalizedWardrobeSort);
+          setSavedLibraryViews(normalizeSavedLibraryViews(storedAppState.savedLibraryViews));
           setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
           setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
           setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
@@ -5384,6 +5426,7 @@ export default function App() {
       wardrobeFilters,
       librarySearch,
       wardrobeSort,
+      savedLibraryViews,
       libraryUiState: {
         libraryOpen: activePanel === "wardrobe",
         wardrobeFiltersOpen,
@@ -5418,6 +5461,7 @@ export default function App() {
       wardrobeFilters,
       librarySearch,
       wardrobeSort,
+      savedLibraryViews,
       activePanel,
       wardrobeFiltersOpen,
       wardrobeSavedOpen,
@@ -5825,6 +5869,13 @@ export default function App() {
         return;
       }
 
+      if (wardrobeViewsOpen) {
+        event.preventDefault();
+        blurRetainedPointerFocus();
+        setWardrobeViewsOpen(false);
+        return;
+      }
+
       if (wardrobeManageOpen) {
         event.preventDefault();
         blurRetainedPointerFocus();
@@ -5870,6 +5921,7 @@ export default function App() {
     wardrobeAddOpen,
     wardrobeWorthOpen,
     wardrobeSavedOpen,
+    wardrobeViewsOpen,
     wardrobeManageOpen
   ]);
 
@@ -6121,6 +6173,7 @@ export default function App() {
     setWardrobeFilters(normalizedWardrobeFilters);
     setLibrarySearch(normalizeLibrarySearch(nextAppState?.librarySearch));
     setWardrobeSort(normalizedWardrobeSort);
+    setSavedLibraryViews(normalizeSavedLibraryViews(nextAppState?.savedLibraryViews));
     setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
     setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
     setOutfitFilters(normalizedOutfitFilters);
@@ -7502,6 +7555,120 @@ async function handleExportBackup() {
     if (event) {
       blurPointerActivatedControl(event);
     }
+  }
+
+  function promptForSavedLibraryViewName(initialValue = "") {
+    if (typeof window === "undefined" || typeof window.prompt !== "function") {
+      return "";
+    }
+
+    return window.prompt("Saved view name", initialValue)?.trim() ?? "";
+  }
+
+  function confirmSavedLibraryViewReplacement(name) {
+    if (typeof window === "undefined" || typeof window.confirm !== "function") {
+      return true;
+    }
+
+    return window.confirm(`Replace the existing saved view "${name}"?`);
+  }
+
+  function confirmSavedLibraryViewDelete(name) {
+    if (typeof window === "undefined" || typeof window.confirm !== "function") {
+      return true;
+    }
+
+    return window.confirm(`Delete the saved view "${name}"?`);
+  }
+
+  function applyLibrarySavedView(savedView, event = null) {
+    const nextViewState = applySavedLibraryView(savedView);
+    setLibrarySearch(nextViewState.searchQuery);
+    setWardrobeFilters(nextViewState.filters);
+    setWardrobeSort(nextViewState.sort);
+    setWardrobeViewsOpen(false);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function handleSaveCurrentLibraryView(event = null) {
+    const activeView = savedLibraryViews.find((view) => view.id === matchingSavedLibraryViewId) ?? null;
+    const nextName = promptForSavedLibraryViewName(activeView?.name ?? "");
+
+    if (!nextName) {
+      return;
+    }
+
+    let saveResult = upsertSavedLibraryView(
+      savedLibraryViews,
+      nextName,
+      {
+        librarySearch: currentSavedLibraryViewSnapshot.searchQuery,
+        wardrobeFilters: currentSavedLibraryViewSnapshot.filters,
+        wardrobeSort: currentSavedLibraryViewSnapshot.sort
+      },
+      activeView ? { targetId: activeView.id } : {}
+    );
+
+    if (saveResult.conflictingView) {
+      const shouldReplace = confirmSavedLibraryViewReplacement(saveResult.conflictingView.name);
+
+      if (!shouldReplace) {
+        return;
+      }
+
+      saveResult = upsertSavedLibraryView(
+        savedLibraryViews,
+        nextName,
+        {
+          librarySearch: currentSavedLibraryViewSnapshot.searchQuery,
+          wardrobeFilters: currentSavedLibraryViewSnapshot.filters,
+          wardrobeSort: currentSavedLibraryViewSnapshot.sort
+        },
+        {
+          targetId: activeView?.id ?? "",
+          allowReplace: true
+        }
+      );
+    }
+
+    setSavedLibraryViews(saveResult.savedViews);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function handleRenameSavedLibraryView(view) {
+    const nextName = promptForSavedLibraryViewName(view?.name ?? "");
+
+    if (!nextName || !view?.id) {
+      return;
+    }
+
+    let renameResult = renameSavedLibraryView(savedLibraryViews, view.id, nextName);
+
+    if (renameResult.conflictingView) {
+      const shouldReplace = confirmSavedLibraryViewReplacement(renameResult.conflictingView.name);
+
+      if (!shouldReplace) {
+        return;
+      }
+
+      renameResult = renameSavedLibraryView(savedLibraryViews, view.id, nextName, { allowReplace: true });
+    }
+
+    setSavedLibraryViews(renameResult.savedViews);
+  }
+
+  function handleDeleteSavedLibraryView(view) {
+    if (!view?.id || !confirmSavedLibraryViewDelete(view.name)) {
+      return;
+    }
+
+    setSavedLibraryViews((current) => deleteSavedLibraryView(current, view.id));
   }
 
   function toggleOutfitFilter(group, value) {
@@ -9136,6 +9303,7 @@ async function handleExportBackup() {
       setWardrobeFiltersOpen(false);
       setWardrobeWorthOpen(false);
       setWardrobeSavedOpen(false);
+      setWardrobeViewsOpen(false);
       setWardrobeManageOpen(false);
       setWardrobeAddOpen(false);
       setLibrarySelectionActionsOpen(false);
@@ -9177,6 +9345,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
+    setWardrobeViewsOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9215,6 +9384,7 @@ async function handleExportBackup() {
     setPickerAnchorSlot(null);
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
+    setWardrobeViewsOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen(true);
@@ -9240,6 +9410,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
+    setWardrobeViewsOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9262,6 +9433,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
+    setWardrobeViewsOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9284,6 +9456,7 @@ async function handleExportBackup() {
   function openWardrobeFilters(event = null) {
     closeUtilityWindows();
     setWardrobeSavedOpen(false);
+    setWardrobeViewsOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     cancelEditSavedOutfit();
@@ -9296,6 +9469,7 @@ async function handleExportBackup() {
 
   function toggleWardrobeSaved() {
     closeUtilityWindows();
+    setWardrobeViewsOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen((current) => {
@@ -9309,9 +9483,24 @@ async function handleExportBackup() {
     });
   }
 
+  function toggleWardrobeViews(event = null) {
+    closeUtilityWindows();
+    setWardrobeFiltersOpen(false);
+    setWardrobeSavedOpen(false);
+    setWardrobeManageOpen(false);
+    setWardrobeAddOpen(false);
+    cancelEditSavedOutfit();
+    setWardrobeViewsOpen((current) => !current);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
   function toggleWardrobeManage(event = null) {
     closeUtilityWindows();
     setWardrobeFiltersOpen(false);
+    setWardrobeViewsOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen(false);
     cancelEditSavedOutfit();
@@ -9352,6 +9541,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
+    setWardrobeViewsOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -10919,6 +11109,69 @@ async function handleExportBackup() {
                       >
                         Filter
                       </button>
+                      <div ref={wardrobeViewsPopoverRef} className="library-popover-anchor">
+                        <button
+                          type="button"
+                          className={`ghost-button library-context-button ${wardrobeViewsOpen || matchingSavedLibraryViewId ? "is-active" : ""}`}
+                          onClick={(event) => toggleWardrobeViews(event)}
+                          aria-expanded={wardrobeViewsOpen}
+                          aria-haspopup="dialog"
+                          aria-controls="library-views-popover"
+                        >
+                          Views
+                        </button>
+                        <div
+                          id="library-views-popover"
+                          className={`wardrobe-manage-window wardrobe-saved-views-window ${wardrobeViewsOpen ? "is-open" : ""}`}
+                          aria-label="Saved library views"
+                        >
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={handleSaveCurrentLibraryView}
+                          >
+                            Save current view
+                          </button>
+                          {savedLibraryViews.length ? (
+                            <div className="saved-library-views-list" aria-label="Saved library views list">
+                              {savedLibraryViews.map((view) => {
+                                const isCurrentView = view.id === matchingSavedLibraryViewId;
+
+                                return (
+                                  <div key={view.id} className={`saved-library-view-row ${isCurrentView ? "is-current" : ""}`}>
+                                    <button
+                                      type="button"
+                                      className="ghost-button saved-library-view-apply"
+                                      onClick={(event) => applyLibrarySavedView(view, event)}
+                                    >
+                                      <span>{view.name}</span>
+                                      {isCurrentView ? <strong>Current</strong> : null}
+                                    </button>
+                                    <div className="saved-library-view-actions">
+                                      <button
+                                        type="button"
+                                        className="ghost-button saved-library-view-action"
+                                        onClick={() => handleRenameSavedLibraryView(view)}
+                                      >
+                                        Rename
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="ghost-button saved-library-view-action danger"
+                                        onClick={() => handleDeleteSavedLibraryView(view)}
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="wardrobe-filter-empty saved-library-views-empty">No saved views yet.</p>
+                          )}
+                        </div>
+                      </div>
                       <label className="wardrobe-sort-control">
                         <select
                           value={wardrobeSort}

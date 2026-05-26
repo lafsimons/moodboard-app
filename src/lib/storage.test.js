@@ -1375,6 +1375,52 @@ test("loadStartupAppState bypasses migration gating and returns persisted state"
   assert.equal(appState.librarySearch, "coat");
 });
 
+test("saveAppState and startup load preserve saved library views through local app-state persistence", async () => {
+  installFakeIndexedDb();
+
+  await saveAppState({
+    savedOutfits: [],
+    savedLibraryViews: [
+      {
+        id: "view-1",
+        name: "Archive",
+        searchQuery: "coat",
+        filters: {
+          tags: ["wool"],
+          excludedTags: ["damaged"],
+          tagMatchMode: "grouped",
+          favorite: "yes",
+          laundry: "hide"
+        },
+        sort: "favorites"
+      }
+    ],
+    unknownFutureField: {
+      enabled: true
+    }
+  });
+
+  const appState = await loadStartupAppState();
+  assert.deepEqual(appState.savedLibraryViews, [
+    {
+      id: "view-1",
+      name: "Archive",
+      searchQuery: "coat",
+      filters: {
+        tags: ["wool"],
+        excludedTags: ["damaged"],
+        tagMatchMode: "grouped",
+        favorite: "yes",
+        laundry: "hide"
+      },
+      sort: "favorites"
+    }
+  ]);
+  assert.deepEqual(appState.unknownFutureField, {
+    enabled: true
+  });
+});
+
 test("loadStartupItemMetadata strips inline image payloads but preserves metadata", async () => {
   installFakeIndexedDb();
 

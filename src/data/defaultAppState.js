@@ -46,6 +46,7 @@ const defaultAppState = {
   },
   librarySearch: "",
   wardrobeSort: "newest",
+  savedLibraryViews: [],
   libraryUiState: {
     libraryOpen: false,
     wardrobeFiltersOpen: false,
