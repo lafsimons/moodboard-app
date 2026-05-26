@@ -10529,6 +10529,7 @@ async function handleExportBackup() {
   }
 
   function closeReferencePreview() {
+    setIsReferencePreviewZoomed(false);
     setReferencePreview(null);
   }
 
