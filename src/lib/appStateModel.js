@@ -20,7 +20,7 @@ export function normalizeMetadataFilterState(filters) {
   return {
     tags: uniqueTags(filters?.tags),
     excludedTags: uniqueTags(filters?.excludedTags),
-    tagMatchMode: filters?.tagMatchMode === "all" ? "all" : "any",
+    tagMatchMode: filters?.tagMatchMode === "all" || filters?.tagMatchMode === "grouped" ? filters.tagMatchMode : "any",
     favorite: filters?.favorite === "yes" || filters?.favorite === "no" ? filters.favorite : ""
   };
 }
@@ -29,7 +29,7 @@ export function normalizeWardrobeFilterState(filters) {
   return {
     tags: uniqueTags(filters?.tags),
     excludedTags: uniqueTags(filters?.excludedTags),
-    tagMatchMode: filters?.tagMatchMode === "all" ? "all" : "any",
+    tagMatchMode: filters?.tagMatchMode === "all" || filters?.tagMatchMode === "grouped" ? filters.tagMatchMode : "any",
     laundry: filters?.laundry === "show" || filters?.laundry === "hide" ? filters.laundry : "",
     favorite: filters?.favorite === "yes" || filters?.favorite === "no" ? filters.favorite : ""
   };

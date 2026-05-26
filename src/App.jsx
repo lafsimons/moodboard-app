@@ -2454,7 +2454,7 @@ function hasActiveFilterValue(value) {
 function countActiveFilterValues(filters) {
   return Object.entries(filters ?? {}).filter(([key, value]) => {
     if (key === "tagMatchMode") {
-      return value === "all";
+      return value === "all" || value === "grouped";
     }
 
     return hasActiveFilterValue(value);
@@ -4178,7 +4178,7 @@ export default function App() {
       laundry: normalizedWardrobeFilters.laundry,
       favorite: normalizedWardrobeFilters.favorite,
       tagMatchMode:
-        normalizedWardrobeFilters.tags.length > 1 && normalizedWardrobeFilters.tagMatchMode === "any"
+        normalizedWardrobeFilters.tags.length > 1 && normalizedWardrobeFilters.tagMatchMode !== "any"
           ? normalizedWardrobeFilters.tagMatchMode
           : ""
     });
@@ -11017,6 +11017,18 @@ async function handleExportBackup() {
                                       title="Match any selected tag."
                                     >
                                       Any
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={`wardrobe-tag-match-option ${normalizedWardrobeFilters.tagMatchMode === "grouped" ? "is-active" : ""}`}
+                                      onClick={(event) => {
+                                        stopNestedTagTreeEvent(event);
+                                        setWardrobeFilters((current) => ({ ...current, tagMatchMode: "grouped" }));
+                                      }}
+                                      aria-pressed={normalizedWardrobeFilters.tagMatchMode === "grouped"}
+                                      title="Require every selected top-level tag group to match, while allowing any selected tag within each group."
+                                    >
+                                      Grouped
                                     </button>
                                     <button
                                       type="button"

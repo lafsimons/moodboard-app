@@ -17,14 +17,14 @@ test("normalizeWardrobeFilterState keeps supported filters and drops invalid val
     normalizeWardrobeFilterState({
       tags: ["z", "a", "a"],
       excludedTags: ["b", "b", "c"],
-      tagMatchMode: "all",
+      tagMatchMode: "grouped",
       laundry: "show",
       favorite: "yes"
     }),
     {
       tags: ["z", "a"],
       excludedTags: ["b", "c"],
-      tagMatchMode: "all",
+      tagMatchMode: "grouped",
       laundry: "show",
       favorite: "yes"
     }
@@ -47,13 +47,13 @@ test("normalizeMetadataFilterState preserves match mode and favorite compatibili
     normalizeMetadataFilterState({
       tags: ["project/a", "project/a", "project/b"],
       excludedTags: ["archive"],
-      tagMatchMode: "all",
+      tagMatchMode: "grouped",
       favorite: "no"
     }),
     {
       tags: ["project/a", "project/b"],
       excludedTags: ["archive"],
-      tagMatchMode: "all",
+      tagMatchMode: "grouped",
       favorite: "no"
     }
   );

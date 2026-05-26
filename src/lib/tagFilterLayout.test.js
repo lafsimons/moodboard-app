@@ -15,6 +15,7 @@ const stylesSource = readFileSync(
 test("MBA tag filter match mode is wired into the tag tree header instead of a lower standalone row", () => {
   assert.match(appSource, /<TagTree[\s\S]*storageKey="library-filters"[\s\S]*headerActions=\{\(\s*<div className="wardrobe-tag-match-toggle"/);
   assert.match(appSource, /wardrobe-tag-match-option \$\{normalizedWardrobeFilters\.tagMatchMode === "any" \? "is-active" : ""\}/);
+  assert.match(appSource, /wardrobe-tag-match-option \$\{normalizedWardrobeFilters\.tagMatchMode === "grouped" \? "is-active" : ""\}/);
   assert.match(appSource, /wardrobe-tag-match-option \$\{normalizedWardrobeFilters\.tagMatchMode === "all" \? "is-active" : ""\}/);
   assert.doesNotMatch(appSource, /wardrobe-inline-filter-match/);
 });

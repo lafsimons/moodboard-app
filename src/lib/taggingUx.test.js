@@ -384,6 +384,36 @@ test("matchesTagFilter supports match-all and match-any include behavior", () =>
   );
 });
 
+test("matchesTagFilter supports grouped matching with OR within a top-level group and AND across groups", () => {
+  const itemTags = ["collection/aw21", "source/lookbook", "color/black"];
+
+  assert.equal(
+    matchesTagFilter(itemTags, {
+      includeTags: ["collection/aw21", "source/lookbook", "source/fit"],
+      matchMode: "grouped"
+    }),
+    true
+  );
+
+  assert.equal(
+    matchesTagFilter(itemTags, {
+      includeTags: ["collection/aw21", "source/fit", "website/editorial"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+});
+
+test("matchesTagFilter grouped mode uses the first path segment as the group key", () => {
+  assert.equal(
+    matchesTagFilter(["collection/aw21", "ig/lookbook"], {
+      includeTags: ["collection/aw21", "ig/lookbook", "website/fit"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+});
+
 test("matchesTagFilter excludes tags and can hide untagged items", () => {
   assert.equal(
     matchesTagFilter(["style/formal", "color/black"], {
@@ -405,5 +435,52 @@ test("matchesTagFilter excludes tags and can hide untagged items", () => {
       matchMode: "any"
     }),
     true
+  );
+});
+
+test("matchesTagFilter keeps exclusions stronger than grouped inclusion", () => {
+  assert.equal(
+    matchesTagFilter(["collection/aw21", "website/fit"], {
+      includeTags: ["collection/aw21", "website/fit"],
+      excludeTags: ["website/fit"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+});
+
+test("matchesTagFilter keeps parent-child matching exact even in grouped mode", () => {
+  assert.equal(
+    matchesTagFilter(["ig/garment"], {
+      includeTags: ["ig"],
+      matchMode: "grouped"
+    }),
+    false
+  );
+
+  assert.equal(
+    matchesTagFilter(["ig/garment"], {
+      includeTags: ["ig/garment"],
+      matchMode: "grouped"
+    }),
+    true
+  );
+});
+
+test("matchesTagFilter leaves flat non-nested grouped filters behaving like exact all-groups matching", () => {
+  assert.equal(
+    matchesTagFilter(["aw21", "lookbook"], {
+      includeTags: ["aw21", "lookbook"],
+      matchMode: "grouped"
+    }),
+    true
+  );
+
+  assert.equal(
+    matchesTagFilter(["aw21"], {
+      includeTags: ["aw21", "lookbook"],
+      matchMode: "grouped"
+    }),
+    false
   );
 });
