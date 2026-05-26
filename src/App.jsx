@@ -142,6 +142,7 @@ import {
   upsertSavedLibraryView
 } from "./lib/appStateModel.js";
 import { sortLibraryItems } from "./lib/librarySort.js";
+import { getReferencePreviewNavigation } from "./lib/referencePreview.js";
 import {
   loadStoredTagTreeCollapsedGroups,
   saveStoredTagTreeCollapsedGroups
@@ -3645,6 +3646,7 @@ export default function App() {
   const [pickerAnchorSlot, setPickerAnchorSlot] = useState(null);
   const [fitpicPreview, setFitpicPreview] = useState(null);
   const [referencePreview, setReferencePreview] = useState(null);
+  const [isReferencePreviewZoomed, setIsReferencePreviewZoomed] = useState(false);
   const [wardrobeFiltersOpen, setWardrobeFiltersOpen] = useState(false);
   const [wardrobeWorthOpen, setWardrobeWorthOpen] = useState(false);
   const [wardrobeSavedOpen, setWardrobeSavedOpen] = useState(false);
@@ -4580,6 +4582,10 @@ export default function App() {
     };
   }, [activePanel, isLibraryPerfDebug, items.length, wardrobeSavedOpen]);
 
+  useEffect(() => {
+    setIsReferencePreviewZoomed(false);
+  }, [referencePreview?.id]);
+
   function requestConfirmation({ title, message, confirmLabel = "Confirm" }) {
     return new Promise((resolve) => {
       setConfirmation({
@@ -4624,6 +4630,10 @@ export default function App() {
   const visibleWardrobeItemIds = useMemo(
     () => visibleWardrobeItems.map((item) => item.id),
     [visibleWardrobeItems]
+  );
+  const referencePreviewNavigation = useMemo(
+    () => getReferencePreviewNavigation(visibleWardrobeItems, referencePreview?.id ?? ""),
+    [referencePreview?.id, visibleWardrobeItems]
   );
   const visibleBoardPickerItems = useMemo(
     () => getMetadataFilteredItems(items, generationMetadataFilters),
@@ -5936,6 +5946,25 @@ export default function App() {
         }
       }
 
+      if (
+        referencePreview &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        (event.key === "ArrowLeft" || event.key === "ArrowRight")
+      ) {
+        const nextPreviewItem =
+          event.key === "ArrowLeft"
+            ? referencePreviewNavigation.previousItem
+            : referencePreviewNavigation.nextItem;
+
+        if (nextPreviewItem) {
+          event.preventDefault();
+          openReferencePreview(nextPreviewItem);
+          return;
+        }
+      }
+
       if (event.key !== "Escape") {
         return;
       }
@@ -6048,6 +6077,8 @@ export default function App() {
     editingId,
     fitpicPreview,
     referencePreview,
+    referencePreviewNavigation.nextItem,
+    referencePreviewNavigation.previousItem,
     cropEditorState,
     librarySelectionActionsOpen,
     libraryTagActionMode,
@@ -10497,6 +10528,27 @@ async function handleExportBackup() {
     setReferencePreview(normalizeItem(item));
   }
 
+  function closeReferencePreview() {
+    setReferencePreview(null);
+  }
+
+  function openAdjacentReferencePreview(direction) {
+    const nextPreviewItem =
+      direction === "previous"
+        ? referencePreviewNavigation.previousItem
+        : referencePreviewNavigation.nextItem;
+
+    if (!nextPreviewItem) {
+      return;
+    }
+
+    openReferencePreview(nextPreviewItem);
+  }
+
+  function toggleReferencePreviewZoom() {
+    setIsReferencePreviewZoomed((current) => !current);
+  }
+
   async function toggleReferencePreviewFavorite() {
     if (!referencePreview?.id) {
       return;
@@ -12180,9 +12232,9 @@ async function handleExportBackup() {
         ) : null}
 
         {referencePreview ? (
-          <div className="floating-backdrop fitpic-preview-backdrop" onClick={() => setReferencePreview(null)}>
+          <div className="floating-backdrop fitpic-preview-backdrop" onClick={closeReferencePreview}>
             <div
-              className={`fitpic-preview-overlay reference-preview-overlay ${referencePreviewExcluded ? "is-excluded" : ""}`}
+              className={`fitpic-preview-overlay reference-preview-overlay ${referencePreviewExcluded ? "is-excluded" : ""} ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
               onClick={(event) => event.stopPropagation()}
             >
               {(() => {
@@ -12191,73 +12243,112 @@ async function handleExportBackup() {
                 const referencePreviewDescription = referencePreview.description?.trim() ?? "";
 
                 return (
-              <div className="fitpic-preview-header">
-                <div className="reference-preview-title">
-                  <strong>{buildDisplayName(referencePreview)}</strong>
-                  {referencePreviewTagLabel || referencePreviewDescription || referencePreview.favorite || referencePreviewExcluded ? (
-                    <div className="reference-preview-meta" aria-label="Reference metadata">
-                      {referencePreviewTagLabel ? <span title={referencePreviewTagLabel}>{referencePreviewTagLabel}</span> : null}
-                      {referencePreviewDescription ? (
-                        <span className="reference-preview-description" title={referencePreviewDescription}>
-                          {referencePreviewDescription}
-                        </span>
-                      ) : null}
-                      {referencePreview.favorite ? (
-                        <span className="wardrobe-meta-favorite" aria-label="Favorite">
-                          ♥
-                        </span>
-                      ) : null}
-                      {referencePreviewExcluded ? <span className="reference-preview-status-chip">Excluded from generation</span> : null}
-                    </div>
-                  ) : null}
-                  {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
-                </div>
-                <div className="reference-preview-actions">
-                  <button
-                    type="button"
-                    className={`ghost-button ${referencePreviewExcluded ? "is-active" : ""}`}
-                    onClick={() => toggleExcluded(referencePreview.id)}
-                    aria-pressed={referencePreviewExcluded}
-                    aria-label={referencePreviewExcluded ? "Include reference in generation" : "Exclude reference from generation"}
-                  >
-                    {referencePreviewExcluded ? "Excluded" : "Exclude"}
-                  </button>
-                  <button
-                    type="button"
-                    className={`ghost-button ${referencePreview.favorite ? "is-active" : ""}`}
-                    onClick={toggleReferencePreviewFavorite}
-                    aria-pressed={Boolean(referencePreview.favorite)}
-                    aria-label={referencePreview.favorite ? "Remove from favorites" : "Add to favorites"}
-                  >
-                    {referencePreview.favorite ? "Unfavorite" : "Favorite"}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-button"
-                    onClick={() => startFloatingEditFromPreview(referencePreview)}
-                    aria-label={`Edit ${buildDisplayName(referencePreview)}`}
-                  >
-                    Edit
-                  </button>
-                  <button type="button" className="ghost-button danger" onClick={deleteReferencePreviewItem}>
-                    Delete
-                  </button>
-                  <button type="button" className="ghost-button" onClick={() => setReferencePreview(null)}>
-                    Close
-                  </button>
-                </div>
-              </div>
+                  <div className="fitpic-preview-header">
+                    {isReferencePreviewZoomed ? (
+                      <div className="reference-preview-actions reference-preview-actions-zoomed">
+                        <button type="button" className="ghost-button" onClick={closeReferencePreview}>
+                          Close
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="reference-preview-title">
+                          <strong>{buildDisplayName(referencePreview)}</strong>
+                          {referencePreviewTagLabel || referencePreviewDescription || referencePreview.favorite || referencePreviewExcluded ? (
+                            <div className="reference-preview-meta" aria-label="Reference metadata">
+                              {referencePreviewTagLabel ? <span title={referencePreviewTagLabel}>{referencePreviewTagLabel}</span> : null}
+                              {referencePreviewDescription ? (
+                                <span className="reference-preview-description" title={referencePreviewDescription}>
+                                  {referencePreviewDescription}
+                                </span>
+                              ) : null}
+                              {referencePreview.favorite ? (
+                                <span className="wardrobe-meta-favorite" aria-label="Favorite">
+                                  ♥
+                                </span>
+                              ) : null}
+                              {referencePreviewExcluded ? <span className="reference-preview-status-chip">Excluded from generation</span> : null}
+                            </div>
+                          ) : null}
+                          {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
+                        </div>
+                        <div className="reference-preview-actions">
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => openAdjacentReferencePreview("previous")}
+                            disabled={!referencePreviewNavigation.hasPrevious}
+                            aria-label="Previous reference"
+                          >
+                            Previous
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => openAdjacentReferencePreview("next")}
+                            disabled={!referencePreviewNavigation.hasNext}
+                            aria-label="Next reference"
+                          >
+                            Next
+                          </button>
+                          <button
+                            type="button"
+                            className={`ghost-button ${referencePreviewExcluded ? "is-active" : ""}`}
+                            onClick={() => toggleExcluded(referencePreview.id)}
+                            aria-pressed={referencePreviewExcluded}
+                            aria-label={referencePreviewExcluded ? "Include reference in generation" : "Exclude reference from generation"}
+                          >
+                            {referencePreviewExcluded ? "Excluded" : "Exclude"}
+                          </button>
+                          <button
+                            type="button"
+                            className={`ghost-button ${referencePreview.favorite ? "is-active" : ""}`}
+                            onClick={toggleReferencePreviewFavorite}
+                            aria-pressed={Boolean(referencePreview.favorite)}
+                            aria-label={referencePreview.favorite ? "Remove from favorites" : "Add to favorites"}
+                          >
+                            {referencePreview.favorite ? "Unfavorite" : "Favorite"}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            onClick={() => startFloatingEditFromPreview(referencePreview)}
+                            aria-label={`Edit ${buildDisplayName(referencePreview)}`}
+                          >
+                            Edit
+                          </button>
+                          <button type="button" className="ghost-button danger" onClick={deleteReferencePreviewItem}>
+                            Delete
+                          </button>
+                          <button type="button" className="ghost-button" onClick={closeReferencePreview}>
+                            Close
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 );
               })()}
               <div className="reference-preview-stage">
-                <ManagedItemImage
-                  item={referencePreview}
-                  alt={buildDisplayName(referencePreview)}
-                  dataItemId={referencePreview.id}
-                  variant="original"
-                  useCrop
-                  usePresentation
-                />
+                <button
+                  type="button"
+                  className={`reference-preview-image-button ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleReferencePreviewZoom();
+                  }}
+                  aria-pressed={isReferencePreviewZoomed}
+                  aria-label={isReferencePreviewZoomed ? "Return reference preview to fit view" : "Zoom reference preview"}
+                >
+                  <ManagedItemImage
+                    item={referencePreview}
+                    alt={buildDisplayName(referencePreview)}
+                    dataItemId={referencePreview.id}
+                    variant="original"
+                    useCrop
+                    usePresentation
+                  />
+                </button>
               </div>
             </div>
           </div>
