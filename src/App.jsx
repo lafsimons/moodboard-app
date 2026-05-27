@@ -3872,9 +3872,9 @@ export default function App() {
   const [guidedDebugPayload, setGuidedDebugPayload] = useState([]);
   const [canUseDebugPopout, setCanUseDebugPopout] = useState(getCanUseDebugPopout);
   const [, startBoardTransition] = useTransition();
-  const isGeneratePerfDebug = useMemo(() => isGeneratePerfDebugEnabled(), []);
-  const isGuidedBoardCandidateDebug = useMemo(() => isGuidedBoardCandidateDebugEnabled(), []);
-  const isLibraryPerfDebug = useMemo(() => isLibraryPerfDebugEnabled(), []);
+  const isGeneratePerfDebug = isGeneratePerfDebugEnabled();
+  const isGuidedBoardCandidateDebug = isGuidedBoardCandidateDebugEnabled();
+  const isLibraryPerfDebug = isLibraryPerfDebugEnabled();
 
   function noteInteractionModality(event) {
     if (event.type === "pointerdown") {
