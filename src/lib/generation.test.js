@@ -2358,6 +2358,191 @@ test("guided board candidate debug caps rows at 25 per selection step", () => {
   });
 });
 
+test("guided board scoring spreads repeated-tag-heavy candidate pools instead of flattening all top scores", () => {
+  const references = Array.from({ length: 20 }, (_, index) =>
+    createMoodboardReference(`board_score_spread_${index}`, [
+      "theme/art",
+      "source/pinterest",
+      `project/cluster_${Math.floor(index / 5)}`,
+      `color/${index % 4}`,
+      `shape/${index % 3}`,
+      `texture/${index % 2}`
+    ])
+  );
+
+  const result = withSeed(94, () =>
+    generateBoard({
+      items: references,
+      imageCount: 5,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardGuidedOptions: {
+        debugCandidates: true
+      }
+    })
+  );
+
+  const laterSteps = result.guidedDebugPayload.slice(1);
+  assert.ok(laterSteps.length > 0);
+  assert.ok(
+    laterSteps.some((entry) => new Set((entry.candidates ?? []).map((candidate) => candidate.rawScore)).size > 1)
+  );
+});
+
+test("guided board scoring keeps metadata families out of shared tag and parent-group rewards", () => {
+  const references = [
+    createMoodboardReference("metadata_seed", [
+      "theme/art",
+      "source/pinterest",
+      "color/blue",
+      "shape/circle"
+    ]),
+    createMoodboardReference("metadata_exact_content", [
+      "theme/editorial",
+      "project/alpha",
+      "texture/matte",
+      "color/blue"
+    ]),
+    createMoodboardReference("metadata_parent_only", [
+      "theme/editorial",
+      "project/beta",
+      "color/red",
+      "texture/gloss"
+    ]),
+    createMoodboardReference("metadata_only_overlap", [
+      "theme/art",
+      "source/pinterest",
+      "material/wood",
+      "texture/brushed"
+    ])
+  ];
+
+  const result = withMockRandom(0, () =>
+    generateBoard({
+      items: references,
+      imageCount: 2,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardGuidedOptions: {
+        debugCandidates: true
+      }
+    })
+  );
+
+  const secondStep = result.guidedDebugPayload[1];
+  assert.ok(secondStep);
+
+  const exactContentCandidate = secondStep.candidates.find((candidate) => candidate.itemId === "metadata_exact_content");
+  const parentOnlyCandidate = secondStep.candidates.find((candidate) => candidate.itemId === "metadata_parent_only");
+  const metadataOnlyCandidate = secondStep.candidates.find((candidate) => candidate.itemId === "metadata_only_overlap");
+
+  assert.ok(exactContentCandidate);
+  assert.ok(parentOnlyCandidate);
+  assert.ok(metadataOnlyCandidate);
+
+  assert.equal(metadataOnlyCandidate.breakdown.sharedTags, 0);
+  assert.equal(metadataOnlyCandidate.breakdown.parentGroup, 0);
+  assert.equal(metadataOnlyCandidate.breakdown.sameDominantTag, 0);
+  assert.ok(metadataOnlyCandidate.breakdown.metadataMatch > 0);
+
+  assert.ok(exactContentCandidate.rawScore > parentOnlyCandidate.rawScore);
+  assert.ok(parentOnlyCandidate.rawScore > metadataOnlyCandidate.rawScore);
+});
+
+test("guided board scoring applies stronger penalties to candidates with more overused content tags", () => {
+  const references = [
+    createMoodboardReference("reroll_target", [
+      "theme/archive",
+      "color/olive",
+      "shape/triangle"
+    ]),
+    createMoodboardReference("seed_one", [
+      "theme/art",
+      "color/blue",
+      "shape/circle",
+      "texture/matte"
+    ]),
+    createMoodboardReference("seed_two", [
+      "theme/editorial",
+      "color/blue",
+      "shape/circle",
+      "texture/matte"
+    ]),
+    createMoodboardReference("heavy_repeat", [
+      "theme/minimal",
+      "color/blue",
+      "shape/circle",
+      "texture/matte"
+    ]),
+    createMoodboardReference("lighter_repeat", [
+      "theme/minimal",
+      "color/blue",
+      "shape/triangle",
+      "texture/gloss"
+    ])
+  ];
+
+  const result = withSeed(12, () =>
+    rerollBoardImage({
+      board: {
+        id: "board_progressive_penalty",
+        width: 1600,
+        height: 1200,
+        images: [
+          {
+            id: "board_image_target",
+            referenceId: "reroll_target",
+            generationSlot: "Headwear",
+            x: 10,
+            y: 10,
+            width: 200,
+            height: 240,
+            rotation: 0,
+            zIndex: 1
+          },
+          {
+            id: "board_image_seed_one",
+            referenceId: "seed_one",
+            generationSlot: "TopInner",
+            x: 240,
+            y: 10,
+            width: 200,
+            height: 240,
+            rotation: 0,
+            zIndex: 2
+          },
+          {
+            id: "board_image_seed_two",
+            referenceId: "seed_two",
+            generationSlot: "TopOuter",
+            x: 470,
+            y: 10,
+            width: 200,
+            height: 240,
+            rotation: 0,
+            zIndex: 3
+          }
+        ]
+      },
+      imageId: "board_image_target",
+      items: references,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardGuidedOptions: {
+        debugCandidates: true
+      }
+    })
+  );
+
+  const heavyRepeatCandidate = result.guidedDebugEntry.candidates.find((candidate) => candidate.itemId === "heavy_repeat");
+  const lighterRepeatCandidate = result.guidedDebugEntry.candidates.find((candidate) => candidate.itemId === "lighter_repeat");
+
+  assert.ok(heavyRepeatCandidate);
+  assert.ok(lighterRepeatCandidate);
+  assert.ok(heavyRepeatCandidate.breakdown.maxPerTagPenalty < lighterRepeatCandidate.breakdown.maxPerTagPenalty);
+  assert.ok(heavyRepeatCandidate.rawScore < lighterRepeatCandidate.rawScore);
+});
+
 test("rerollBoardImage falls back to the full pool when the slot pool is empty", () => {
   const topOnlyReferences = [
     {

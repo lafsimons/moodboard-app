@@ -68,3 +68,8 @@ test("MBA guided board debug render keys no longer rely on OA slot names", () =>
   assert.match(appSource, /<section key=\{debugEntryKey\} className="outfit-debug-slot">/);
   assert.doesNotMatch(appSource, /<section key=\{entry\.slot\} className="outfit-debug-slot">/);
 });
+
+test("MBA guided board candidate debug flag is read live instead of being frozen at mount", () => {
+  assert.match(appSource, /const isGuidedBoardCandidateDebug = isGuidedBoardCandidateDebugEnabled\(\);/);
+  assert.doesNotMatch(appSource, /const isGuidedBoardCandidateDebug = useMemo\(\(\) => isGuidedBoardCandidateDebugEnabled\(\), \[\]\);/);
+});

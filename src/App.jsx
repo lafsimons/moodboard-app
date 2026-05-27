@@ -3872,9 +3872,9 @@ export default function App() {
   const [guidedDebugPayload, setGuidedDebugPayload] = useState([]);
   const [canUseDebugPopout, setCanUseDebugPopout] = useState(getCanUseDebugPopout);
   const [, startBoardTransition] = useTransition();
-  const isGeneratePerfDebug = useMemo(() => isGeneratePerfDebugEnabled(), []);
-  const isGuidedBoardCandidateDebug = useMemo(() => isGuidedBoardCandidateDebugEnabled(), []);
-  const isLibraryPerfDebug = useMemo(() => isLibraryPerfDebugEnabled(), []);
+  const isGeneratePerfDebug = isGeneratePerfDebugEnabled();
+  const isGuidedBoardCandidateDebug = isGuidedBoardCandidateDebugEnabled();
+  const isLibraryPerfDebug = isLibraryPerfDebugEnabled();
 
   function noteInteractionModality(event) {
     if (event.type === "pointerdown") {
@@ -9321,6 +9321,16 @@ async function handleExportBackup() {
     zoomBoardView((currentZoom) => currentZoom * zoomFactor, anchor);
   }
 
+  useEffect(() => {
+    const viewportElement = boardViewportRef.current;
+    if (!viewportElement) {
+      return undefined;
+    }
+
+    viewportElement.addEventListener("wheel", handleBoardViewportWheel, { passive: false });
+    return () => viewportElement.removeEventListener("wheel", handleBoardViewportWheel);
+  }, [board, isMobileViewport]);
+
   function saveCurrentOutfit() {
     if (!board?.images?.length) {
       return;
@@ -10535,7 +10545,7 @@ async function handleExportBackup() {
           {boardGenerationError ? <span className="board-canvas-generation-status is-error">{boardGenerationError}</span> : null}
         </div>
 
-        <div className="board-canvas-viewport" ref={boardViewportRef} onPointerDown={handleBoardViewportPointerDown} onWheel={handleBoardViewportWheel}>
+        <div className="board-canvas-viewport" ref={boardViewportRef} onPointerDown={handleBoardViewportPointerDown}>
           {board?.images?.length ? (
             <div
               className="board-canvas-surface"
