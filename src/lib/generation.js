@@ -1098,6 +1098,19 @@ function hasAnyRenderedOverlap(frames, gap, renderMetadataList) {
   return false;
 }
 
+function boardFramesStayWithinBounds(frames, boardWidth, boardHeight, renderMetadataList) {
+  return frames.every((frame) => {
+    const collisionRect = getRenderedCollisionRect(frame, renderMetadataList[frame.index]);
+
+    return (
+      collisionRect.left >= 0 &&
+      collisionRect.top >= 0 &&
+      collisionRect.right <= boardWidth &&
+      collisionRect.bottom <= boardHeight
+    );
+  });
+}
+
 function createMasonryBoardFrames(templates, bounds, gap, renderMetadataList) {
   const columnCount = Math.max(2, Math.min(6, Math.round(Math.sqrt(templates.length || 1))));
   const usableWidth = Math.max(1, bounds.maxX - bounds.minX);
@@ -1149,6 +1162,80 @@ function createMasonryBoardFrames(templates, bounds, gap, renderMetadataList) {
   }
 
   return frames;
+}
+
+function getDeterministicColumnCountPreference(templateCount) {
+  if (templateCount >= 20) {
+    return 4;
+  }
+
+  if (templateCount >= 12) {
+    return 3;
+  }
+
+  return 2;
+}
+
+function createDeterministicColumnFrames(templates, usableWidth, gap, renderMetadataList, requestedColumnCount) {
+  const safeUsableWidth = Math.max(1, usableWidth);
+  const collisionRectsAtOrigin = templates.map((template) =>
+    getRenderedCollisionRect(
+      {
+        x: 0,
+        y: 0,
+        width: template.width,
+        height: template.height,
+        rotation: template.rotation
+      },
+      getTemplateRenderMetadata(template, renderMetadataList)
+    )
+  );
+  const maxCollisionWidth = Math.max(1, ...collisionRectsAtOrigin.map((collisionRect) => collisionRect.width));
+  const maxColumnCount = Math.max(1, Math.floor((safeUsableWidth + gap + 2) / (maxCollisionWidth + gap + 2)));
+  const columnCount = Math.max(1, Math.min(requestedColumnCount, maxColumnCount));
+  const columnWidth = safeUsableWidth / columnCount;
+  const columnHeights = Array.from({ length: columnCount }, () => 0);
+
+  const frames = templates.map((template, index) => {
+    const collisionAtOrigin = collisionRectsAtOrigin[index];
+    const spanColumns = Math.max(
+      1,
+      Math.min(columnCount, Math.ceil((collisionAtOrigin.width + gap + 2) / Math.max(1, columnWidth)))
+    );
+    let bestColumn = 0;
+    let bestHeight = Number.POSITIVE_INFINITY;
+
+    for (let columnIndex = 0; columnIndex <= columnCount - spanColumns; columnIndex += 1) {
+      const occupiedHeight = Math.max(...columnHeights.slice(columnIndex, columnIndex + spanColumns));
+
+      if (occupiedHeight < bestHeight) {
+        bestHeight = occupiedHeight;
+        bestColumn = columnIndex;
+      }
+    }
+
+    const collisionLeft = -safeUsableWidth / 2 + bestColumn * columnWidth + (columnWidth * spanColumns - collisionAtOrigin.width) / 2;
+    const frameX = collisionLeft - collisionAtOrigin.left;
+    const frameY = bestHeight - collisionAtOrigin.top;
+    const frame = {
+      ...template,
+      x: frameX,
+      y: frameY,
+      zIndex: template.index + 1
+    };
+    const collisionRect = getRenderedCollisionRect(frame, getTemplateRenderMetadata(template, renderMetadataList));
+
+    for (let columnIndex = bestColumn; columnIndex < bestColumn + spanColumns; columnIndex += 1) {
+      columnHeights[columnIndex] = collisionRect.bottom + gap + 1;
+    }
+
+    return frame;
+  });
+
+  return {
+    frames,
+    columnCount
+  };
 }
 
 function createPhonePortraitDeterministicFrames(templates, usableWidth, gap, renderMetadataList) {
@@ -1268,6 +1355,36 @@ function finalizeBoardFrames(frames, {
   };
 }
 
+function buildValidatedFinalizedBoard(
+  frames,
+  {
+    baseWidth,
+    baseHeight,
+    workingWidth,
+    workingHeight,
+    padding,
+    renderMetadataList,
+    roundPositions = false,
+    gap
+  }
+) {
+  const finalizedBoard = finalizeBoardFrames(frames, {
+    baseWidth,
+    baseHeight,
+    workingWidth,
+    workingHeight,
+    padding,
+    renderMetadataList,
+    roundPositions
+  });
+
+  return {
+    ...finalizedBoard,
+    isValid: !hasAnyRenderedOverlap(finalizedBoard.frames, gap, renderMetadataList) &&
+      boardFramesStayWithinBounds(finalizedBoard.frames, finalizedBoard.width, finalizedBoard.height, renderMetadataList)
+  };
+}
+
 function createRandomBoardFrames(imageCount, layoutOptions = {}) {
   const profile = getBoardLayoutProfile(imageCount, layoutOptions);
   const solverSettings = getBoardLayoutSolverSettings(layoutOptions);
@@ -1296,18 +1413,30 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
   )
     .sort((left, right) => right.height * right.width - left.height * left.width);
   const baseGap = profile.gap;
+  const usableWidth = Math.max(1, baseWidth - padding * 2);
   let workingWidth = baseWidth;
   let workingHeight = baseHeight;
   let frames = null;
   let usedEmergencyFallback = false;
+  const fallbackAttempts = [];
+
+  const recordFallbackAttempt = (strategy, details = {}) => {
+    fallbackAttempts.push({
+      strategy,
+      ...details
+    });
+  };
 
   updateBoardLayoutDebug(layoutOptions, {
     viewportClass: normalizeBoardLayoutViewportClass(layoutOptions?.viewportClass),
     usedEmergencyFallback: false,
     usedDeterministicPortraitFallback: false,
+    usedDeterministicColumnsFallback: false,
     placementStrategy: null,
+    placementVariant: null,
     primaryPlacementStrategy: null,
     fallbackReason: null,
+    fallbackAttempts: [],
     expansionStepsTried: 0,
     boardWidth: baseWidth,
     boardHeight: baseHeight
@@ -1363,28 +1492,127 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
       baseGap,
       renderMetadataList
     ).sort((left, right) => left.zIndex - right.zIndex);
+    recordFallbackAttempt("phonePortraitDeterministic", { reason: "noSolution" });
     updateBoardLayoutDebug(layoutOptions, {
       usedDeterministicPortraitFallback: true,
-      placementStrategy: "phonePortraitDeterministic",
+      placementStrategy: "deterministicColumns",
+      placementVariant: "phonePortraitDeterministic",
       fallbackReason: "noSolution"
     });
   }
 
+  if (!frames && !isPhonePortrait) {
+    const preferredColumnCount = getDeterministicColumnCountPreference(templates.length);
+
+    for (let columnCount = preferredColumnCount; columnCount >= 2; columnCount -= 1) {
+      const deterministicLayout = createDeterministicColumnFrames(
+        templates,
+        Math.max(usableWidth, workingWidth - padding * 2),
+        baseGap,
+        renderMetadataList,
+        columnCount
+      );
+      const finalizedDeterministicBoard = buildValidatedFinalizedBoard(deterministicLayout.frames, {
+        baseWidth,
+        baseHeight,
+        workingWidth,
+        workingHeight,
+        padding,
+        renderMetadataList,
+        gap: baseGap
+      });
+
+      recordFallbackAttempt("deterministicColumns", {
+        requestedColumnCount: columnCount,
+        resolvedColumnCount: deterministicLayout.columnCount,
+        valid: finalizedDeterministicBoard.isValid
+      });
+
+      if (finalizedDeterministicBoard.isValid) {
+        updateBoardLayoutDebug(layoutOptions, {
+          usedDeterministicColumnsFallback: true,
+          placementStrategy: "deterministicColumns",
+          placementVariant: "deterministicColumns",
+          fallbackReason: "noSolution",
+          deterministicColumnCount: deterministicLayout.columnCount
+        });
+        updateBoardLayoutDebug(layoutOptions, {
+          usedEmergencyFallback,
+          fallbackAttempts,
+          finalWidth: finalizedDeterministicBoard.width,
+          finalHeight: finalizedDeterministicBoard.height
+        });
+
+        return finalizedDeterministicBoard;
+      }
+    }
+  }
+
   if (!frames) {
+    if (!isPhonePortrait) {
+      const emergencyFrames = createDeterministicColumnFrames(
+        templates,
+        Math.max(usableWidth, workingWidth - padding * 2),
+        baseGap,
+        renderMetadataList,
+        1
+      );
+      const finalizedEmergencyBoard = buildValidatedFinalizedBoard(emergencyFrames.frames, {
+        baseWidth,
+        baseHeight,
+        workingWidth,
+        workingHeight,
+        padding,
+        renderMetadataList,
+        gap: baseGap
+      });
+
+      recordFallbackAttempt("emergencyStack", {
+        requestedColumnCount: 1,
+        resolvedColumnCount: emergencyFrames.columnCount,
+        valid: finalizedEmergencyBoard.isValid
+      });
+
+      if (finalizedEmergencyBoard.isValid) {
+        usedEmergencyFallback = true;
+        updateBoardLayoutDebug(layoutOptions, {
+          usedDeterministicColumnsFallback: true,
+          usedEmergencyFallback: true,
+          placementStrategy: "emergencyStack",
+          placementVariant: "emergencyStack",
+          fallbackReason: "noSolution",
+          deterministicColumnCount: emergencyFrames.columnCount
+        });
+        updateBoardLayoutDebug(layoutOptions, {
+          usedEmergencyFallback,
+          fallbackAttempts,
+          finalWidth: finalizedEmergencyBoard.width,
+          finalHeight: finalizedEmergencyBoard.height
+        });
+
+        return finalizedEmergencyBoard;
+      }
+    }
+
+    updateBoardLayoutDebug(layoutOptions, {
+      fallbackAttempts
+    });
+
     throw new Error("Board layout could not be generated without overlaps.");
   }
 
-  let finalizedBoard = finalizeBoardFrames(frames, {
+  let finalizedBoard = buildValidatedFinalizedBoard(frames, {
     baseWidth,
     baseHeight,
     workingWidth,
     workingHeight,
     padding,
     renderMetadataList,
-    roundPositions: isPhonePortrait
+    roundPositions: isPhonePortrait,
+    gap: baseGap
   });
 
-  if (hasAnyRenderedOverlap(finalizedBoard.frames, baseGap, renderMetadataList) && isPhonePortrait) {
+  if (!finalizedBoard.isValid && isPhonePortrait) {
     const fallbackFrames = createPhonePortraitDeterministicFrames(
       templates,
       Math.max(baseWidth, workingWidth) - padding * 2,
@@ -1392,23 +1620,26 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
       renderMetadataList
     );
 
-    finalizedBoard = finalizeBoardFrames(fallbackFrames, {
+    finalizedBoard = buildValidatedFinalizedBoard(fallbackFrames, {
       baseWidth,
       baseHeight,
       workingWidth,
       workingHeight,
       padding,
       renderMetadataList,
-      roundPositions: true
+      roundPositions: true,
+      gap: baseGap
     });
+    recordFallbackAttempt("phonePortraitDeterministic", { reason: "postFinalizeValidation", valid: finalizedBoard.isValid });
     updateBoardLayoutDebug(layoutOptions, {
       usedDeterministicPortraitFallback: true,
-      placementStrategy: "phonePortraitDeterministic",
-      fallbackReason: "postFinalizeOverlap"
+      placementStrategy: "deterministicColumns",
+      placementVariant: "phonePortraitDeterministic",
+      fallbackReason: "postFinalizeValidation"
     });
   }
 
-  if (hasAnyRenderedOverlap(finalizedBoard.frames, baseGap, renderMetadataList)) {
+  if (!finalizedBoard.isValid) {
     if (isPhonePortrait) {
       usedEmergencyFallback = true;
       const emergencyFrames = createPhonePortraitEmergencyStackFrames(
@@ -1418,29 +1649,120 @@ function createRandomBoardFrames(imageCount, layoutOptions = {}) {
         renderMetadataList
       );
 
-      finalizedBoard = finalizeBoardFrames(emergencyFrames, {
+      finalizedBoard = buildValidatedFinalizedBoard(emergencyFrames, {
         baseWidth,
         baseHeight,
         workingWidth,
         workingHeight,
         padding,
         renderMetadataList,
-        roundPositions: true
+        roundPositions: true,
+        gap: baseGap
       });
+      recordFallbackAttempt("emergencyStack", { reason: "deterministicFallbackValidation", valid: finalizedBoard.isValid });
       updateBoardLayoutDebug(layoutOptions, {
         usedEmergencyFallback: true,
-        placementStrategy: "phonePortraitEmergencyStack",
-        fallbackReason: "deterministicFallbackOverlap"
+        placementStrategy: "emergencyStack",
+        placementVariant: "phonePortraitEmergencyStack",
+        fallbackReason: "deterministicFallbackValidation"
       });
+    }
+    if (!isPhonePortrait) {
+      const preferredColumnCount = getDeterministicColumnCountPreference(templates.length);
+
+      for (let columnCount = preferredColumnCount; columnCount >= 2; columnCount -= 1) {
+        const deterministicLayout = createDeterministicColumnFrames(
+          templates,
+          Math.max(usableWidth, workingWidth - padding * 2),
+          baseGap,
+          renderMetadataList,
+          columnCount
+        );
+        const finalizedDeterministicBoard = buildValidatedFinalizedBoard(deterministicLayout.frames, {
+          baseWidth,
+          baseHeight,
+          workingWidth,
+          workingHeight,
+          padding,
+          renderMetadataList,
+          gap: baseGap
+        });
+
+        recordFallbackAttempt("deterministicColumns", {
+          reason: "postFinalizeValidation",
+          requestedColumnCount: columnCount,
+          resolvedColumnCount: deterministicLayout.columnCount,
+          valid: finalizedDeterministicBoard.isValid
+        });
+
+        if (finalizedDeterministicBoard.isValid) {
+          finalizedBoard = finalizedDeterministicBoard;
+          updateBoardLayoutDebug(layoutOptions, {
+            usedDeterministicColumnsFallback: true,
+            placementStrategy: "deterministicColumns",
+            placementVariant: "deterministicColumns",
+            fallbackReason: "postFinalizeValidation",
+            deterministicColumnCount: deterministicLayout.columnCount
+          });
+          break;
+        }
+      }
     }
   }
 
-  if (hasAnyRenderedOverlap(finalizedBoard.frames, baseGap, renderMetadataList)) {
+  if (!finalizedBoard.isValid) {
+    if (!isPhonePortrait) {
+      const emergencyFrames = createDeterministicColumnFrames(
+        templates,
+        Math.max(usableWidth, workingWidth - padding * 2),
+        baseGap,
+        renderMetadataList,
+        1
+      );
+      const finalizedEmergencyBoard = buildValidatedFinalizedBoard(emergencyFrames.frames, {
+        baseWidth,
+        baseHeight,
+        workingWidth,
+        workingHeight,
+        padding,
+        renderMetadataList,
+        gap: baseGap
+      });
+
+      recordFallbackAttempt("emergencyStack", {
+        reason: "deterministicFallbackValidation",
+        requestedColumnCount: 1,
+        resolvedColumnCount: emergencyFrames.columnCount,
+        valid: finalizedEmergencyBoard.isValid
+      });
+
+      if (finalizedEmergencyBoard.isValid) {
+        usedEmergencyFallback = true;
+        finalizedBoard = finalizedEmergencyBoard;
+        updateBoardLayoutDebug(layoutOptions, {
+          usedDeterministicColumnsFallback: true,
+          usedEmergencyFallback: true,
+          placementStrategy: "emergencyStack",
+          placementVariant: "emergencyStack",
+          fallbackReason: "deterministicFallbackValidation",
+          deterministicColumnCount: emergencyFrames.columnCount
+        });
+      }
+    }
+
+  }
+
+  if (!finalizedBoard.isValid) {
+    updateBoardLayoutDebug(layoutOptions, {
+      usedEmergencyFallback,
+      fallbackAttempts
+    });
     throw new Error("Board layout could not be generated without rendered overlap.");
   }
 
   updateBoardLayoutDebug(layoutOptions, {
     usedEmergencyFallback,
+    fallbackAttempts,
     finalWidth: finalizedBoard.width,
     finalHeight: finalizedBoard.height
   });

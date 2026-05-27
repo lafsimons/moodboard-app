@@ -288,6 +288,37 @@ function buildPhonePortraitStressFixtures(count) {
   };
 }
 
+function buildMixedAspectGuidedBoardStressFixture() {
+  const references = Array.from({ length: 10 }, (_, index) =>
+    createMoodboardReference(`guided_layout_stress_${index}`, [`stress_${index}`])
+  );
+  const aspectRatios = [0.58, 1.62, 0.72, 1.48, 0.64, 1.34, 0.86, 1.56, 0.6, 1.42];
+  const sizeMultipliers = [1.28, 1.04, 1.22, 1.1, 1.18, 1.08, 1, 1.16, 1.24, 1.06];
+  const rotations = [0, 4, -5, 0, 4, -5, 0, 4, -5, 0];
+  const aspectRatiosByReferenceId = Object.fromEntries(
+    references.map((item, index) => [item.id, aspectRatios[index]])
+  );
+  const sizeMultipliersByReferenceId = Object.fromEntries(
+    references.map((item, index) => [item.id, sizeMultipliers[index]])
+  );
+  const renderMetadataByReferenceId = Object.fromEntries(
+    references.map((item, index) => [
+      item.id,
+      {
+        aspectRatio: aspectRatios[index],
+        rotation: rotations[index]
+      }
+    ])
+  );
+
+  return {
+    references,
+    aspectRatiosByReferenceId,
+    sizeMultipliersByReferenceId,
+    renderMetadataByReferenceId
+  };
+}
+
 function eligiblePoolIds(slot, outfitFilters = { style: [], climate: [] }, outfit = {}, layering = true) {
   return getEligibleSlotPool(
     syntheticWardrobe,
@@ -1904,6 +1935,62 @@ test("desktop medium-large generated boards stay denser without clipping", () =>
       assert.ok(board.width < { 21: 4216, 25: 4600, 30: 5080 }[imageCount]);
       assert.ok(board.height < { 21: 3362, 25: 3690, 30: 4100 }[imageCount]);
     }
+  }
+});
+
+test("guided 10-image mixed-aspect board no longer fails on the reproduced hard layout seed", () => {
+  const fixture = buildMixedAspectGuidedBoardStressFixture();
+  const layoutDebug = {};
+  const result = withSeed(1, () =>
+    generateBoard({
+      items: fixture.references,
+      imageCount: 10,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      layoutOptions: {
+        layoutDebug,
+        aspectRatiosByReferenceId: fixture.aspectRatiosByReferenceId,
+        sizeMultipliersByReferenceId: fixture.sizeMultipliersByReferenceId,
+        renderMetadataByReferenceId: fixture.renderMetadataByReferenceId
+      }
+    })
+  );
+
+  assert.equal(result.board.images.length, 10);
+  assertNoRenderedBoundsOverlap(result.board.images, fixture.renderMetadataByReferenceId);
+  assertBoardImagesStayWithinBoard(result.board, fixture.renderMetadataByReferenceId);
+  assert.equal(layoutDebug.placementStrategy, "deterministicColumns");
+  assert.equal(layoutDebug.usedEmergencyFallback, false);
+  assert.equal(layoutDebug.usedDeterministicColumnsFallback, true);
+  assert.ok(Array.isArray(layoutDebug.fallbackAttempts));
+  assert.ok(layoutDebug.fallbackAttempts.some((entry) => entry.strategy === "deterministicColumns" && entry.valid === true));
+});
+
+test("guided 10-image mixed-aspect board hard layout seeds recover without overlap or clipping", () => {
+  const fixture = buildMixedAspectGuidedBoardStressFixture();
+
+  for (const seed of [1, 2, 3, 4, 6]) {
+    const layoutDebug = {};
+    const result = withSeed(seed, () =>
+      generateBoard({
+        items: fixture.references,
+        imageCount: 10,
+        generationMode: "guided",
+        generationLists: { Wardrobe: true, Wishlist: true },
+        layoutOptions: {
+          layoutDebug,
+          aspectRatiosByReferenceId: fixture.aspectRatiosByReferenceId,
+          sizeMultipliersByReferenceId: fixture.sizeMultipliersByReferenceId,
+          renderMetadataByReferenceId: fixture.renderMetadataByReferenceId
+        }
+      })
+    );
+
+    assert.equal(result.board.images.length, 10);
+    assertNoRenderedBoundsOverlap(result.board.images, fixture.renderMetadataByReferenceId);
+    assertBoardImagesStayWithinBoard(result.board, fixture.renderMetadataByReferenceId);
+    assert.ok(["random", "masonry", "deterministicColumns", "emergencyStack"].includes(layoutDebug.placementStrategy));
+    assert.equal(layoutDebug.placementStrategy === "emergencyStack", false, `expected seed ${seed} to recover before the emergency stack`);
   }
 });
 
