@@ -9,6 +9,7 @@ const appSource = readFileSync(
 
 test("mobile library uses an explicit select mode toggle", () => {
   assert.equal(appSource.includes('const [mobileLibrarySelectMode, setMobileLibrarySelectMode] = useState(false);'), true);
+  assert.equal(appSource.includes('const [mobileLibraryMoreOpen, setMobileLibraryMoreOpen] = useState(false);'), true);
   assert.equal(appSource.includes("function toggleMobileLibrarySelectionMode() {"), true);
   assert.equal(appSource.includes('{mobileLibrarySelectMode ? "Done" : "Select"}'), true);
 });
@@ -38,4 +39,16 @@ test("mobile reference preview swipe uses the shared navigation helpers", () => 
   assert.equal(appSource.includes("onTouchEnd={handleReferencePreviewStageTouchEnd}"), true);
   assert.equal(appSource.includes("const direction = getReferencePreviewSwipeDirection(mobileReferencePreviewTouchRef.current);"), true);
   assert.equal(appSource.includes("openAdjacentReferencePreview(direction);"), true);
+});
+
+test("mobile library routes lower-priority actions through a More popover while desktop keeps direct buttons", () => {
+  assert.equal(appSource.includes("function toggleMobileLibraryMore(event = null) {"), true);
+  assert.equal(appSource.includes("function openMobileLibraryManage(event = null) {"), true);
+  assert.equal(appSource.includes("function openMobileLibraryAdd(event = null) {"), true);
+  assert.equal(appSource.includes('id="library-mobile-more-popover"'), true);
+  assert.equal(appSource.includes('aria-controls="library-mobile-more-popover"'), true);
+  assert.equal(appSource.includes("selection-actions-popover library-mobile-more-popover"), true);
+  assert.equal(appSource.includes("!isMobileViewport ? ("), true);
+  assert.equal(appSource.includes("Manage\n                          </button>"), true);
+  assert.equal(appSource.includes("Add\n                          </button>"), true);
 });

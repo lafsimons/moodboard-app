@@ -3727,6 +3727,7 @@ export default function App() {
   const wardrobeFiltersPanelRef = useRef(null);
   const wardrobeViewsPopoverRef = useRef(null);
   const controlsViewsPopoverRef = useRef(null);
+  const mobileLibraryMorePopoverRef = useRef(null);
   const wardrobeManagePopoverRef = useRef(null);
   const wardrobeAddPopoverRef = useRef(null);
   const sideEditorResizeCleanupRef = useRef(null);
@@ -3778,6 +3779,7 @@ export default function App() {
   const [isReferencePreviewZoomed, setIsReferencePreviewZoomed] = useState(false);
   const [referencePreviewZoomFocus, setReferencePreviewZoomFocus] = useState(null);
   const [mobileLibrarySelectMode, setMobileLibrarySelectMode] = useState(false);
+  const [mobileLibraryMoreOpen, setMobileLibraryMoreOpen] = useState(false);
   const [mobileReferencePreviewChromeVisible, setMobileReferencePreviewChromeVisible] = useState(false);
   const [mobileReferencePreviewActionsOpen, setMobileReferencePreviewActionsOpen] = useState(false);
   const [mobileReferencePreviewInfoOpen, setMobileReferencePreviewInfoOpen] = useState(false);
@@ -4236,6 +4238,7 @@ export default function App() {
   useEffect(() => {
     if (!isMobileViewport) {
       setMobileLibrarySelectMode(false);
+      setMobileLibraryMoreOpen(false);
     }
   }, [isMobileViewport]);
 
@@ -4689,7 +4692,7 @@ export default function App() {
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
 
   useEffect(() => {
-    if (!wardrobeViewsOpen && !controlsViewsOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
+    if (!wardrobeViewsOpen && !controlsViewsOpen && !mobileLibraryMoreOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
       return undefined;
     }
 
@@ -4706,6 +4709,13 @@ export default function App() {
       if (
         controlsViewsOpen &&
         controlsViewsPopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      if (
+        mobileLibraryMoreOpen &&
+        mobileLibraryMorePopoverRef.current?.contains(target)
       ) {
         return;
       }
@@ -4732,6 +4742,10 @@ export default function App() {
         setControlsViewsOpen(false);
       }
 
+      if (mobileLibraryMoreOpen) {
+        setMobileLibraryMoreOpen(false);
+      }
+
       if (wardrobeManageOpen) {
         setWardrobeManageOpen(false);
       }
@@ -4743,7 +4757,7 @@ export default function App() {
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [controlsViewsOpen, wardrobeAddOpen, wardrobeManageOpen, wardrobeViewsOpen]);
+  }, [controlsViewsOpen, mobileLibraryMoreOpen, wardrobeAddOpen, wardrobeManageOpen, wardrobeViewsOpen]);
 
   useEffect(() => {
     return () => {
@@ -6277,6 +6291,13 @@ export default function App() {
         return;
       }
 
+      if (mobileLibraryMoreOpen) {
+        event.preventDefault();
+        blurRetainedPointerFocus();
+        setMobileLibraryMoreOpen(false);
+        return;
+      }
+
       if (wardrobeManageOpen) {
         event.preventDefault();
         blurRetainedPointerFocus();
@@ -6325,6 +6346,7 @@ export default function App() {
     wardrobeWorthOpen,
     wardrobeSavedOpen,
     wardrobeViewsOpen,
+    mobileLibraryMoreOpen,
     wardrobeManageOpen
   ]);
 
@@ -7230,6 +7252,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(true);
     setReferencePreview(null);
@@ -7579,10 +7602,45 @@ async function handleExportBackup() {
 
   function toggleMobileLibrarySelectionMode() {
     setMobileLibrarySelectMode((current) => !current);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeViewsOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeFiltersOpen(false);
+  }
+
+  function toggleMobileLibraryMore(event = null) {
+    closeUtilityWindows();
+    setWardrobeFiltersOpen(false);
+    setWardrobeViewsOpen(false);
+    setWardrobeManageOpen(false);
+    setWardrobeAddOpen(false);
+    setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen((current) => !current);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function openMobileLibraryManage(event = null) {
+    closeUtilityWindows();
+    setWardrobeFiltersOpen(false);
+    setWardrobeViewsOpen(false);
+    setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen(false);
+    setWardrobeManageOpen(true);
+    setWardrobeAddOpen(false);
+    cancelEditSavedOutfit();
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function openMobileLibraryAdd(event = null) {
+    setMobileLibraryMoreOpen(false);
+    startCreate(event);
   }
 
   function selectReference(itemId, event = null) {
@@ -9794,6 +9852,7 @@ async function handleExportBackup() {
       setWardrobeWorthOpen(false);
       setWardrobeSavedOpen(false);
       setWardrobeViewsOpen(false);
+      setMobileLibraryMoreOpen(false);
       setWardrobeManageOpen(false);
       setWardrobeAddOpen(false);
       setLibrarySelectionActionsOpen(false);
@@ -9836,6 +9895,7 @@ async function handleExportBackup() {
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9875,6 +9935,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen(true);
@@ -9901,6 +9962,7 @@ async function handleExportBackup() {
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9924,6 +9986,7 @@ async function handleExportBackup() {
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9947,6 +10010,7 @@ async function handleExportBackup() {
     closeUtilityWindows();
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     cancelEditSavedOutfit();
@@ -9978,6 +10042,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setControlsViewsOpen(false);
     setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     cancelEditSavedOutfit();
@@ -10001,6 +10066,7 @@ async function handleExportBackup() {
     closeUtilityWindows();
     setWardrobeFiltersOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen(false);
     cancelEditSavedOutfit();
@@ -11919,17 +11985,55 @@ async function handleExportBackup() {
                           <option value="oldest">Oldest</option>
                         </select>
                       </label>
+                      {isMobileViewport ? (
+                        <div ref={mobileLibraryMorePopoverRef} className="library-popover-anchor library-mobile-more-anchor">
+                          <button
+                            type="button"
+                            className={`ghost-button library-context-button ${mobileLibraryMoreOpen ? "is-active" : ""}`}
+                            onClick={toggleMobileLibraryMore}
+                            aria-expanded={mobileLibraryMoreOpen}
+                            aria-haspopup="menu"
+                            aria-controls="library-mobile-more-popover"
+                          >
+                            More
+                          </button>
+                          {mobileLibraryMoreOpen ? (
+                            <div
+                              id="library-mobile-more-popover"
+                              className="selection-actions-popover library-mobile-more-popover"
+                              aria-label="More library actions"
+                            >
+                              <button
+                                type="button"
+                                className="selection-actions-popover-item"
+                                onClick={openMobileLibraryManage}
+                              >
+                                Manage
+                              </button>
+                              <button
+                                type="button"
+                                className="selection-actions-popover-item"
+                                onClick={openMobileLibraryAdd}
+                              >
+                                Add
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div ref={wardrobeManagePopoverRef} className="library-popover-anchor">
-                        <button
-                          type="button"
-                          className={`ghost-button library-context-button ${wardrobeManageOpen ? "is-active" : ""}`}
-                          onClick={(event) => toggleWardrobeManage(event)}
-                          aria-expanded={wardrobeManageOpen}
-                          aria-haspopup="dialog"
-                          aria-controls="library-manage-popover"
-                        >
-                          Manage
-                        </button>
+                        {!isMobileViewport ? (
+                          <button
+                            type="button"
+                            className={`ghost-button library-context-button ${wardrobeManageOpen ? "is-active" : ""}`}
+                            onClick={(event) => toggleWardrobeManage(event)}
+                            aria-expanded={wardrobeManageOpen}
+                            aria-haspopup="dialog"
+                            aria-controls="library-manage-popover"
+                          >
+                            Manage
+                          </button>
+                        ) : null}
                         <div
                           id="library-manage-popover"
                           className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`}
@@ -12033,16 +12137,18 @@ async function handleExportBackup() {
                         </div>
                       </div>
                       <div ref={wardrobeAddPopoverRef} className="library-popover-anchor">
-                        <button
-                          type="button"
-                          className={`primary-button library-context-button ${wardrobeAddOpen ? "is-active" : ""}`}
-                          onClick={(event) => (wardrobeAddOpen ? closeWardrobeAdd(event) : startCreate(event))}
-                          aria-expanded={wardrobeAddOpen}
-                          aria-haspopup="dialog"
-                          aria-controls="library-add-popover"
-                        >
-                          Add
-                        </button>
+                        {!isMobileViewport ? (
+                          <button
+                            type="button"
+                            className={`primary-button library-context-button ${wardrobeAddOpen ? "is-active" : ""}`}
+                            onClick={(event) => (wardrobeAddOpen ? closeWardrobeAdd(event) : startCreate(event))}
+                            aria-expanded={wardrobeAddOpen}
+                            aria-haspopup="dialog"
+                            aria-controls="library-add-popover"
+                          >
+                            Add
+                          </button>
+                        ) : null}
                         <div
                           id="library-add-popover"
                           className={`wardrobe-add-window ${wardrobeAddOpen ? "is-open" : ""}`}

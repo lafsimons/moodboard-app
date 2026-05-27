@@ -3584,6 +3584,12 @@ button:disabled {
   color: var(--text);
 }
 
+.library-mobile-more-popover {
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(180px, calc(100vw - 28px));
+}
+
 .wardrobe-secondary-button {
   color: var(--muted);
   border-color: var(--border-soft);
@@ -5801,7 +5807,7 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   .active-panel-overlay.is-wardrobe-panel {
     bottom: calc(78px + env(safe-area-inset-bottom));
     width: calc(100vw - 8px);
-    padding: 8px 2px 2px;
+    padding: 6px 1px 1px;
   }
 
   .picker-overlay {
@@ -6093,8 +6099,65 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
     margin-left: 0;
   }
 
+  .library-command-bar {
+    display: grid;
+    gap: 8px;
+  }
+
+  .library-command-bar-leading {
+    display: grid;
+    gap: 8px;
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .library-command-bar-search {
+    width: 100%;
+    max-width: none;
+    flex: 1 1 auto;
+  }
+
   .library-command-bar-main-actions {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 5px;
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+
+  .library-command-bar-main-actions > .secondary-button,
+  .library-command-bar-main-actions > .ghost-button,
+  .library-command-bar-main-actions .library-popover-anchor > .ghost-button,
+  .library-command-bar-main-actions .wardrobe-sort-control {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .library-command-bar-main-actions .library-popover-anchor {
+    width: 100%;
+  }
+
+  .library-command-bar-main-actions .library-context-button {
+    justify-content: center;
+    padding-inline: 6px;
+  }
+
+  .wardrobe-sort-control select {
+    min-width: 0;
+    width: 100%;
+    padding-left: 7px;
+    padding-right: 20px;
+  }
+
+  .library-mobile-more-anchor {
+    justify-self: stretch;
+  }
+
+  .wardrobe-search-control input {
+    height: 32px;
+    min-height: 32px;
+    padding-left: 10px;
+    font-size: 0.7rem;
   }
 
   .wardrobe-header-group-filters,
@@ -6214,12 +6277,12 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
   .wardrobe-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
+    gap: 4px;
     margin-top: 0;
     padding-right: 0;
     margin-left: 0;
     margin-right: 0;
-    padding-bottom: 2px;
+    padding-bottom: 1px;
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;
@@ -6231,18 +6294,18 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
   .wardrobe-card {
     min-height: 142px;
-    padding: 8px 8px 7px;
-    gap: 4px;
-    border-radius: 10px;
+    padding: 7px 7px 6px;
+    gap: 3px;
+    border-radius: 9px;
   }
 
   .wardrobe-card.is-mobile-card {
-    --library-card-min-height: 208px;
-    --library-preview-height: clamp(168px, 30vh, 248px);
-    --library-image-max-height: clamp(160px, 28vh, 236px);
+    --library-card-min-height: 192px;
+    --library-preview-height: clamp(156px, 28vh, 224px);
+    --library-image-max-height: clamp(150px, 26vh, 212px);
     grid-template-rows: 1fr;
     min-height: var(--library-card-min-height);
-    padding: 8px;
+    padding: 6px;
     gap: 0;
   }
 
@@ -6254,15 +6317,15 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   .wardrobe-preview {
     min-height: min(var(--library-preview-height), 90px);
     height: min(var(--library-preview-height), 90px);
-    padding: 6px;
-    border-radius: 10px;
+    padding: 5px;
+    border-radius: 9px;
   }
 
   .wardrobe-preview.is-mobile-preview-card {
     min-height: var(--library-preview-height);
     height: var(--library-preview-height);
-    padding: 6px;
-    border-radius: 12px;
+    padding: 4px;
+    border-radius: 10px;
     align-items: center;
   }
 
