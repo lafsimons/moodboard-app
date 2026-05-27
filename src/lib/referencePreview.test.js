@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import {
   getReferencePreviewCenteredScrollPosition,
   getReferencePreviewClickFocus,
-  getReferencePreviewNavigation
+  getReferencePreviewNavigation,
+  getReferencePreviewSwipeDirection
 } from "./referencePreview.js";
 
 test("getReferencePreviewNavigation follows the current visible library order", () => {
@@ -110,4 +111,48 @@ test("getReferencePreviewCenteredScrollPosition clamps scroll positions to conta
     scrollLeft: 200,
     scrollTop: 150
   });
+});
+
+test("getReferencePreviewSwipeDirection returns next and previous for strong horizontal swipes", () => {
+  assert.equal(
+    getReferencePreviewSwipeDirection({
+      startX: 220,
+      startY: 120,
+      endX: 120,
+      endY: 140
+    }),
+    "next"
+  );
+
+  assert.equal(
+    getReferencePreviewSwipeDirection({
+      startX: 120,
+      startY: 120,
+      endX: 220,
+      endY: 100
+    }),
+    "previous"
+  );
+});
+
+test("getReferencePreviewSwipeDirection ignores short or mostly vertical movement", () => {
+  assert.equal(
+    getReferencePreviewSwipeDirection({
+      startX: 120,
+      startY: 120,
+      endX: 154,
+      endY: 124
+    }),
+    null
+  );
+
+  assert.equal(
+    getReferencePreviewSwipeDirection({
+      startX: 120,
+      startY: 120,
+      endX: 180,
+      endY: 190
+    }),
+    null
+  );
 });

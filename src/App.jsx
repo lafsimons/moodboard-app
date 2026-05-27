@@ -147,7 +147,8 @@ import { sortLibraryItems } from "./lib/librarySort.js";
 import {
   getReferencePreviewCenteredScrollPosition,
   getReferencePreviewClickFocus,
-  getReferencePreviewNavigation
+  getReferencePreviewNavigation,
+  getReferencePreviewSwipeDirection
 } from "./lib/referencePreview.js";
 import {
   loadStoredTagTreeCollapsedGroups,
@@ -1853,6 +1854,8 @@ const LibraryGridCard = memo(function LibraryGridCard({
   item,
   isSelected,
   isExcluded,
+  isMobileViewport,
+  isMobileSelectMode,
   cardStyle = null,
   onSelectReference,
   onOpenReferencePreview,
@@ -1884,7 +1887,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
 
   return (
     <article
-      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""}`}
+      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""} ${isMobileViewport ? "is-mobile-card" : ""} ${isMobileViewport && isMobileSelectMode ? "is-mobile-select-mode" : ""}`}
       style={mergedCardStyle}
     >
       {isExcluded ? (
@@ -1894,10 +1897,25 @@ const LibraryGridCard = memo(function LibraryGridCard({
       ) : null}
       <button
         type="button"
-        className="wardrobe-preview"
+        className={`wardrobe-preview ${isMobileViewport ? "is-mobile-preview-card" : ""}`}
         onMouseDown={preventMouseButtonFocus}
-        onClick={(event) => onSelectReference(item.id, event)}
+        onClick={(event) => {
+          if (isMobileViewport && !isMobileSelectMode) {
+            if (event.currentTarget instanceof HTMLElement) {
+              event.currentTarget.blur();
+            }
+
+            onOpenReferencePreview(item);
+            return;
+          }
+
+          onSelectReference(item.id, event);
+        }}
         onDoubleClick={(event) => {
+          if (isMobileViewport) {
+            return;
+          }
+
           if (event.currentTarget instanceof HTMLElement) {
             event.currentTarget.blur();
           }
@@ -1905,6 +1923,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
           onOpenReferencePreview(item);
         }}
         aria-pressed={isSelected}
+        aria-label={isMobileViewport && !isMobileSelectMode ? `${itemName} preview` : `${itemName} select`}
       >
         <ManagedItemImage
           item={item}
@@ -1921,7 +1940,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
         />
       </button>
 
-      <div className="wardrobe-meta">
+      <div className={`wardrobe-meta ${isMobileViewport ? "is-mobile-hidden" : ""}`}>
         {showTitle ? (
           <strong title={itemName}>
             <span>{itemName}</span>
@@ -1936,6 +1955,8 @@ const LibraryGridCard = memo(function LibraryGridCard({
   prevProps.item === nextProps.item &&
   prevProps.isSelected === nextProps.isSelected &&
   prevProps.isExcluded === nextProps.isExcluded &&
+  prevProps.isMobileViewport === nextProps.isMobileViewport &&
+  prevProps.isMobileSelectMode === nextProps.isMobileSelectMode &&
   prevProps.cardStyle?.top === nextProps.cardStyle?.top &&
   prevProps.cardStyle?.left === nextProps.cardStyle?.left &&
   prevProps.cardStyle?.width === nextProps.cardStyle?.width &&
@@ -3694,6 +3715,7 @@ export default function App() {
   const libraryPerfRef = useRef(null);
   const referencePreviewStageRef = useRef(null);
   const referencePreviewImageFrameRef = useRef(null);
+  const mobileReferencePreviewTouchRef = useRef(null);
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
   const currentPersistedAppStateRef = useRef(null);
@@ -3755,6 +3777,10 @@ export default function App() {
   const [referencePreview, setReferencePreview] = useState(null);
   const [isReferencePreviewZoomed, setIsReferencePreviewZoomed] = useState(false);
   const [referencePreviewZoomFocus, setReferencePreviewZoomFocus] = useState(null);
+  const [mobileLibrarySelectMode, setMobileLibrarySelectMode] = useState(false);
+  const [mobileReferencePreviewChromeVisible, setMobileReferencePreviewChromeVisible] = useState(false);
+  const [mobileReferencePreviewActionsOpen, setMobileReferencePreviewActionsOpen] = useState(false);
+  const [mobileReferencePreviewInfoOpen, setMobileReferencePreviewInfoOpen] = useState(false);
   const [wardrobeFiltersOpen, setWardrobeFiltersOpen] = useState(false);
   const [wardrobeWorthOpen, setWardrobeWorthOpen] = useState(false);
   const [wardrobeSavedOpen, setWardrobeSavedOpen] = useState(false);
@@ -4206,6 +4232,19 @@ export default function App() {
     mediaQuery.addListener(handleChange);
     return () => mediaQuery.removeListener(handleChange);
   }, [activePanel, controlsOpen]);
+
+  useEffect(() => {
+    if (!isMobileViewport) {
+      setMobileLibrarySelectMode(false);
+    }
+  }, [isMobileViewport]);
+
+  useEffect(() => {
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewTouchRef.current = null;
+  }, [isMobileViewport, referencePreview?.id]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -4818,6 +4857,7 @@ export default function App() {
     () => getReferencePreviewNavigation(visibleWardrobeItems, referencePreview?.id ?? ""),
     [referencePreview?.id, visibleWardrobeItems]
   );
+  const isMobileReferencePreview = isMobileViewport && Boolean(referencePreview);
   const visibleBoardPickerItems = useMemo(
     () => getMetadataFilteredItems(items, generationMetadataFilters),
     [items, generationMetadataFilters]
@@ -6191,7 +6231,7 @@ export default function App() {
       if (referencePreview) {
         event.preventDefault();
         blurRetainedPointerFocus();
-        setReferencePreview(null);
+        closeReferencePreview();
         return;
       }
 
@@ -7535,6 +7575,14 @@ async function handleExportBackup() {
     setImageProcessing(false);
     setItemImporting(false);
     setItemImageDragActive(false);
+  }
+
+  function toggleMobileLibrarySelectionMode() {
+    setMobileLibrarySelectMode((current) => !current);
+    setWardrobeManageOpen(false);
+    setWardrobeViewsOpen(false);
+    setWardrobeAddOpen(false);
+    setWardrobeFiltersOpen(false);
   }
 
   function selectReference(itemId, event = null) {
@@ -10600,6 +10648,8 @@ async function handleExportBackup() {
                 item={item}
                 isSelected={selectedReferenceIdSet.has(item.id)}
                 isExcluded={Boolean(excluded[item.id])}
+                isMobileViewport={isMobileViewport}
+                isMobileSelectMode={mobileLibrarySelectMode}
                 cardStyle={style}
                 onSelectReference={handleLibraryReferenceSelect}
                 onOpenReferencePreview={handleLibraryReferencePreview}
@@ -10614,6 +10664,8 @@ async function handleExportBackup() {
               item={item}
               isSelected={selectedReferenceIdSet.has(item.id)}
               isExcluded={Boolean(excluded[item.id])}
+              isMobileViewport={isMobileViewport}
+              isMobileSelectMode={mobileLibrarySelectMode}
               cardStyle={style}
               onSelectReference={handleLibraryReferenceSelect}
               onOpenReferencePreview={handleLibraryReferencePreview}
@@ -10732,12 +10784,20 @@ async function handleExportBackup() {
 
   function openReferencePreview(item) {
     setPickerBoardImageId(null);
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewTouchRef.current = null;
     setReferencePreview(normalizeItem(item));
   }
 
   function closeReferencePreview() {
     setIsReferencePreviewZoomed(false);
     setReferencePreviewZoomFocus(null);
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewTouchRef.current = null;
     if (referencePreviewStageRef.current) {
       referencePreviewStageRef.current.scrollLeft = 0;
       referencePreviewStageRef.current.scrollTop = 0;
@@ -10777,6 +10837,91 @@ async function handleExportBackup() {
 
     setReferencePreviewZoomFocus(focusRatio);
     setIsReferencePreviewZoomed(true);
+  }
+
+  function toggleMobileReferencePreviewChrome() {
+    if (!isMobileViewport || !referencePreview) {
+      return;
+    }
+
+    setMobileReferencePreviewChromeVisible((current) => {
+      const nextVisible = !current;
+
+      if (!nextVisible) {
+        setMobileReferencePreviewActionsOpen(false);
+        setMobileReferencePreviewInfoOpen(false);
+      }
+
+      return nextVisible;
+    });
+  }
+
+  function toggleMobileReferencePreviewActions(event) {
+    event.stopPropagation();
+    setMobileReferencePreviewChromeVisible(true);
+    setMobileReferencePreviewInfoOpen(false);
+    setMobileReferencePreviewActionsOpen((current) => !current);
+  }
+
+  function toggleMobileReferencePreviewInfo(event) {
+    event.stopPropagation();
+    setMobileReferencePreviewChromeVisible(true);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen((current) => !current);
+  }
+
+  function handleReferencePreviewStageTouchStart(event) {
+    if (!isMobileViewport || isReferencePreviewZoomed) {
+      mobileReferencePreviewTouchRef.current = null;
+      return;
+    }
+
+    if (event.touches.length !== 1) {
+      mobileReferencePreviewTouchRef.current = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    mobileReferencePreviewTouchRef.current = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      endX: touch.clientX,
+      endY: touch.clientY
+    };
+  }
+
+  function handleReferencePreviewStageTouchMove(event) {
+    if (!mobileReferencePreviewTouchRef.current || event.touches.length !== 1) {
+      return;
+    }
+
+    const touch = event.touches[0];
+    mobileReferencePreviewTouchRef.current = {
+      ...mobileReferencePreviewTouchRef.current,
+      endX: touch.clientX,
+      endY: touch.clientY
+    };
+  }
+
+  function handleReferencePreviewStageTouchCancel() {
+    mobileReferencePreviewTouchRef.current = null;
+  }
+
+  function handleReferencePreviewStageTouchEnd(event) {
+    if (!mobileReferencePreviewTouchRef.current || isReferencePreviewZoomed) {
+      mobileReferencePreviewTouchRef.current = null;
+      return;
+    }
+
+    const direction = getReferencePreviewSwipeDirection(mobileReferencePreviewTouchRef.current);
+    mobileReferencePreviewTouchRef.current = null;
+
+    if (!direction) {
+      return;
+    }
+
+    event.preventDefault();
+    openAdjacentReferencePreview(direction);
   }
 
   async function toggleReferencePreviewFavorite() {
@@ -11686,6 +11831,16 @@ async function handleExportBackup() {
                       >
                         Filter
                       </button>
+                      {isMobileViewport ? (
+                        <button
+                          type="button"
+                          className={`ghost-button library-context-button ${mobileLibrarySelectMode ? "is-active" : ""}`}
+                          onClick={toggleMobileLibrarySelectionMode}
+                          aria-pressed={mobileLibrarySelectMode}
+                        >
+                          {mobileLibrarySelectMode ? "Done" : "Select"}
+                        </button>
+                      ) : null}
                       <div ref={wardrobeViewsPopoverRef} className="library-popover-anchor">
                         <button
                           type="button"
@@ -12464,13 +12619,154 @@ async function handleExportBackup() {
         {referencePreview ? (
           <div className="floating-backdrop fitpic-preview-backdrop" onClick={closeReferencePreview}>
             <div
-              className={`fitpic-preview-overlay reference-preview-overlay ${referencePreviewExcluded ? "is-excluded" : ""} ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+              className={`fitpic-preview-overlay reference-preview-overlay ${referencePreviewExcluded ? "is-excluded" : ""} ${isReferencePreviewZoomed ? "is-zoomed" : ""} ${isMobileReferencePreview ? "is-mobile-preview" : ""}`}
               onClick={(event) => event.stopPropagation()}
             >
               {(() => {
                 const referencePreviewTags = uniqueTags(referencePreview.tags);
                 const referencePreviewTagLabel = referencePreviewTags.map((tag) => getLeafTagLabel(tag)).join(", ");
                 const referencePreviewDescription = referencePreview.description?.trim() ?? "";
+
+                if (isMobileReferencePreview) {
+                  return (
+                    <>
+                      <div className={`reference-preview-mobile-chrome ${mobileReferencePreviewChromeVisible ? "is-visible" : ""}`}>
+                        <button
+                          type="button"
+                          className="reference-preview-mobile-control"
+                          onClick={closeReferencePreview}
+                          aria-label="Close reference preview"
+                        >
+                          &lt;
+                        </button>
+                        <div className="reference-preview-mobile-control-group">
+                          <button
+                            type="button"
+                            className="reference-preview-mobile-control"
+                            onClick={toggleMobileReferencePreviewInfo}
+                            aria-expanded={mobileReferencePreviewInfoOpen}
+                            aria-label="Show reference info"
+                          >
+                            i
+                          </button>
+                          <div className="reference-preview-mobile-overflow">
+                            <button
+                              type="button"
+                              className="reference-preview-mobile-control"
+                              onClick={toggleMobileReferencePreviewActions}
+                              aria-expanded={mobileReferencePreviewActionsOpen}
+                              aria-haspopup="menu"
+                              aria-label="Reference actions"
+                            >
+                              …
+                            </button>
+                            {mobileReferencePreviewActionsOpen ? (
+                              <div className="selection-actions-popover reference-preview-overflow-menu" role="menu" aria-label="Reference actions">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={async () => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    await toggleReferencePreviewFavorite();
+                                  }}
+                                >
+                                  {referencePreview.favorite ? "Unfavorite" : "Favorite"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    toggleExcluded(referencePreview.id);
+                                  }}
+                                >
+                                  {referencePreviewExcluded ? "Include" : "Exclude"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    startFloatingEditFromPreview(referencePreview);
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item is-danger"
+                                  onClick={async () => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    await deleteReferencePreviewItem();
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        ref={referencePreviewStageRef}
+                        className={`reference-preview-stage reference-preview-mobile-stage ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+                        onTouchStart={handleReferencePreviewStageTouchStart}
+                        onTouchMove={handleReferencePreviewStageTouchMove}
+                        onTouchEnd={handleReferencePreviewStageTouchEnd}
+                        onTouchCancel={handleReferencePreviewStageTouchCancel}
+                      >
+                        <button
+                          type="button"
+                          className={`reference-preview-image-button reference-preview-mobile-image-button ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleMobileReferencePreviewChrome();
+                          }}
+                          aria-pressed={mobileReferencePreviewChromeVisible}
+                          aria-label={mobileReferencePreviewChromeVisible ? "Hide preview controls" : "Show preview controls"}
+                        >
+                          <ManagedItemImage
+                            item={referencePreview}
+                            alt={buildDisplayName(referencePreview)}
+                            dataItemId={referencePreview.id}
+                            frameRef={referencePreviewImageFrameRef}
+                            variant="original"
+                            useCrop
+                            usePresentation
+                          />
+                        </button>
+                      </div>
+                      {mobileReferencePreviewInfoOpen ? (
+                        <div className="reference-preview-mobile-sheet" onClick={(event) => event.stopPropagation()}>
+                          <div className="reference-preview-mobile-sheet-header">
+                            <strong>{buildDisplayName(referencePreview)}</strong>
+                            {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
+                          </div>
+                          {referencePreviewTagLabel ? (
+                            <div className="reference-preview-mobile-sheet-section">
+                              <span className="reference-preview-mobile-sheet-label">Tags</span>
+                              <p>{referencePreviewTagLabel}</p>
+                            </div>
+                          ) : null}
+                          {referencePreviewDescription ? (
+                            <div className="reference-preview-mobile-sheet-section">
+                              <span className="reference-preview-mobile-sheet-label">Description</span>
+                              <p>{referencePreviewDescription}</p>
+                            </div>
+                          ) : null}
+                          <div className="reference-preview-mobile-sheet-section">
+                            <span className="reference-preview-mobile-sheet-label">Status</span>
+                            <p>
+                              {referencePreview.favorite ? "Favorite" : "Not favorite"}
+                              {referencePreviewExcluded ? " · Excluded from generation" : ""}
+                              {!referencePreview.originalPreserved ? " · Original not preserved" : " · Original preserved"}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                }
 
                 return (
                   <div className="fitpic-preview-header">

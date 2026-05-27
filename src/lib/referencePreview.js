@@ -77,3 +77,23 @@ export function getReferencePreviewCenteredScrollPosition({
     scrollTop: clampNumber(targetScrollTop, 0, maxScrollTop)
   };
 }
+
+export function getReferencePreviewSwipeDirection({
+  startX,
+  startY,
+  endX,
+  endY,
+  minimumDistance = 48,
+  directionalBias = 1.25
+}) {
+  const deltaX = Number(endX) - Number(startX);
+  const deltaY = Number(endY) - Number(startY);
+  const absoluteDeltaX = Math.abs(deltaX);
+  const absoluteDeltaY = Math.abs(deltaY);
+
+  if (absoluteDeltaX < Number(minimumDistance) || absoluteDeltaX <= absoluteDeltaY * Number(directionalBias)) {
+    return null;
+  }
+
+  return deltaX < 0 ? "next" : "previous";
+}

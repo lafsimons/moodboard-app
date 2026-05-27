@@ -3971,6 +3971,10 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   box-shadow: none;
 }
 
+.wardrobe-meta.is-mobile-hidden {
+  display: none;
+}
+
 .wardrobe-card.is-excluded .wardrobe-preview {
   background: transparent;
 }
@@ -4476,6 +4480,7 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   display: grid;
   place-items: center;
   padding: 20px;
+  background: rgba(0, 0, 0, 0.52);
 }
 
 .confirm-backdrop {
@@ -4588,6 +4593,17 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   filter: saturate(0.86);
 }
 
+.reference-preview-overlay.is-mobile-preview {
+  width: 100vw;
+  max-width: 100vw;
+  min-height: 100vh;
+  gap: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: #000;
+}
+
 .reference-preview-stage {
   display: grid;
   flex: 1 1 auto;
@@ -4655,6 +4671,125 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   color: var(--muted-strong);
   font-size: 0.66rem;
   font-weight: 600;
+}
+
+.reference-preview-mobile-stage {
+  position: relative;
+  min-height: 100vh;
+  background: #000;
+}
+
+.reference-preview-mobile-image-button {
+  width: 100%;
+  min-height: 100vh;
+  cursor: default;
+}
+
+.reference-preview-mobile-image-button .managed-image {
+  width: min(100vw, calc((100vh - 24px) * var(--managed-crop-aspect, 1)));
+  max-width: 100vw;
+  max-height: calc(100vh - 24px);
+  object-fit: contain;
+  margin-inline: auto;
+}
+
+.reference-preview-mobile-chrome {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: calc(14px + env(safe-area-inset-top)) 14px 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.reference-preview-mobile-chrome.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.reference-preview-mobile-control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reference-preview-mobile-control,
+.reference-preview-mobile-overflow > .reference-preview-mobile-control {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.58);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.reference-preview-mobile-overflow {
+  position: relative;
+}
+
+.reference-preview-overflow-menu {
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(220px, calc(100vw - 32px));
+  background: rgba(16, 16, 16, 0.94);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.reference-preview-overflow-menu .selection-actions-popover-item {
+  color: #fff;
+}
+
+.reference-preview-overflow-menu .selection-actions-popover-item:hover,
+.reference-preview-overflow-menu .selection-actions-popover-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: transparent;
+}
+
+.reference-preview-mobile-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: grid;
+  gap: 12px;
+  padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  border-top-left-radius: 20px;
+  border-top-right-radius: 20px;
+  background: rgba(18, 18, 18, 0.96);
+  color: #fff;
+}
+
+.reference-preview-mobile-sheet-header,
+.reference-preview-mobile-sheet-section {
+  display: grid;
+  gap: 4px;
+}
+
+.reference-preview-mobile-sheet-section p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.reference-preview-mobile-sheet-label {
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .saved-outfit-form {
@@ -5958,6 +6093,10 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
     margin-left: 0;
   }
 
+  .library-command-bar-main-actions {
+    flex-wrap: wrap;
+  }
+
   .wardrobe-header-group-filters,
   .wardrobe-header-group-secondary,
   .wardrobe-header-group-selection {
@@ -6074,7 +6213,7 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   }
 
   .wardrobe-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
     margin-top: 0;
     padding-right: 0;
@@ -6097,11 +6236,34 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
     border-radius: 10px;
   }
 
+  .wardrobe-card.is-mobile-card {
+    --library-card-min-height: 208px;
+    --library-preview-height: clamp(168px, 30vh, 248px);
+    --library-image-max-height: clamp(160px, 28vh, 236px);
+    grid-template-rows: 1fr;
+    min-height: var(--library-card-min-height);
+    padding: 8px;
+    gap: 0;
+  }
+
+  .wardrobe-card.is-mobile-card.is-selected,
+  .wardrobe-card.is-mobile-card.is-mobile-select-mode.is-selected {
+    border-color: rgba(72, 72, 72, 0.72);
+  }
+
   .wardrobe-preview {
     min-height: min(var(--library-preview-height), 90px);
     height: min(var(--library-preview-height), 90px);
     padding: 6px;
     border-radius: 10px;
+  }
+
+  .wardrobe-preview.is-mobile-preview-card {
+    min-height: var(--library-preview-height);
+    height: var(--library-preview-height);
+    padding: 6px;
+    border-radius: 12px;
+    align-items: center;
   }
 
   .wardrobe-preview .managed-image {
@@ -6114,6 +6276,38 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
       calc(min(var(--library-image-width-base), 88px) * var(--managed-frame-scale, 1) * var(--managed-crop-aspect, 1))
     );
     max-height: calc(min(var(--library-image-max-height), 80px) * var(--managed-frame-scale, 1));
+  }
+
+  .wardrobe-preview.is-mobile-preview-card .managed-image {
+    width: min(
+      calc(100% * var(--managed-frame-scale, 1)),
+      calc(100% * var(--managed-frame-scale, 1) * var(--managed-crop-aspect, 1))
+    );
+    max-width: 100%;
+    max-height: calc(var(--library-image-max-height) * var(--managed-frame-scale, 1));
+  }
+
+  .fitpic-preview-backdrop {
+    padding: 0;
+    background: #000;
+  }
+
+  .reference-preview-overlay.is-mobile-preview {
+    min-height: 100dvh;
+  }
+
+  .reference-preview-mobile-stage,
+  .reference-preview-mobile-image-button {
+    min-height: 100dvh;
+  }
+
+  .reference-preview-mobile-image-button .managed-image {
+    width: min(100vw, calc((100dvh - 40px) * var(--managed-crop-aspect, 1)));
+    max-height: calc(100dvh - 40px);
+  }
+
+  .reference-preview-mobile-sheet {
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
   }
 
   .card-actions .ghost-button {
