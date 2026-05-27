@@ -44,13 +44,13 @@ const GUIDED_DEBUG_TOP_CANDIDATE_LIMIT = 5;
 const BOARD_GUIDED_DEBUG_CANDIDATE_LIMIT = 25;
 const BOARD_GUIDED_BASE_SCORE = 100;
 const BOARD_GUIDED_MAX_PER_TAG = 2;
-const BOARD_GUIDED_SHARED_TAG_SCORE = 25;
-const BOARD_GUIDED_PARENT_GROUP_SCORE = 15;
-const BOARD_GUIDED_METADATA_MATCH_SCORE = 10;
+const BOARD_GUIDED_SHARED_TAG_SCORE_STEPS = [12, 6];
+const BOARD_GUIDED_PARENT_GROUP_SCORE = 6;
+const BOARD_GUIDED_METADATA_MATCH_SCORE = 8;
 const BOARD_GUIDED_FAVORITE_SCORE = 8;
 const BOARD_GUIDED_PREVIOUS_OVERLAP_PENALTY = -20;
-const BOARD_GUIDED_PREVIOUS_DOMINANT_PENALTY = -25;
-const BOARD_GUIDED_MAX_PER_TAG_PENALTY = -30;
+const BOARD_GUIDED_PREVIOUS_DOMINANT_PENALTY = -30;
+const BOARD_GUIDED_MAX_PER_TAG_PENALTY_STEPS = [-18, -30, -38];
 const BOARD_GUIDED_METADATA_OVERUSE_PENALTY = -15;
 const BOARD_GUIDED_INCLUDED_FILTER_BONUS = 4;
 const BOARD_GUIDED_MIN_WEIGHT = 1;
@@ -268,6 +268,11 @@ function getBoardMetadataTagEntry(tag) {
 }
 
 function getBoardDominantTag(tags) {
+  const contentTag = tags.find((tag) => !getBoardMetadataTagEntry(tag));
+  if (contentTag) {
+    return contentTag;
+  }
+
   const metadataEntry = tags
     .map((tag) => getBoardMetadataTagEntry(tag))
     .find(Boolean);
@@ -278,8 +283,12 @@ function getBoardDominantTag(tags) {
 function buildBoardProfile(item) {
   const tags = uniqueBoardTags(item?.tags);
   const tagSet = new Set(tags);
+  const contentTags = tags.filter((tag) => !getBoardMetadataTagEntry(tag));
+  const contentTagSet = new Set(contentTags);
   const parentGroups = [...new Set(tags.map((tag) => getBoardTagParentGroup(tag)).filter(Boolean))];
   const parentGroupSet = new Set(parentGroups);
+  const contentParentGroups = [...new Set(contentTags.map((tag) => getBoardTagParentGroup(tag)).filter(Boolean))];
+  const contentParentGroupSet = new Set(contentParentGroups);
   const metadataEntries = tags
     .map((tag) => getBoardMetadataTagEntry(tag))
     .filter(Boolean);
@@ -290,8 +299,12 @@ function buildBoardProfile(item) {
     id: item.id,
     tags,
     tagSet,
+    contentTags,
+    contentTagSet,
     parentGroups,
     parentGroupSet,
+    contentParentGroups,
+    contentParentGroupSet,
     metadataEntries,
     metadataKeys,
     dominantTag: getBoardDominantTag(tags),
@@ -321,7 +334,9 @@ function createBoardGuidedState() {
   return {
     selectedIds: new Set(),
     tagCounts: new Map(),
+    contentTagCounts: new Map(),
     parentGroupCounts: new Map(),
+    contentParentGroupCounts: new Map(),
     metadataCounts: new Map(),
     previousProfile: null
   };
@@ -342,7 +357,9 @@ function addBoardProfileToState(state, profile) {
 
   state.selectedIds.add(profile.id);
   profile.tags.forEach((tag) => incrementCount(state.tagCounts, tag));
+  profile.contentTags.forEach((tag) => incrementCount(state.contentTagCounts, tag));
   profile.parentGroups.forEach((group) => incrementCount(state.parentGroupCounts, group));
+  profile.contentParentGroups.forEach((group) => incrementCount(state.contentParentGroupCounts, group));
   profile.metadataKeys.forEach((key) => incrementCount(state.metadataCounts, key));
   state.previousProfile = profile;
   return state;
@@ -384,6 +401,10 @@ function countSharedMetadata(profile, metadataCounts) {
   return sharedCount;
 }
 
+function getSteppedBoardGuidedValue(count, steps) {
+  return steps.slice(0, Math.max(0, count)).reduce((sum, value) => sum + value, 0);
+}
+
 function getBoardGuidedOverlapPenalty(profile, previousProfile) {
   if (!previousProfile) {
     return 0;
@@ -405,6 +426,20 @@ function getBoardGuidedMetadataOverusePenalty(profile, metadataCounts) {
     : 0;
 }
 
+function getBoardGuidedContentTagOverusePenalty(profile, boardState, context) {
+  const overusedTagCount = profile.contentTags.reduce((count, tag) => (
+    (boardState.contentTagCounts.get(tag) ?? 0) >= context.maxPerTag
+      ? count + 1
+      : count
+  ), 0);
+
+  if (!overusedTagCount) {
+    return 0;
+  }
+
+  return BOARD_GUIDED_MAX_PER_TAG_PENALTY_STEPS[Math.min(overusedTagCount, BOARD_GUIDED_MAX_PER_TAG_PENALTY_STEPS.length) - 1];
+}
+
 function getBoardCandidateScore(profile, boardState, context) {
   const breakdown = {
     sharedTags: 0,
@@ -417,13 +452,16 @@ function getBoardCandidateScore(profile, boardState, context) {
     metadataOveruse: 0
   };
 
-  const sharedTagCount = Math.min(2, countSharedBoardTags(profile, boardState.tagCounts));
-  breakdown.sharedTags += sharedTagCount * BOARD_GUIDED_SHARED_TAG_SCORE;
+  const sharedContentTagCount = Math.min(BOARD_GUIDED_SHARED_TAG_SCORE_STEPS.length, countSharedBoardTags(profile, boardState.contentTagCounts));
+  breakdown.sharedTags += getSteppedBoardGuidedValue(sharedContentTagCount, BOARD_GUIDED_SHARED_TAG_SCORE_STEPS);
 
   const includedFilterMatches = Math.min(2, countSharedBoardTags(profile, context.includedFilterTags));
   breakdown.sharedTags += includedFilterMatches * BOARD_GUIDED_INCLUDED_FILTER_BONUS;
 
-  if (countSharedParentGroups(profile, boardState.parentGroupCounts) > 0) {
+  if (
+    sharedContentTagCount === 0 &&
+    countSharedParentGroups(profile, boardState.contentParentGroupCounts) > 0
+  ) {
     breakdown.parentGroup += BOARD_GUIDED_PARENT_GROUP_SCORE;
   }
 
@@ -439,9 +477,7 @@ function getBoardCandidateScore(profile, boardState, context) {
     breakdown.sameDominantTag += BOARD_GUIDED_PREVIOUS_DOMINANT_PENALTY;
   }
 
-  if (profile.tags.some((tag) => (boardState.tagCounts.get(tag) ?? 0) >= context.maxPerTag)) {
-    breakdown.maxPerTagPenalty += BOARD_GUIDED_MAX_PER_TAG_PENALTY;
-  }
+  breakdown.maxPerTagPenalty += getBoardGuidedContentTagOverusePenalty(profile, boardState, context);
 
   breakdown.metadataOveruse += getBoardGuidedMetadataOverusePenalty(profile, boardState.metadataCounts);
 
