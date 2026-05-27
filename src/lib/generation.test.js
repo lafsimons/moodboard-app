@@ -2183,6 +2183,94 @@ test("guided board debug top candidates are skipped in normal mode and capped in
   });
 });
 
+test("guided board candidate debug is skipped by default and preserves board output when enabled", () => {
+  const references = Array.from({ length: 12 }, (_, index) =>
+    createMoodboardReference(`board_candidate_shape_${index}`, [`theme/${index % 4}`, `project/${index}`, `source/${index % 3}`], {
+      favorite: index === 0
+    })
+  );
+
+  const normalResult = withSeed(212, () =>
+    generateBoard({
+      items: references,
+      imageCount: 5,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true }
+    })
+  );
+  const debugResult = withSeed(212, () =>
+    generateBoard({
+      items: references,
+      imageCount: 5,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardGuidedOptions: {
+        debugCandidates: true
+      }
+    })
+  );
+
+  assert.deepEqual(
+    normalResult.board.images.map((image) => image.referenceId),
+    debugResult.board.images.map((image) => image.referenceId)
+  );
+
+  normalResult.guidedDebugPayload.forEach((entry) => {
+    assert.equal((entry.candidates ?? []).length, 0);
+  });
+
+  debugResult.guidedDebugPayload.forEach((entry) => {
+    assert.ok((entry.candidates ?? []).length > 0);
+    assert.ok((entry.candidates ?? []).length <= 25);
+
+    const selectedCandidates = entry.candidates.filter((candidate) => candidate.selected);
+    assert.equal(selectedCandidates.length, 1);
+    assert.equal(selectedCandidates[0].itemId, entry.itemId);
+    assert.equal(selectedCandidates[0].rawScore, entry.score);
+    assert.ok(selectedCandidates[0].weight > 0);
+
+    entry.candidates.forEach((candidate, index) => {
+      assert.ok(candidate.itemId);
+      assert.equal(typeof candidate.rawScore, "number");
+      assert.equal(typeof candidate.weight, "number");
+      assert.equal(candidate.rank, index + 1);
+      assert.ok(candidate.breakdown && typeof candidate.breakdown === "object");
+    });
+
+    assert.deepEqual(
+      entry.candidates.map((candidate) => candidate.rawScore),
+      [...entry.candidates.map((candidate) => candidate.rawScore)].sort((left, right) => right - left)
+    );
+  });
+});
+
+test("guided board candidate debug caps rows at 25 per selection step", () => {
+  const references = Array.from({ length: 40 }, (_, index) =>
+    createMoodboardReference(`board_candidate_limit_${index}`, [
+      `theme/${index % 5}`,
+      `project/${index}`,
+      `source/${index % 4}`,
+      `collection/${Math.floor(index / 5)}`
+    ])
+  );
+
+  const result = withSeed(57, () =>
+    generateBoard({
+      items: references,
+      imageCount: 6,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardGuidedOptions: {
+        debugCandidates: true
+      }
+    })
+  );
+
+  result.guidedDebugPayload.forEach((entry) => {
+    assert.equal((entry.candidates ?? []).length, 25);
+  });
+});
+
 test("rerollBoardImage falls back to the full pool when the slot pool is empty", () => {
   const topOnlyReferences = [
     {
@@ -2265,4 +2353,45 @@ test("rerollBoardImage falls back to the full pool when the slot pool is empty",
   assert.equal(result.boardImage.height, 260);
   assert.equal(result.boardImage.rotation, 2.5);
   assert.equal(result.boardImage.zIndex, 1);
+});
+
+test("guided reroll returns bounded candidate debug with image position metadata", () => {
+  const references = Array.from({ length: 10 }, (_, index) =>
+    createMoodboardReference(`guided_reroll_${index}`, [
+      `theme/${index % 3}`,
+      `project/${index}`,
+      `source/${index % 2}`
+    ])
+  );
+
+  const generated = withSeed(71, () =>
+    generateBoard({
+      items: references,
+      imageCount: 4,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardGuidedOptions: {
+        debugCandidates: true
+      }
+    })
+  );
+
+  const rerolled = withSeed(72, () =>
+    rerollBoardImage({
+      board: generated.board,
+      imageId: generated.board.images[1].id,
+      items: references,
+      generationMode: "guided",
+      generationLists: { Wardrobe: true, Wishlist: true },
+      boardGuidedOptions: {
+        debugCandidates: true
+      }
+    })
+  );
+
+  assert.ok(rerolled.guidedDebugEntry);
+  assert.equal(rerolled.guidedDebugEntry.imageId, generated.board.images[1].id);
+  assert.equal(rerolled.guidedDebugEntry.imageIndex, 1);
+  assert.ok((rerolled.guidedDebugEntry.candidates ?? []).length <= 25);
+  assert.ok((rerolled.guidedDebugEntry.candidates ?? []).some((candidate) => candidate.selected));
 });

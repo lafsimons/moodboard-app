@@ -253,6 +253,7 @@ const BOARD_PICKER_GRID_COLUMNS = 3;
 const BOARD_PICKER_GRID_GAP = 8;
 const BOARD_PICKER_ESTIMATED_ROW_HEIGHT = 126;
 const BOARD_PICKER_OVERSCAN_ROWS = 2;
+const GUIDED_BOARD_CANDIDATE_DEBUG_FLAG = "debug:guided-board-candidates";
 const NESTED_TAG_DEBUG_FLAG = "debug:nested-tags";
 const NESTED_TAG_DEBUG_ITEMS = [
   {
@@ -301,6 +302,23 @@ function isGeneratePerfDebugEnabled() {
     }
 
     return window.localStorage.getItem(GENERATE_PERF_DEBUG_FLAG) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isGuidedBoardCandidateDebugEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("debugGuidedBoardCandidates") === "1") {
+      return true;
+    }
+
+    return window.localStorage.getItem(GUIDED_BOARD_CANDIDATE_DEBUG_FLAG) === "1";
   } catch {
     return false;
   }
@@ -403,6 +421,63 @@ function createLibraryPerfSession(enabled) {
       console.groupEnd();
     }
   };
+}
+
+function getFilterDirectionSummary(filters) {
+  return uniqueTags(filters?.tags).slice(0, 3);
+}
+
+function sortGuidedDebugPayloadForBoard(entries, boardImages) {
+  const indexedBoardImages = (Array.isArray(boardImages) ? boardImages : []).map((image, index) => ({
+    image,
+    index
+  }));
+
+  return (Array.isArray(entries) ? entries : [])
+    .filter(Boolean)
+    .slice()
+    .sort((left, right) => {
+      const leftIndex = indexedBoardImages.findIndex(({ image, index }) =>
+        (left.imageId && image.id === left.imageId) ||
+        (Number.isInteger(left.imageIndex) && index === left.imageIndex) ||
+        (image.referenceId === left.itemId && image.generationSlot === left.slot)
+      );
+      const rightIndex = indexedBoardImages.findIndex(({ image, index }) =>
+        (right.imageId && image.id === right.imageId) ||
+        (Number.isInteger(right.imageIndex) && index === right.imageIndex) ||
+        (image.referenceId === right.itemId && image.generationSlot === right.slot)
+      );
+
+      return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+    })
+    .map((entry, index) => ({
+      ...entry,
+      imageId: indexedBoardImages[index]?.image?.id ?? entry.imageId ?? "",
+      imageIndex: indexedBoardImages[index]?.index ?? entry.imageIndex ?? index
+    }));
+}
+
+function mergeGuidedDebugEntryIntoPayload(currentPayload, guidedDebugEntry, boardImages) {
+  if (!guidedDebugEntry) {
+    return currentPayload;
+  }
+
+  const nextPayload = Array.isArray(currentPayload) ? currentPayload.slice() : [];
+  const replacementIndex = nextPayload.findIndex((entry) =>
+    (guidedDebugEntry.imageId && entry.imageId === guidedDebugEntry.imageId) ||
+    (Number.isInteger(guidedDebugEntry.imageIndex) && entry.imageIndex === guidedDebugEntry.imageIndex)
+  );
+  const fallbackIndex = replacementIndex === -1
+    ? nextPayload.findIndex((entry) => entry.slot === guidedDebugEntry.slot)
+    : replacementIndex;
+
+  if (fallbackIndex >= 0) {
+    nextPayload[fallbackIndex] = guidedDebugEntry;
+  } else {
+    nextPayload.push(guidedDebugEntry);
+  }
+
+  return sortGuidedDebugPayloadForBoard(nextPayload, boardImages);
 }
 
 function getImageFilename(imageUrl) {
@@ -3782,6 +3857,7 @@ export default function App() {
   const [canUseDebugPopout, setCanUseDebugPopout] = useState(getCanUseDebugPopout);
   const [, startBoardTransition] = useTransition();
   const isGeneratePerfDebug = useMemo(() => isGeneratePerfDebugEnabled(), []);
+  const isGuidedBoardCandidateDebug = useMemo(() => isGuidedBoardCandidateDebugEnabled(), []);
   const isLibraryPerfDebug = useMemo(() => isLibraryPerfDebugEnabled(), []);
 
   function noteInteractionModality(event) {
@@ -3933,6 +4009,10 @@ export default function App() {
         .slice(0, 3)
         .map(({ tag }) => tag),
     [currentBoardItems]
+  );
+  const currentFilterDirectionSummary = useMemo(
+    () => getFilterDirectionSummary(generationMetadataFilters),
+    [generationMetadataFilters]
   );
   const currentBoardParentGroupSummary = useMemo(() => {
     const counts = new Map();
@@ -4178,9 +4258,15 @@ export default function App() {
                 <strong>Guided</strong>
               </div>
               <div className="outfit-debug-row">
-                <span>Direction tags</span>
+                <span>Current board tags</span>
                 <strong>{currentBoardTagSummary.length ? currentBoardTagSummary.join(", ") : "Unspecified"}</strong>
               </div>
+              {currentFilterDirectionSummary.length ? (
+                <div className="outfit-debug-row">
+                  <span>Filter direction</span>
+                  <strong>{currentFilterDirectionSummary.join(", ")}</strong>
+                </div>
+              ) : null}
               <div className="outfit-debug-row">
                 <span>Parent groups</span>
                 <strong>{currentBoardParentGroupSummary.length ? currentBoardParentGroupSummary.join(", ") : "None"}</strong>
@@ -4193,6 +4279,7 @@ export default function App() {
                   const selectedItem = itemsById[entry.itemId];
                   const reasons = getGuidedBreakdownDisplayEntries(entry.breakdown, 3);
                   const topCandidates = (entry.topCandidates ?? []).slice(0, 5);
+                  const candidateRows = (entry.candidates ?? []).slice(0, 25);
 
                   return (
                     <section key={entry.slot} className="outfit-debug-slot">
@@ -4229,6 +4316,28 @@ export default function App() {
                                 <strong>{candidate.score.toFixed(1)}</strong>
                               </div>
                             ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {candidateRows.length ? (
+                        <div className="outfit-debug-slot-block">
+                          <span className="outfit-debug-label">Candidate scores</span>
+                          <div className="outfit-debug-value-list">
+                            {candidateRows.map((candidate) => {
+                              const candidateReasons = getGuidedBreakdownDisplayEntries(candidate.breakdown, 2);
+                              const candidateLabel = candidateReasons.length
+                                ? candidateReasons.map((reason) => reason.label).join(" · ")
+                                : "No dominant reasons";
+
+                              return (
+                                <div key={`${entry.slot}-${candidate.itemId}-candidate`} className="outfit-debug-value-row">
+                                  <span>{`${candidate.rank}. ${itemsById[candidate.itemId]?.name ?? candidate.itemId}${candidate.selected ? " [Selected]" : ""}`}</span>
+                                  <strong>{`${candidate.rawScore.toFixed(1)} / w ${candidate.weight.toFixed(1)}`}</strong>
+                                  <span>{candidateLabel}</span>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       ) : null}
@@ -5146,7 +5255,8 @@ export default function App() {
       debugHooks: perfSession,
       boardFilters: options.metadataFilters ?? null,
       boardGuidedOptions: {
-        collectTopCandidates: Boolean(options.collectTopCandidates)
+        collectTopCandidates: Boolean(options.collectTopCandidates),
+        debugCandidates: Boolean(options.debugCandidates)
       }
     });
   }
@@ -5864,7 +5974,8 @@ export default function App() {
           weatherData,
           generationMode,
           outfitAffinity,
-          recentOutfits
+          recentOutfits,
+          debugCandidates: isGuidedBoardCandidateDebug
         });
         setOutfit(generatedBoard.syntheticOutfit);
         setGuidedDebugPayload(generatedBoard.guidedDebugPayload);
@@ -5888,7 +5999,8 @@ export default function App() {
           weatherData,
           generationMode,
           outfitAffinity,
-          recentOutfits
+          recentOutfits,
+          debugCandidates: isGuidedBoardCandidateDebug
         });
         setOutfit(generatedBoard.syntheticOutfit);
         setGuidedDebugPayload(generatedBoard.guidedDebugPayload);
@@ -5907,7 +6019,7 @@ export default function App() {
       setGuidedDebugPayload([]);
       return nextBoard;
     });
-  }, [items, itemsById, excluded, imageCount, generationLists, generationMode, generationMetadataFilters, outfitFilters, weatherData, outfitAffinity, recentOutfits, loading]);
+  }, [items, itemsById, excluded, imageCount, generationLists, generationMode, generationMetadataFilters, outfitFilters, weatherData, outfitAffinity, recentOutfits, loading, isGuidedBoardCandidateDebug]);
 
   useEffect(() => {
     if (loading || !board?.images?.length) {
@@ -6192,7 +6304,8 @@ export default function App() {
           outfitAffinity,
           recentOutfits,
           perfSession,
-          collectTopCandidates: outfitDebugOpen
+          collectTopCandidates: outfitDebugOpen,
+          debugCandidates: isGuidedBoardCandidateDebug
         }),
       {
         perfSession,
@@ -6384,7 +6497,8 @@ export default function App() {
           weatherData: nextAppState?.weatherData ?? null,
           generationMode: normalizedGenerationMode,
           outfitAffinity: normalizedOutfitAffinity,
-          recentOutfits: normalizedRecentOutfits
+          recentOutfits: normalizedRecentOutfits,
+          debugCandidates: isGuidedBoardCandidateDebug
         }).board
       : restoredBoard;
     pendingRestoredBoardFitRef.current = Boolean(nextBoard?.images?.length);
@@ -8929,13 +9043,16 @@ async function handleExportBackup() {
       recentOutfits,
       boardFilters: generationMetadataFilters,
       boardGuidedOptions: {
-        collectTopCandidates: outfitDebugOpen
+        collectTopCandidates: outfitDebugOpen,
+        debugCandidates: isGuidedBoardCandidateDebug
       }
     });
 
     if (!result?.boardImage) {
       return;
     }
+
+    const nextBoardImages = board.images.map((image) => image.id === result.boardImage.id ? result.boardImage : image);
 
     suppressNextBoardRelayoutRef.current = true;
     setBoard((current) => {
@@ -8945,9 +9062,14 @@ async function handleExportBackup() {
 
       return replaceBoardImagePreservingLayout(current, result.boardImage);
     });
+    setGuidedDebugPayload((current) =>
+      result.guidedDebugEntry
+        ? mergeGuidedDebugEntryIntoPayload(current, result.guidedDebugEntry, nextBoardImages)
+        : current
+    );
     setOutfit(boardToSyntheticOutfit({
       ...board,
-      images: board.images.map((image) => image.id === result.boardImage.id ? result.boardImage : image)
+      images: nextBoardImages
     }));
   }
 

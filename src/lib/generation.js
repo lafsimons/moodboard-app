@@ -41,6 +41,7 @@ export const noFilterStyleWeights = {
 const GUIDED_BASE_SCORE = 0.8;
 const GUIDED_SCORE_FLOOR = 0.3;
 const GUIDED_DEBUG_TOP_CANDIDATE_LIMIT = 5;
+const BOARD_GUIDED_DEBUG_CANDIDATE_LIMIT = 25;
 const BOARD_GUIDED_BASE_SCORE = 100;
 const BOARD_GUIDED_MAX_PER_TAG = 2;
 const BOARD_GUIDED_SHARED_TAG_SCORE = 25;
@@ -311,7 +312,8 @@ function buildBoardGuidedContext(items, options = {}) {
     profilesById,
     includedFilterTags,
     maxPerTag: Math.max(1, Math.round(Number(options.maxPerTag) || BOARD_GUIDED_MAX_PER_TAG)),
-    collectTopCandidates: Boolean(options.collectTopCandidates)
+    collectTopCandidates: Boolean(options.collectTopCandidates),
+    debugCandidates: Boolean(options.debugCandidates)
   };
 }
 
@@ -464,6 +466,25 @@ function updateTopCandidateBuffer(buffer, candidate, limit = GUIDED_DEBUG_TOP_CA
   }
 }
 
+function buildBoardCandidateDebugRows(weightedCandidates, selectedEntry, limit = BOARD_GUIDED_DEBUG_CANDIDATE_LIMIT) {
+  if (!weightedCandidates.length) {
+    return [];
+  }
+
+  return weightedCandidates
+    .slice()
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map((entry, index) => ({
+      itemId: entry.profile.id,
+      rawScore: entry.score,
+      weight: entry.weight,
+      rank: index + 1,
+      breakdown: entry.breakdown,
+      selected: selectedEntry ? entry.profile.id === selectedEntry.profile.id : false
+    }));
+}
+
 function pickWeightedBoardCandidate(entries) {
   const totalWeight = entries.reduce((sum, entry) => sum + entry.weight, 0);
 
@@ -508,15 +529,41 @@ function selectNextBoardGuidedImage(context, boardState) {
   });
 
   const selectedEntry = pickWeightedBoardCandidate(weightedCandidates);
+  const candidates = context.debugCandidates
+    ? buildBoardCandidateDebugRows(weightedCandidates, selectedEntry)
+    : [];
 
   return selectedEntry
     ? {
         item: selectedEntry.profile.item,
         score: selectedEntry.score,
         breakdown: selectedEntry.breakdown,
-        topCandidates: topCandidates ?? []
+        topCandidates: topCandidates ?? [],
+        candidates
       }
     : null;
+}
+
+function createGuidedDebugEntry({
+  slot,
+  itemId,
+  score,
+  breakdown,
+  topCandidates = [],
+  candidates = [],
+  imageId = "",
+  imageIndex = -1
+}) {
+  return {
+    slot,
+    itemId,
+    score,
+    breakdown,
+    topCandidates,
+    candidates,
+    imageId,
+    imageIndex
+  };
 }
 
 function clampNumber(value, min, max, fallback) {
@@ -3341,7 +3388,8 @@ export function generateBoard({
     const boardContext = buildBoardGuidedContext(candidatePool, {
       boardFilters,
       maxPerTag: boardGuidedOptions.maxPerTag,
-      collectTopCandidates: boardGuidedOptions.collectTopCandidates
+      collectTopCandidates: boardGuidedOptions.collectTopCandidates,
+      debugCandidates: boardGuidedOptions.debugCandidates
     });
     const boardState = createBoardGuidedState();
 
@@ -3372,7 +3420,8 @@ export function generateBoard({
         itemId: selection.item.id,
         breakdown: selection.breakdown,
         score: selection.score,
-        topCandidates: selection.topCandidates ?? []
+        topCandidates: selection.topCandidates ?? [],
+        candidates: selection.candidates ?? []
       });
     }
   } else {
@@ -3450,6 +3499,13 @@ export function generateBoard({
       ...frame
     };
   }).filter((image) => image.referenceId);
+  const normalizedGuidedDebugPayload = guidedDebugPayload.map((entry, index) =>
+    createGuidedDebugEntry({
+      ...entry,
+      imageId: images[index]?.id ?? "",
+      imageIndex: index
+    })
+  );
   markGenerationPerf(debugHooks, "image objects ready", { imageCount: images.length });
 
   return {
@@ -3460,7 +3516,7 @@ export function generateBoard({
       images
     },
     syntheticOutfit,
-    guidedDebugPayload
+    guidedDebugPayload: normalizedGuidedDebugPayload
   };
 }
 
@@ -3491,7 +3547,8 @@ export function rerollBoardImage({
       {
         boardFilters,
         maxPerTag: boardGuidedOptions.maxPerTag,
-        collectTopCandidates: boardGuidedOptions.collectTopCandidates
+        collectTopCandidates: boardGuidedOptions.collectTopCandidates,
+        debugCandidates: boardGuidedOptions.debugCandidates
       }
     );
     const boardState = createBoardGuidedState();
@@ -3524,13 +3581,18 @@ export function rerollBoardImage({
           : getBoardGenerationSlot(board.images.findIndex((image) => image.id === imageId))
       },
       guidedDebugEntry: {
-        slot: boardGenerationSlots.includes(targetImage.generationSlot)
-          ? targetImage.generationSlot
-          : getBoardGenerationSlot(board.images.findIndex((image) => image.id === imageId)),
-        itemId: selection.item.id,
-        breakdown: selection.breakdown,
-        score: selection.score,
-        topCandidates: selection.topCandidates ?? []
+        ...createGuidedDebugEntry({
+          slot: boardGenerationSlots.includes(targetImage.generationSlot)
+            ? targetImage.generationSlot
+            : getBoardGenerationSlot(board.images.findIndex((image) => image.id === imageId)),
+          itemId: selection.item.id,
+          breakdown: selection.breakdown,
+          score: selection.score,
+          topCandidates: selection.topCandidates ?? [],
+          candidates: selection.candidates ?? [],
+          imageId: targetImage.id,
+          imageIndex: board.images.findIndex((image) => image.id === imageId)
+        })
       }
     };
   }
