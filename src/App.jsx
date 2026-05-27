@@ -480,6 +480,22 @@ function mergeGuidedDebugEntryIntoPayload(currentPayload, guidedDebugEntry, boar
   return sortGuidedDebugPayloadForBoard(nextPayload, boardImages);
 }
 
+function getGuidedDebugEntryKey(entry, fallback = "debug-entry") {
+  if (entry?.imageId) {
+    return entry.imageId;
+  }
+
+  if (Number.isInteger(entry?.imageIndex)) {
+    return `board-image-${entry.imageIndex}`;
+  }
+
+  if (entry?.itemId) {
+    return `${fallback}-${entry.itemId}`;
+  }
+
+  return fallback;
+}
+
 function getImageFilename(imageUrl) {
   const pathname = imageUrl.split("?")[0].split("#")[0];
   const filename = pathname.split("/").pop() ?? "";
@@ -3991,7 +4007,11 @@ export default function App() {
     () =>
       guidedDebugPayload.length > 0 &&
       guidedDebugPayload.every((entry) =>
-        (board?.images ?? []).some((image) => image.referenceId === entry.itemId && image.generationSlot === entry.slot)
+        (board?.images ?? []).some((image, index) =>
+          (entry.imageId && image.id === entry.imageId) ||
+          (Number.isInteger(entry.imageIndex) && index === entry.imageIndex) ||
+          (image.referenceId === entry.itemId && image.generationSlot === entry.slot)
+        )
       ),
     [guidedDebugPayload, board]
   );
@@ -4280,9 +4300,10 @@ export default function App() {
                   const reasons = getGuidedBreakdownDisplayEntries(entry.breakdown, 3);
                   const topCandidates = (entry.topCandidates ?? []).slice(0, 5);
                   const candidateRows = (entry.candidates ?? []).slice(0, 25);
+                  const debugEntryKey = getGuidedDebugEntryKey(entry, `board-debug-${index}`);
 
                   return (
-                    <section key={entry.slot} className="outfit-debug-slot">
+                    <section key={debugEntryKey} className="outfit-debug-slot">
                       <h4 className="outfit-debug-slot-title">{`Image ${index + 1}`}</h4>
                       <div className="outfit-debug-slot-block">
                         <span className="outfit-debug-label">Selected</span>
@@ -4298,7 +4319,7 @@ export default function App() {
                         <span className="outfit-debug-label">Reasons</span>
                         <div className="outfit-debug-value-list">
                           {reasons.map((reason) => (
-                            <div key={`${entry.slot}-${reason.key}`} className="outfit-debug-value-row">
+                            <div key={`${debugEntryKey}-${reason.key}`} className="outfit-debug-value-row">
                               <span>{reason.label}</span>
                               <strong>{reason.value > 0 ? `+${reason.value.toFixed(1)}` : reason.value.toFixed(1)}</strong>
                             </div>
@@ -4311,7 +4332,7 @@ export default function App() {
                           <span className="outfit-debug-label">Top alternatives</span>
                           <div className="outfit-debug-value-list">
                             {topCandidates.map((candidate) => (
-                              <div key={`${entry.slot}-${candidate.itemId}`} className="outfit-debug-value-row">
+                              <div key={`${debugEntryKey}-top-${candidate.itemId}`} className="outfit-debug-value-row">
                                 <span>{itemsById[candidate.itemId]?.name ?? candidate.itemId}</span>
                                 <strong>{candidate.score.toFixed(1)}</strong>
                               </div>
@@ -4331,7 +4352,7 @@ export default function App() {
                                 : "No dominant reasons";
 
                               return (
-                                <div key={`${entry.slot}-${candidate.itemId}-candidate`} className="outfit-debug-value-row">
+                                <div key={`${debugEntryKey}-candidate-${candidate.itemId}`} className="outfit-debug-value-row">
                                   <span>{`${candidate.rank}. ${itemsById[candidate.itemId]?.name ?? candidate.itemId}${candidate.selected ? " [Selected]" : ""}`}</span>
                                   <strong>{`${candidate.rawScore.toFixed(1)} / w ${candidate.weight.toFixed(1)}`}</strong>
                                   <span>{candidateLabel}</span>

@@ -62,3 +62,9 @@ test("MBA guided board debug labels separate board output tags from filter direc
   assert.doesNotMatch(appSource, />Direction tags</);
   assert.match(appSource, /debugGuidedBoardCandidates/);
 });
+
+test("MBA guided board debug render keys no longer rely on OA slot names", () => {
+  assert.match(appSource, /function getGuidedDebugEntryKey/);
+  assert.match(appSource, /<section key=\{debugEntryKey\} className="outfit-debug-slot">/);
+  assert.doesNotMatch(appSource, /<section key=\{entry\.slot\} className="outfit-debug-slot">/);
+});
