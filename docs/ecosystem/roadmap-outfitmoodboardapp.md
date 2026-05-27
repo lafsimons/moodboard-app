@@ -72,7 +72,149 @@ Current architecture is now designed to support multi-thousand-image personal li
 - export limits/UX
 - possible centralized object URL cache layer
 
-### Future backup/media direction
+## Cross-platform scalable package import/export
+
+- archive/chunked backup format
+- streaming import/export
+- cross-platform scalable package import/export
+- media integrity tools
+- export limits/UX
+- possible centralized object URL cache layer
+
+### Goal
+
+Make scalable MBA backup package import/export work across:
+- desktop browsers
+- iPhone/iPad Safari
+- iOS browsers (Safari/Chrome/Brave/Firefox)
+- Android browsers
+
+without depending exclusively on the File System Access API.
+
+### Current state
+
+Current scalable package import/export architecture works primarily on:
+- desktop Chromium browsers
+- browsers with File System Access API support
+
+Current limitation:
+- iOS/iPadOS browsers do not support the required File System Access API path
+- scalable package import currently cannot start on Safari/iOS/iPadOS
+
+This is now an architectural compatibility issue rather than a storage/performance issue.
+
+---
+
+### Requirements
+
+#### Preserve package architecture
+
+- Keep the scalable package format if possible.
+- Avoid redesigning the backup format unless necessary.
+- Preserve:
+  - chunked/scalable package structure
+  - large-library support
+  - media integrity guarantees
+  - incremental import architecture
+
+---
+
+### Cross-platform import path
+
+Add a browser-compatible fallback path using:
+- `<input type="file">`
+- standard Blob/File APIs
+- streamed/chunked reads where possible
+
+instead of requiring:
+- `showOpenFilePicker`
+- File System Access handles
+
+#### Platform expectations
+
+| Platform | Target support |
+|---|---|
+| Desktop Chrome/Edge/Brave | Full |
+| Android Chrome/Brave | Full |
+| iPhone Safari | Supported |
+| iPad Safari | Supported |
+| Other iOS browsers | Supported |
+
+---
+
+### Import architecture goals
+
+#### Import pipeline
+
+Support:
+- progressive/chunked package reading
+- incremental IndexedDB writes
+- resumable internal import stages where feasible
+- explicit progress reporting
+- visible failure/error states
+- cancellation handling
+
+#### UX
+
+Add:
+- clear unsupported-browser detection
+- browser compatibility messaging
+- import progress UI
+- failure recovery guidance
+- quota/storage error reporting
+- partial import cleanup/recovery handling
+
+Avoid:
+- silent failures
+- browser-specific dead ends
+- hard crashes during large imports
+
+---
+
+### Performance/stability goals
+
+Large-library targets:
+- 5k–10k image libraries
+- stable import on modern mobile devices
+- no full-memory package hydration if avoidable
+- minimize duplicate Blob/DataURL allocations
+
+Prefer:
+- streaming
+- incremental decode/write
+- bounded memory usage
+
+---
+
+### Validation
+
+Test:
+- desktop Chromium
+- Android Chrome
+- iPhone Safari
+- iPad Safari
+
+Stress-test:
+- multi-thousand image package imports
+- interrupted imports
+- low-storage conditions
+- quota exhaustion handling
+- recovery after tab reload/crash
+
+Run:
+- `npm run build`
+- `npm test -- --runInBand`
+
+#### Success criteria
+
+- scalable package imports work on iOS/iPadOS browsers
+- desktop scalable workflow remains intact
+- package format remains compatible
+- large-library imports remain stable
+- import failures are surfaced clearly
+- no File System Access API hard dependency remains
+
+## Future backup/media direction
 
 Current JSON backup works after slimming duplicated image payloads, but it still embeds preview images inline and still relies on full in-memory JSON materialization.
 
@@ -110,7 +252,7 @@ media/originals/
 
 Also MBA has already been stabilized around slimmer backup/media handling. Later compare OA’s backup shape and potentially reuse the same backup-slimming and media-separation rules across both apps.
 
-### **Media integrity tools**
+## Media integrity tools
 
 Potential future tooling:
 
@@ -122,7 +264,7 @@ Potential future tooling:
 
 These become more important with separated metadata/media storage.
 
-### **Export limits / UX**
+## Export limits / UX
 
 Very large visual exports are currently impractical at extreme library sizes.
 
@@ -134,7 +276,7 @@ Future UX work may include:
 - paginated exports
 - staged rendering/export pipelines
 
-### **Possible future object URL cache layer**
+## Possible future object URL cache layer
 
 Current lazy media resolution already revokes object URLs correctly, but object URL creation remains decentralized.
 
@@ -173,6 +315,8 @@ This is not currently required, but may become useful for extremely large librar
 - Defer bulk original relinking until object-storage architecture is stable.
 - Do not merge OA and MBA yet.
 - Defer sync/public sharing until local data models and repository boundaries are stable.
+- OA slot-key leakage still existing in MBA debug/render paths
+- eventual separation of MBA guided generation from OA slot architecture
 
 ### Pre-sync foundation cleanup
 

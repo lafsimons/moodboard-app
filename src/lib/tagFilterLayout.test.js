@@ -55,3 +55,16 @@ test("MBA controls reference filters include grouped matching, compact expand co
   assert.doesNotMatch(appSource, /id="controls-library-views-popover"[\s\S]{0,600}?Save current view/);
   assert.match(stylesSource, /\.controls-saved-views-window\s*\{/);
 });
+
+test("MBA guided board debug labels separate board output tags from filter direction", () => {
+  assert.match(appSource, />Current board tags</);
+  assert.match(appSource, />Filter direction</);
+  assert.doesNotMatch(appSource, />Direction tags</);
+  assert.match(appSource, /debugGuidedBoardCandidates/);
+});
+
+test("MBA guided board debug render keys no longer rely on OA slot names", () => {
+  assert.match(appSource, /function getGuidedDebugEntryKey/);
+  assert.match(appSource, /<section key=\{debugEntryKey\} className="outfit-debug-slot">/);
+  assert.doesNotMatch(appSource, /<section key=\{entry\.slot\} className="outfit-debug-slot">/);
+});
