@@ -476,6 +476,85 @@ test("metadata-only edited references stay metadata-only and still resolve previ
   assert.equal(resolvedPreviewMedia.height, 480);
 });
 
+test("metadata-only edits return a saved item with preserved image-bearing fields", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-preserve-fields",
+    itemUuid: "uuid-preserve-fields",
+    name: "Before",
+    description: "Old",
+    tags: ["one"],
+    imageUrl: "data:image/webp;base64,preview-preserve-fields",
+    mimeType: "image/webp",
+    imageWidth: 640,
+    imageHeight: 480,
+    fileSize: 1234,
+    originalFilename: "preserve.webp",
+    originalPreserved: true,
+    images: {
+      original: {
+        src: "data:image/jpeg;base64,original-preserve-fields",
+        mimeType: "image/jpeg",
+        width: 2000,
+        height: 1500,
+        originalFilename: "preserve-original.jpg"
+      },
+      preview: {
+        src: "data:image/webp;base64,preview-preserve-fields",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        fileSize: 1234,
+        originalFilename: "preserve.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,thumb-preserve-fields",
+        mimeType: "image/webp",
+        width: 320,
+        height: 240,
+        fileSize: 345,
+        originalFilename: "preserve-thumb.webp"
+      }
+    }
+  });
+
+  const savedItem = await saveItem({
+    id: "item-preserve-fields",
+    itemUuid: "uuid-preserve-fields",
+    name: "After",
+    description: "New",
+    tags: ["one", "two"],
+    imageUrl: "",
+    images: {
+      preview: {
+        src: "",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480
+      }
+    }
+  });
+
+  assert.equal(savedItem.name, "After");
+  assert.equal(savedItem.description, "New");
+  assert.deepEqual(savedItem.tags, ["one", "two"]);
+  assert.equal(savedItem.imageUrl, "data:image/webp;base64,preview-preserve-fields");
+  assert.equal(savedItem.mimeType, "image/webp");
+  assert.equal(savedItem.imageWidth, 640);
+  assert.equal(savedItem.imageHeight, 480);
+  assert.equal(savedItem.fileSize, 1234);
+  assert.equal(savedItem.originalFilename, "preserve.webp");
+  assert.equal(savedItem.originalPreserved, true);
+  assert.equal(savedItem.images.original.src, "");
+  assert.equal(savedItem.images.original.mimeType, "image/jpeg");
+  assert.equal(savedItem.images.original.width, 2000);
+  assert.equal(savedItem.images.original.height, 1500);
+  assert.equal(savedItem.images.original.originalFilename, "preserve-original.jpg");
+  assert.equal(savedItem.images.preview.src, "data:image/webp;base64,preview-preserve-fields");
+  assert.equal(savedItem.images.thumbnail.src, "data:image/webp;base64,thumb-preserve-fields");
+  assert.equal(savedItem.images.thumbnail.originalFilename, "preserve-thumb.webp");
+});
+
 test("resolveItemMediaSource creates an object URL for blob-backed preview assets restored by scalable package import", async () => {
   const originalCreateObjectUrl = URL.createObjectURL;
   const originalRevokeObjectUrl = URL.revokeObjectURL;

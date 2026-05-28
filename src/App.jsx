@@ -89,6 +89,7 @@ import {
   applyPreviewImageFields,
   createImageAsset,
   getOriginalImageSrc,
+  mergeItemImageState,
   getPreviewImageAsset,
   getPreviewImageSrc,
   getThumbnailImageSrc,
@@ -8610,9 +8611,15 @@ async function handleExportBackup() {
       name: uniqueName,
       description: trimmedDescription
     };
-    await saveItem(nextItem);
+    const savedItem = await saveItem(nextItem);
+    const persistedItem = mergeItemImageState(
+      duplicate || editingId === "new"
+        ? draft
+        : items.find((item) => item.id === draft.id) ?? draft,
+      savedItem ?? nextItem
+    );
 
-    if (!duplicate && editingId !== "new" && draft.id !== nextItem.id) {
+    if (!duplicate && editingId !== "new" && draft.id !== persistedItem.id) {
       await deleteItem(draft.id);
     }
 
@@ -8622,15 +8629,15 @@ async function handleExportBackup() {
 
     setItems((current) => {
       const existingIndex = current.findIndex((item) =>
-        item.id === (duplicate || editingId === "new" ? nextItem.id : draft.id)
+        item.id === (duplicate || editingId === "new" ? persistedItem.id : draft.id)
       );
 
       if (existingIndex === -1) {
-        return [...current, nextItem];
+        return [...current, persistedItem];
       }
 
       const clone = [...current];
-      clone[existingIndex] = nextItem;
+      clone[existingIndex] = mergeItemImageState(clone[existingIndex], persistedItem);
       return clone;
     });
     applyProvenanceUpdate(
@@ -8638,28 +8645,36 @@ async function handleExportBackup() {
       { itemCountSnapshot: nextItemCount }
     );
 
-    if (!duplicate && editingId !== "new" && draft.id !== nextItem.id) {
+    if (!duplicate && editingId !== "new" && draft.id !== persistedItem.id) {
       setOutfit((current) =>
-        replaceItemIdInOutfit(current, draft.id, nextItem.id)
+        replaceItemIdInOutfit(current, draft.id, persistedItem.id)
       );
       setBoard((current) => current ? {
         ...current,
         images: current.images.map((image) =>
           image.referenceId === draft.id
-            ? { ...image, referenceId: nextItem.id, referenceItemUuid: nextItem.itemUuid || image.referenceItemUuid || "" }
+            ? {
+                ...image,
+                referenceId: persistedItem.id,
+                referenceItemUuid: persistedItem.itemUuid || image.referenceItemUuid || ""
+              }
             : image
         )
       } : current);
       setSavedOutfits((current) =>
         current.map((savedOutfit) => ({
           ...savedOutfit,
-          outfit: replaceItemIdInOutfit(savedOutfit.outfit, draft.id, nextItem.id),
+          outfit: replaceItemIdInOutfit(savedOutfit.outfit, draft.id, persistedItem.id),
           board: savedOutfit.board
               ? {
                   ...savedOutfit.board,
                   images: savedOutfit.board.images.map((image) =>
                     image.referenceId === draft.id
-                      ? { ...image, referenceId: nextItem.id, referenceItemUuid: nextItem.itemUuid || image.referenceItemUuid || "" }
+                      ? {
+                          ...image,
+                          referenceId: persistedItem.id,
+                          referenceItemUuid: persistedItem.itemUuid || image.referenceItemUuid || ""
+                        }
                       : image
                   )
                 }
@@ -8669,9 +8684,9 @@ async function handleExportBackup() {
     }
 
     if (duplicate) {
-      setEditingId(nextItem.id);
-      setDraft(nextItem);
-      return nextItem;
+      setEditingId(persistedItem.id);
+      setDraft(persistedItem);
+      return persistedItem;
     }
 
     const shouldReturnToWardrobe = editorReturnTarget === "wardrobe" && activePanel !== "wardrobe";
@@ -8682,7 +8697,7 @@ async function handleExportBackup() {
       setControlsOpen(false);
     }
 
-    return nextItem;
+    return persistedItem;
   }
 
   async function duplicateDraftItem() {
@@ -8968,11 +8983,22 @@ async function handleExportBackup() {
       ...nextDraft,
       updatedAt: new Date().toISOString()
     });
+    const currentItem = items.find((item) => item.id === persistedDraft.id) ?? draft;
+    const mergedDraft = mergeItemImageState(currentItem, persistedDraft);
 
-    setDraft(persistedDraft);
-    setItems((current) => current.map((item) => item.id === persistedDraft.id ? persistedDraft : item));
-    setReferencePreview((current) => current?.id === persistedDraft.id ? persistedDraft : current);
-    void saveItem(persistedDraft);
+    setDraft(mergedDraft);
+    setItems((current) => current.map((item) => item.id === mergedDraft.id ? mergeItemImageState(item, mergedDraft) : item));
+    setReferencePreview((current) => current?.id === mergedDraft.id ? mergeItemImageState(current, mergedDraft) : current);
+    void saveItem(persistedDraft).then((savedDraft) => {
+      const nextSavedDraft = mergeItemImageState(currentItem, savedDraft ?? persistedDraft);
+      setDraft((current) => current?.id === nextSavedDraft.id ? mergeItemImageState(current, nextSavedDraft) : current);
+      setItems((current) =>
+        current.map((item) => item.id === nextSavedDraft.id ? mergeItemImageState(item, nextSavedDraft) : item)
+      );
+      setReferencePreview((current) =>
+        current?.id === nextSavedDraft.id ? mergeItemImageState(current, nextSavedDraft) : current
+      );
+    });
     applyProvenanceUpdate(
       (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
       { itemCountSnapshot: items.length }
@@ -8982,7 +9008,7 @@ async function handleExportBackup() {
       cancelEdit();
     }
 
-    return persistedDraft;
+    return mergedDraft;
   }
 
   function applyCropEditor() {
@@ -11315,9 +11341,14 @@ async function handleExportBackup() {
       updatedAt: new Date().toISOString()
     });
 
-    await saveItem(nextReferencePreview);
-    setItems((current) => current.map((item) => item.id === nextReferencePreview.id ? nextReferencePreview : item));
-    setReferencePreview(nextReferencePreview);
+    const savedReferencePreview = await saveItem(nextReferencePreview);
+    const persistedReferencePreview = mergeItemImageState(referencePreview, savedReferencePreview ?? nextReferencePreview);
+    setItems((current) =>
+      current.map((item) =>
+        item.id === persistedReferencePreview.id ? mergeItemImageState(item, persistedReferencePreview) : item
+      )
+    );
+    setReferencePreview(persistedReferencePreview);
     applyProvenanceUpdate(
       (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
       { itemCountSnapshot: items.length }
