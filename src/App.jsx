@@ -248,6 +248,10 @@ const LIBRARY_PERF_DEBUG_FLAG = "debug:library-perf";
 const LIBRARY_GRID_MIN_COLUMN_WIDTH = 164;
 const LIBRARY_GRID_GAP = 12;
 const LIBRARY_GRID_ESTIMATED_ROW_HEIGHT = 222;
+const MOBILE_LIBRARY_GRID_COLUMNS = 3;
+const MOBILE_LIBRARY_GRID_GAP = 3;
+const MOBILE_LIBRARY_GRID_FALLBACK_VIEWPORT_WIDTH = 390;
+const MOBILE_LIBRARY_GRID_TILE_RATIO = 0.9;
 const LIBRARY_GRID_OVERSCAN_ROWS = 2;
 const LIBRARY_VIRTUALIZATION_THRESHOLD = 120;
 const BOARD_PICKER_GRID_COLUMNS = 3;
@@ -273,6 +277,31 @@ const NESTED_TAG_DEBUG_ITEMS = [
     tags: ["another parent/child c"]
   }
 ];
+
+function getLibraryGridLayoutConfig({ viewportWidth, isMobileViewport }) {
+  if (!isMobileViewport) {
+    return {
+      minColumnWidth: LIBRARY_GRID_MIN_COLUMN_WIDTH,
+      gap: LIBRARY_GRID_GAP,
+      estimatedRowHeight: LIBRARY_GRID_ESTIMATED_ROW_HEIGHT
+    };
+  }
+
+  const availableWidth = Math.max(
+    Number(viewportWidth) || MOBILE_LIBRARY_GRID_FALLBACK_VIEWPORT_WIDTH,
+    MOBILE_LIBRARY_GRID_COLUMNS * 88
+  );
+  const minColumnWidth = Math.max(
+    88,
+    Math.floor((availableWidth - MOBILE_LIBRARY_GRID_GAP * (MOBILE_LIBRARY_GRID_COLUMNS - 1)) / MOBILE_LIBRARY_GRID_COLUMNS)
+  );
+
+  return {
+    minColumnWidth,
+    gap: MOBILE_LIBRARY_GRID_GAP,
+    estimatedRowHeight: Math.max(112, Math.round(minColumnWidth / MOBILE_LIBRARY_GRID_TILE_RATIO) + 4)
+  };
+}
 
 function isNestedTagDebugEnabled() {
   if (typeof window === "undefined") {
@@ -4959,6 +4988,10 @@ export default function App() {
     () => new Set(selectedReferenceIdList),
     [selectedReferenceIdList]
   );
+  const libraryGridLayoutConfig = useMemo(
+    () => getLibraryGridLayoutConfig({ viewportWidth: libraryGridViewport.width, isMobileViewport }),
+    [isMobileViewport, libraryGridViewport.width]
+  );
   const shouldVirtualizeWardrobeGrid = visibleWardrobeItems.length >= LIBRARY_VIRTUALIZATION_THRESHOLD;
   const virtualizedWardrobeGrid = useMemo(() => {
     if (!shouldVirtualizeWardrobeGrid) {
@@ -4974,9 +5007,9 @@ export default function App() {
       viewportHeight: libraryGridViewport.height,
       scrollTop: libraryGridViewport.scrollTop,
       gridOffsetTop: libraryGridViewport.gridOffsetTop,
-      minColumnWidth: LIBRARY_GRID_MIN_COLUMN_WIDTH,
-      gap: LIBRARY_GRID_GAP,
-      estimatedRowHeight: LIBRARY_GRID_ESTIMATED_ROW_HEIGHT,
+      minColumnWidth: libraryGridLayoutConfig.minColumnWidth,
+      gap: libraryGridLayoutConfig.gap,
+      estimatedRowHeight: libraryGridLayoutConfig.estimatedRowHeight,
       overscanRows: LIBRARY_GRID_OVERSCAN_ROWS
     });
     const virtualItems = visibleWardrobeItems.slice(layout.startIndex, layout.endIndex).map((item, index) => {
@@ -4989,9 +5022,9 @@ export default function App() {
         style: {
           position: "absolute",
           top: `${rowIndex * layout.rowStride}px`,
-          left: `${columnIndex * (layout.columnWidth + LIBRARY_GRID_GAP)}px`,
+          left: `${columnIndex * (layout.columnWidth + libraryGridLayoutConfig.gap)}px`,
           width: `${layout.columnWidth}px`,
-          height: `${LIBRARY_GRID_ESTIMATED_ROW_HEIGHT}px`
+          height: `${libraryGridLayoutConfig.estimatedRowHeight}px`
         }
       };
     });
@@ -5000,7 +5033,7 @@ export default function App() {
       totalHeight: layout.totalHeight,
       virtualItems
     };
-  }, [libraryGridViewport.gridOffsetTop, libraryGridViewport.height, libraryGridViewport.scrollTop, libraryGridViewport.width, shouldVirtualizeWardrobeGrid, visibleWardrobeItems]);
+  }, [libraryGridLayoutConfig.estimatedRowHeight, libraryGridLayoutConfig.gap, libraryGridLayoutConfig.minColumnWidth, libraryGridViewport.gridOffsetTop, libraryGridViewport.height, libraryGridViewport.scrollTop, libraryGridViewport.width, shouldVirtualizeWardrobeGrid, visibleWardrobeItems]);
   const shouldVirtualizeBoardPicker = pickerBoardImageId && visibleBoardPickerItems.length >= LIBRARY_VIRTUALIZATION_THRESHOLD;
   const virtualizedBoardPickerItems = useMemo(() => {
     if (!shouldVirtualizeBoardPicker) {

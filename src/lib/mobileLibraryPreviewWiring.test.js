@@ -31,6 +31,15 @@ test("mobile library card tap opens preview while select mode keeps selection be
   assert.equal(appSource.includes('className="wardrobe-mobile-selection-badge"'), true);
 });
 
+test("mobile library grid uses a centralized 3-column layout config for responsive virtualization", () => {
+  assert.equal(appSource.includes("const MOBILE_LIBRARY_GRID_COLUMNS = 3;"), true);
+  assert.equal(appSource.includes("function getLibraryGridLayoutConfig({ viewportWidth, isMobileViewport }) {"), true);
+  assert.equal(appSource.includes("const libraryGridLayoutConfig = useMemo("), true);
+  assert.equal(appSource.includes("minColumnWidth: libraryGridLayoutConfig.minColumnWidth,"), true);
+  assert.equal(appSource.includes("gap: libraryGridLayoutConfig.gap,"), true);
+  assert.equal(appSource.includes("height: `${libraryGridLayoutConfig.estimatedRowHeight}px`"), true);
+});
+
 test("mobile reference preview hides chrome behind explicit toggles and uses overflow plus info states", () => {
   assert.equal(appSource.includes('const [mobileReferencePreviewChromeVisible, setMobileReferencePreviewChromeVisible] = useState(false);'), true);
   assert.equal(appSource.includes('const [mobileReferencePreviewActionsOpen, setMobileReferencePreviewActionsOpen] = useState(false);'), true);
