@@ -12,6 +12,7 @@ export const PACKAGE_APP_STATE_FILE = "appState.json";
 export const PACKAGE_ITEMS_FILE = "items.ndjson";
 export const PACKAGE_MEDIA_DIR = "media";
 export const PACKAGE_PREVIEWS_DIR = "media/previews";
+export const PACKAGE_WARNINGS_FILE = "export-warnings.json";
 
 const MIME_EXTENSION_MAP = {
   "image/avif": ".avif",
@@ -105,6 +106,37 @@ function createTextBlob(value) {
   return new Blob([value], { type: "application/x-ndjson" });
 }
 
+function normalizeWarningMessage(value, fallback = "Unknown export warning.") {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || fallback;
+}
+
+function createExportWarning(item, message) {
+  return {
+    id: typeof item?.id === "string" ? item.id.trim() : "",
+    itemUuid: typeof item?.itemUuid === "string" ? item.itemUuid.trim() : "",
+    name: typeof item?.name === "string" ? item.name.trim() : "",
+    message: normalizeWarningMessage(message)
+  };
+}
+
+function buildBackupPackageWarningReport({
+  exportedAt = new Date().toISOString(),
+  warnings = []
+} = {}) {
+  const normalizedWarnings = Array.isArray(warnings)
+    ? warnings.filter((warning) => warning && typeof warning === "object")
+    : [];
+
+  return {
+    source: PACKAGE_SOURCE,
+    version: PACKAGE_VERSION,
+    exportedAt,
+    warningCount: normalizedWarnings.length,
+    warnings: normalizedWarnings
+  };
+}
+
 async function readJsonFile(fileHandle, errorMessage) {
   if (!fileHandle || typeof fileHandle.getFile !== "function") {
     throw new Error(errorMessage);
@@ -156,10 +188,17 @@ function containsEmbeddedDataImagePayload(record) {
   ].some((value) => typeof value === "string" && value.startsWith("data:image/"));
 }
 
-function validatePreviewPackagePath(value) {
+function validatePreviewPackagePath(value, options = {}) {
+  const {
+    allowEmpty = false
+  } = options;
   const normalized = typeof value === "string" ? value.trim() : "";
 
   if (!normalized) {
+    if (allowEmpty) {
+      return "";
+    }
+
     throw new Error("Backup package item preview path is invalid.");
   }
 
@@ -325,33 +364,39 @@ export async function prepareBackupPackageImportFromDirectory(rootHandle, option
       throw new Error(`Backup package item "${itemId}" contains embedded image data.`);
     }
 
-    const previewPackagePath = validatePreviewPackagePath(record?.images?.preview?.packagePath);
-    const previewFileName = previewPackagePath.slice(`${PACKAGE_PREVIEWS_DIR}/`.length);
-    let previewFileHandle;
+    const previewPackagePath = validatePreviewPackagePath(record?.images?.preview?.packagePath, { allowEmpty: true });
+    const previewFileName = previewPackagePath ? previewPackagePath.slice(`${PACKAGE_PREVIEWS_DIR}/`.length) : "";
+    let previewFile = null;
 
-    try {
-      previewFileHandle = await previewsDirectoryHandle.getFileHandle(previewFileName);
-    } catch {
-      throw new Error(`Backup package preview file "${previewFileName}" is missing.`);
+    if (previewFileName) {
+      let previewFileHandle;
+
+      try {
+        previewFileHandle = await previewsDirectoryHandle.getFileHandle(previewFileName);
+      } catch {
+        throw new Error(`Backup package preview file "${previewFileName}" is missing.`);
+      }
+
+      previewFile = await previewFileHandle.getFile();
     }
-
-    const previewFile = await previewFileHandle.getFile();
     const normalizedImages = normalizeItemImages(record);
     const previewImage = createImageAsset(normalizedImages.preview);
 
     seenIds.add(itemId);
     stagedItems.push(createPreparedPackageItem(record));
-    stagedPreviewFiles.push({
-      itemId,
-      variant: "preview",
-      asset: {
-        ...previewImage,
-        src: "",
-        blob: previewFile,
-        fileSize: previewImage.fileSize || previewFile.size || 0,
-        mimeType: previewImage.mimeType || previewFile.type || ""
-      }
-    });
+    if (previewFile) {
+      stagedPreviewFiles.push({
+        itemId,
+        variant: "preview",
+        asset: {
+          ...previewImage,
+          src: "",
+          blob: previewFile,
+          fileSize: previewImage.fileSize || previewFile.size || 0,
+          mimeType: previewImage.mimeType || previewFile.type || ""
+        }
+      });
+    }
 
     publishPackageImportProgress(onProgress, {
       phase: "validating-items",
@@ -546,9 +591,9 @@ export function getBackupPackagePreviewFileName(item, previewAsset = {}) {
   return `${baseName}${extension}`;
 }
 
-export function buildBackupPackageItemRecord(item, previewFileName) {
+export function buildBackupPackageItemRecord(item, previewFileName = "") {
   const exportedReference = sanitizeBackupReference(item);
-  const previewPackagePath = `${PACKAGE_PREVIEWS_DIR}/${previewFileName}`;
+  const previewPackagePath = previewFileName ? `${PACKAGE_PREVIEWS_DIR}/${previewFileName}` : "";
 
   return {
     ...exportedReference,
@@ -564,7 +609,7 @@ export function buildBackupPackageItemRecord(item, previewFileName) {
       preview: {
         ...createImageAsset(exportedReference?.images?.preview),
         src: "",
-        packagePath: previewPackagePath
+        ...(previewPackagePath ? { packagePath: previewPackagePath } : {})
       },
       thumbnail: {
         ...createImageAsset(exportedReference?.images?.thumbnail),
@@ -605,27 +650,41 @@ export async function exportBackupPackageToDirectory({
   const itemsWritable = await itemsFileHandle.createWritable();
   const usedFileNames = new Set();
   let previewFileCount = 0;
+  const warnings = [];
 
   try {
     for (const item of itemList) {
-      const normalizedImages = normalizeItemImages(item);
-      const previewAsset = normalizedImages.preview?.src
-        ? createImageAsset(normalizedImages.preview)
-        : createImageAsset(await resolvePreviewAsset(item, "preview"));
-      const previewBlob = await createPreviewBlob(previewAsset);
+      let previewFileName = "";
 
-      if (!previewBlob) {
-        throw new Error(`Reference "${item?.id || "unknown"}" is missing an exportable preview asset.`);
+      try {
+        const normalizedImages = normalizeItemImages(item);
+        const previewAsset = normalizedImages.preview?.src
+          ? createImageAsset(normalizedImages.preview)
+          : createImageAsset(await resolvePreviewAsset(item, "preview"));
+        const previewBlob = await createPreviewBlob(previewAsset);
+
+        if (!previewBlob) {
+          warnings.push(
+            createExportWarning(item, `Reference "${item?.id || "unknown"}" is missing an exportable preview asset.`)
+          );
+        } else {
+          previewFileName = createUniquePreviewFileName(item, previewAsset, usedFileNames);
+          await writeBlobToFile(previewsDirectoryHandle, previewFileName, previewBlob);
+          previewFileCount += 1;
+        }
+      } catch (error) {
+        warnings.push(
+          createExportWarning(
+            item,
+            error?.message || `Reference "${item?.id || "unknown"}" preview export failed.`
+          )
+        );
       }
 
-      const previewFileName = createUniquePreviewFileName(item, previewAsset, usedFileNames);
       const itemRecord = buildBackupPackageItemRecord(item, previewFileName);
-
-      await writeBlobToFile(previewsDirectoryHandle, previewFileName, previewBlob);
       await itemsWritable.write(createTextBlob(serializeBackupPackageItemRecord(itemRecord)));
-      previewFileCount += 1;
       if (typeof onProgress === "function") {
-        onProgress({ phase: "writing-previews", completed: previewFileCount, total });
+        onProgress({ phase: "writing-previews", completed: Math.min(previewFileCount + warnings.length, total), total });
       }
     }
   } finally {
@@ -636,6 +695,14 @@ export async function exportBackupPackageToDirectory({
     onProgress({ phase: "finalizing", completed: total, total });
   }
   await writeBlobToFile(rootHandle, PACKAGE_APP_STATE_FILE, createJsonBlob(packageAppState));
+  const warningReport = buildBackupPackageWarningReport({
+    exportedAt,
+    warnings
+  });
+
+  if (warningReport.warningCount > 0) {
+    await writeBlobToFile(rootHandle, PACKAGE_WARNINGS_FILE, createJsonBlob(warningReport));
+  }
 
   const manifest = buildBackupPackageManifest({
     exportedAt,
@@ -648,6 +715,9 @@ export async function exportBackupPackageToDirectory({
   return {
     manifest,
     itemCount: itemList.length,
-    previewFileCount
+    previewFileCount,
+    warningCount: warningReport.warningCount,
+    warnings,
+    warningReportFileName: warningReport.warningCount > 0 ? PACKAGE_WARNINGS_FILE : ""
   };
 }

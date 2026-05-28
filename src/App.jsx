@@ -238,9 +238,42 @@ function formatMediaIntegritySample(sample) {
 
   return "";
 }
+
+function formatErrorMessage(error, fallback = "Unknown error.") {
+  const normalizedMessage = typeof error?.message === "string" ? error.message.trim() : "";
+  return normalizedMessage || fallback;
+}
+
+function getFileSystemAccessDebugSnapshot(target = globalThis) {
+  const supportTarget = target && typeof target === "object" ? target : {};
+
+  return {
+    isSupported: isFileSystemAccessSupported(supportTarget),
+    hasShowDirectoryPicker: typeof supportTarget.showDirectoryPicker === "function",
+    isSecureContext: typeof supportTarget.isSecureContext === "boolean" ? supportTarget.isSecureContext : false,
+    userAgent: typeof supportTarget.navigator?.userAgent === "string" ? supportTarget.navigator.userAgent : ""
+  };
+}
+
+function formatAppBuildLabel(version = APP_BUILD_VERSION, buildTime = APP_BUILD_TIME) {
+  const trimmedVersion = typeof version === "string" ? version.trim() : "";
+  const trimmedBuildTime = typeof buildTime === "string" ? buildTime.trim() : "";
+
+  if (trimmedVersion && trimmedBuildTime) {
+    return `v${trimmedVersion} (${trimmedBuildTime})`;
+  }
+
+  if (trimmedVersion) {
+    return `v${trimmedVersion}`;
+  }
+
+  return "Unknown";
+}
 const imageUrlByFilename = Object.fromEntries(
   imageAssetEntries.map((image) => [image.filename, image.imageUrl])
 );
+const APP_BUILD_VERSION = typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
+const APP_BUILD_TIME = typeof __APP_BUILD_TIME__ === "string" ? __APP_BUILD_TIME__ : "";
 const imageMetricsCache = new Map();
 const BOARD_ZOOM_MIN = 0.1;
 const BOARD_ZOOM_MAX = 6;
@@ -6840,7 +6873,9 @@ async function handleExportBackup() {
   }
 
   async function handleExportBackupPackage() {
-    if (!isFileSystemAccessSupported(window)) {
+    const fileSystemAccessDebug = getFileSystemAccessDebugSnapshot(window);
+
+    if (!fileSystemAccessDebug.isSupported) {
       setBackupExportStatus("Scalable backup packages require a browser with File System Access API support.");
       return;
     }
@@ -6855,7 +6890,7 @@ async function handleExportBackup() {
     try {
       const directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
 
-      await exportBackupPackageToDirectory({
+      const result = await exportBackupPackageToDirectory({
         rootHandle: directoryHandle,
         items,
         appState: currentPersistedAppState,
@@ -6872,7 +6907,20 @@ async function handleExportBackup() {
       );
 
       clearBackupPackageExportProgress();
-      setBackupExportStatus("Scalable backup package saved.");
+      if (result.warningCount > 0) {
+        console.warn("Scalable backup package export completed with warnings.", {
+          appBuildVersion: APP_BUILD_VERSION,
+          appBuildTime: APP_BUILD_TIME,
+          warningCount: result.warningCount,
+          warnings: result.warnings,
+          warningReportFileName: result.warningReportFileName
+        });
+        setBackupExportStatus(
+          `Scalable backup package saved with ${result.warningCount} warnings. See ${result.warningReportFileName}.`
+        );
+      } else {
+        setBackupExportStatus("Scalable backup package saved.");
+      }
     } catch (error) {
       clearBackupPackageExportProgress();
       if (error?.name === "AbortError") {
@@ -6880,7 +6928,16 @@ async function handleExportBackup() {
         return;
       }
 
-      setBackupExportStatus("Scalable backup package export failed in this browser.");
+      const failureReason = formatErrorMessage(error, "Scalable backup package export failed.");
+      console.error("Scalable backup package export failed.", {
+        error,
+        message: failureReason,
+        appBuildVersion: APP_BUILD_VERSION,
+        appBuildTime: APP_BUILD_TIME,
+        fileSystemAccessDebug,
+        itemCount: Array.isArray(items) ? items.length : 0
+      });
+      setBackupExportStatus(`Scalable backup package export failed: ${failureReason}`);
     } finally {
       setIsBackupPackageExporting(false);
     }
@@ -10822,6 +10879,13 @@ async function handleExportBackup() {
 
   const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
   const backupPackageImportProgressLabel = getBackupPackageImportProgressLabel(backupPackageImportProgress);
+  const appBuildLabel = formatAppBuildLabel();
+  const fileSystemAccessDebug = typeof window !== "undefined"
+    ? getFileSystemAccessDebugSnapshot(window)
+    : getFileSystemAccessDebugSnapshot();
+  const fileSystemAccessDebugLabel = fileSystemAccessDebug.isSupported
+    ? `Available${fileSystemAccessDebug.isSecureContext ? " · secure context" : ""}${fileSystemAccessDebug.hasShowDirectoryPicker ? " · picker exposed" : ""}`
+    : "Unavailable";
   const normalizedProvenance = normalizeLibraryProvenance(provenance, {
     itemCountSnapshot: items.length
   });
@@ -10830,6 +10894,8 @@ async function handleExportBackup() {
     ? `${formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt)} (${normalizedProvenance.lastImportedBackupName})`
     : formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt);
   const provenanceStatusEntries = [
+    ["Build", appBuildLabel],
+    ["File System Access", fileSystemAccessDebugLabel],
     ["Library updated", formatLibraryProvenanceValue(normalizedProvenance.lastLibraryEditAt)],
     ["Last backup export", formatLibraryProvenanceValue(normalizedProvenance.lastBackupExportAt)],
     ["Last backup import", lastBackupImportLabel],
