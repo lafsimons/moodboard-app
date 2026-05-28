@@ -9,7 +9,13 @@ import {
   SUPPORTED_BACKUP_VERSIONS
 } from "./appIdentity.js";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./boardIdentity.js";
-import { applyPreviewImageFields, createImageAsset, normalizeItemImages } from "./itemImages.js";
+import {
+  applyPreviewImageFields,
+  createImageAsset,
+  itemHasImagePayload,
+  mergeItemImageState,
+  normalizeItemImages
+} from "./itemImages.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
@@ -1201,41 +1207,8 @@ export async function saveItem(item) {
   const existingItem = typeof item?.id === "string" && item.id.trim()
     ? await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(item.id.trim()))
     : null;
-  const normalizedIncomingImages = normalizeItemImages(item);
-  const hasIncomingMediaPayload = [
-    item?.imageUrl,
-    normalizedIncomingImages.preview?.src,
-    normalizedIncomingImages.thumbnail?.src,
-    normalizedIncomingImages.original?.src
-  ].some((value) => typeof value === "string" && value.trim());
-  const mergedItem =
-    existingItem && !hasIncomingMediaPayload
-      ? {
-          ...existingItem,
-          ...item,
-          imageUrl: item?.imageUrl || existingItem.imageUrl,
-          images: {
-            ...existingItem.images,
-            ...item?.images,
-            original: createImageAsset({
-              ...existingItem?.images?.original,
-              ...item?.images?.original
-            }),
-            preview: createImageAsset({
-              ...existingItem?.images?.preview,
-              ...item?.images?.preview
-            }),
-            thumbnail: createImageAsset({
-              ...existingItem?.images?.thumbnail,
-              ...item?.images?.thumbnail
-            })
-          },
-          originalPreserved:
-            typeof item?.originalPreserved === "boolean"
-              ? item.originalPreserved
-              : existingItem.originalPreserved
-        }
-      : item;
+  const hasIncomingMediaPayload = itemHasImagePayload(item);
+  const mergedItem = mergeItemImageState(existingItem, item);
   const normalizedMergedImages = normalizeItemImages(mergedItem);
   const storedItem = stripItemInlineMediaFields(mergedItem);
 
@@ -1273,9 +1246,10 @@ export async function saveItem(item) {
   }
 
   const stableKey = normalizeSyncText(storedItem?.itemUuid);
+  const materializedMergedItem = await materializeStoredItemMedia(mergedItem);
 
   if (!stableKey) {
-    return mergedItem;
+    return materializedMergedItem;
   }
 
   const [deviceId, existingRecord] = await Promise.all([
@@ -1295,7 +1269,7 @@ export async function saveItem(item) {
     })
   );
 
-  return mergedItem;
+  return materializedMergedItem;
 }
 
 export async function deleteItemsByIds(ids) {

@@ -94,6 +94,59 @@ export function normalizeItemImages(item) {
   };
 }
 
+export function itemHasImagePayload(item) {
+  const normalizedImages = normalizeItemImages(item);
+
+  return [
+    item?.imageUrl,
+    normalizedImages.preview?.src,
+    normalizedImages.thumbnail?.src,
+    normalizedImages.original?.src
+  ].some((value) => typeof value === "string" && value.trim());
+}
+
+export function mergeItemImageState(existingItem, item) {
+  if (!existingItem || itemHasImagePayload(item)) {
+    return item;
+  }
+
+  const existingImages = normalizeItemImages(existingItem);
+  const incomingImages = normalizeItemImages(item);
+
+  return {
+    ...existingItem,
+    ...item,
+    imageUrl: item?.imageUrl || existingItem.imageUrl,
+    mimeType: item?.mimeType || existingItem.mimeType,
+    imageWidth: Number(item?.imageWidth) > 0 ? item.imageWidth : existingItem.imageWidth,
+    imageHeight: Number(item?.imageHeight) > 0 ? item.imageHeight : existingItem.imageHeight,
+    fileSize: Number(item?.fileSize) > 0 ? item.fileSize : existingItem.fileSize,
+    originalFilename: item?.originalFilename || existingItem.originalFilename,
+    aspectRatio: Number(item?.aspectRatio) > 0 ? item.aspectRatio : existingItem.aspectRatio,
+    orientation: item?.orientation || existingItem.orientation,
+    images: {
+      ...existingItem?.images,
+      ...item?.images,
+      original: createImageAsset({
+        ...existingImages.original,
+        ...incomingImages.original
+      }),
+      preview: createImageAsset({
+        ...existingImages.preview,
+        ...incomingImages.preview
+      }),
+      thumbnail: createImageAsset({
+        ...existingImages.thumbnail,
+        ...incomingImages.thumbnail
+      })
+    },
+    originalPreserved:
+      typeof item?.originalPreserved === "boolean"
+        ? item.originalPreserved
+        : existingItem.originalPreserved
+  };
+}
+
 function materializeAssets(item) {
   const normalized = normalizeItemImages(item);
   const legacyPreview = getLegacyPreviewAsset(item);
