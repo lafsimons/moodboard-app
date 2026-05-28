@@ -9,6 +9,7 @@ import {
   PACKAGE_PREVIEWS_DIR,
   PACKAGE_SOURCE,
   PACKAGE_VERSION,
+  PACKAGE_WARNINGS_FILE,
   buildBackupPackageAppState,
   buildBackupPackageItemRecord,
   buildBackupPackageManifest,
@@ -524,6 +525,124 @@ test("exportBackupPackageToDirectory reports package export progress by phase", 
     { phase: "writing-previews", completed: 2, total: 2 },
     { phase: "finalizing", completed: 2, total: 2 }
   ]);
+});
+
+test("exportBackupPackageToDirectory keeps exporting metadata when preview media is missing and writes warnings", async () => {
+  const rootHandle = new FakeDirectoryHandle();
+
+  const result = await exportBackupPackageToDirectory({
+    rootHandle,
+    items: [
+      {
+        id: "item-missing-preview",
+        itemUuid: "uuid-missing-preview",
+        name: "Missing Preview",
+        tags: ["damaged"],
+        images: {
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480
+          }
+        }
+      },
+      {
+        id: "item-healthy-preview",
+        itemUuid: "uuid-healthy-preview",
+        name: "Healthy Preview",
+        images: {
+          preview: {
+            src: "data:image/webp;base64,cHJldmlldw==",
+            mimeType: "image/webp",
+            width: 320,
+            height: 240
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    resolvePreviewAsset: async (item) => {
+      if (item.id === "item-missing-preview") {
+        return null;
+      }
+
+      return null;
+    }
+  });
+
+  assert.equal(result.itemCount, 2);
+  assert.equal(result.previewFileCount, 1);
+  assert.equal(result.warningCount, 1);
+  assert.equal(result.warningReportFileName, PACKAGE_WARNINGS_FILE);
+  assert.equal(result.warnings[0].id, "item-missing-preview");
+
+  const itemsText = await rootHandle.files.get(PACKAGE_ITEMS_FILE).readText();
+  const records = itemsText.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(records.length, 2);
+  assert.equal("packagePath" in records[0].images.preview, false);
+  assert.equal(records[1].images.preview.packagePath, "media/previews/uuid-healthy-preview.webp");
+
+  const warningReportText = await rootHandle.files.get(PACKAGE_WARNINGS_FILE).readText();
+  const warningReport = JSON.parse(warningReportText);
+  assert.equal(warningReport.warningCount, 1);
+  assert.equal(warningReport.warnings[0].id, "item-missing-preview");
+});
+
+test("prepareBackupPackageImportFromDirectory accepts metadata-only damaged items without preview package paths", async () => {
+  const rootHandle = new FakeDirectoryHandle();
+  const manifest = buildBackupPackageManifest({
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    itemCount: 1,
+    previewFileCount: 0
+  });
+  const appState = buildBackupPackageAppState({
+    savedOutfits: []
+  });
+  const mediaDirectory = await rootHandle.getDirectoryHandle("media", { create: true });
+  await mediaDirectory.getDirectoryHandle("previews", { create: true });
+  await seedPackageFile(rootHandle, PACKAGE_MANIFEST_FILE, JSON.stringify(manifest, null, 2));
+  await seedPackageFile(rootHandle, PACKAGE_APP_STATE_FILE, JSON.stringify(appState, null, 2));
+  await seedPackageFile(
+    rootHandle,
+    PACKAGE_ITEMS_FILE,
+    `${JSON.stringify({
+      id: "item-damaged",
+      itemUuid: "uuid-damaged",
+      name: "Damaged",
+      originalPreserved: false,
+      images: {
+        original: {
+          src: "",
+          mimeType: "",
+          width: 0,
+          height: 0
+        },
+        preview: {
+          src: "",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480
+        },
+        thumbnail: {
+          src: "",
+          mimeType: "",
+          width: 0,
+          height: 0
+        }
+      }
+    })}\n`,
+    "application/x-ndjson"
+  );
+
+  const prepared = await prepareBackupPackageImportFromDirectory(rootHandle);
+
+  assert.equal(prepared.items.length, 1);
+  assert.equal(prepared.itemMediaAssets.length, 0);
+  assert.equal(prepared.items[0].id, "item-damaged");
+  assert.equal(prepared.items[0].images.preview.src, "");
 });
 
 async function seedPackageFile(directoryHandle, fileName, value, type = "application/json") {
