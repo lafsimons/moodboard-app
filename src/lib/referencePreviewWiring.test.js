@@ -47,3 +47,16 @@ test("reference preview close and backdrop handlers remain intact", () => {
   assert.match(appSource, /<div className="floating-backdrop fitpic-preview-backdrop" onClick={closeReferencePreview}>/);
   assert.match(appSource, /<button type="button" className="ghost-button" onClick={closeReferencePreview}>/);
 });
+
+test("mobile reference preview pinch uses scoped non-passive listeners and keeps swipe gated while zoomed", () => {
+  assert.match(appSource, /const \[mobileReferencePreviewScale, setMobileReferencePreviewScale\] = useState\(1\)/);
+  assert.match(appSource, /function handleMobileReferencePreviewPinchStart\(event\) \{/);
+  assert.match(appSource, /function handleMobileReferencePreviewPinchMove\(event\) \{/);
+  assert.match(appSource, /syncMobileReferencePreviewScale\(/);
+  assert.match(appSource, /setIsReferencePreviewZoomed\(normalizedScale > 1\.01\);/);
+  assert.match(appSource, /addEventListener\("touchstart", handleMobileReferencePreviewPinchStart, \{ passive: false \}\)/);
+  assert.match(appSource, /addEventListener\("touchmove", handleMobileReferencePreviewPinchMove, \{ passive: false \}\)/);
+  assert.match(appSource, /addEventListener\("gesturestart", handleMobileReferencePreviewGestureEvent, \{ passive: false \}\)/);
+  assert.match(appSource, /if \(!mobileReferencePreviewTouchRef\.current \|\| isReferencePreviewZoomed\) \{/);
+  assert.match(appSource, /style=\{\{ "--mobile-reference-preview-scale": mobileReferencePreviewScale \}\}/);
+});

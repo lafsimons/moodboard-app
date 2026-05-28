@@ -147,7 +147,8 @@ import { sortLibraryItems } from "./lib/librarySort.js";
 import {
   getReferencePreviewCenteredScrollPosition,
   getReferencePreviewClickFocus,
-  getReferencePreviewNavigation
+  getReferencePreviewNavigation,
+  getReferencePreviewSwipeDirection
 } from "./lib/referencePreview.js";
 import {
   loadStoredTagTreeCollapsedGroups,
@@ -247,6 +248,10 @@ const LIBRARY_PERF_DEBUG_FLAG = "debug:library-perf";
 const LIBRARY_GRID_MIN_COLUMN_WIDTH = 164;
 const LIBRARY_GRID_GAP = 12;
 const LIBRARY_GRID_ESTIMATED_ROW_HEIGHT = 222;
+const MOBILE_LIBRARY_GRID_COLUMNS = 3;
+const MOBILE_LIBRARY_GRID_GAP = 3;
+const MOBILE_LIBRARY_GRID_FALLBACK_VIEWPORT_WIDTH = 390;
+const MOBILE_LIBRARY_GRID_TILE_RATIO = 0.9;
 const LIBRARY_GRID_OVERSCAN_ROWS = 2;
 const LIBRARY_VIRTUALIZATION_THRESHOLD = 120;
 const BOARD_PICKER_GRID_COLUMNS = 3;
@@ -272,6 +277,31 @@ const NESTED_TAG_DEBUG_ITEMS = [
     tags: ["another parent/child c"]
   }
 ];
+
+function getLibraryGridLayoutConfig({ viewportWidth, isMobileViewport }) {
+  if (!isMobileViewport) {
+    return {
+      minColumnWidth: LIBRARY_GRID_MIN_COLUMN_WIDTH,
+      gap: LIBRARY_GRID_GAP,
+      estimatedRowHeight: LIBRARY_GRID_ESTIMATED_ROW_HEIGHT
+    };
+  }
+
+  const availableWidth = Math.max(
+    Number(viewportWidth) || MOBILE_LIBRARY_GRID_FALLBACK_VIEWPORT_WIDTH,
+    MOBILE_LIBRARY_GRID_COLUMNS * 88
+  );
+  const minColumnWidth = Math.max(
+    88,
+    Math.floor((availableWidth - MOBILE_LIBRARY_GRID_GAP * (MOBILE_LIBRARY_GRID_COLUMNS - 1)) / MOBILE_LIBRARY_GRID_COLUMNS)
+  );
+
+  return {
+    minColumnWidth,
+    gap: MOBILE_LIBRARY_GRID_GAP,
+    estimatedRowHeight: Math.max(112, Math.round(minColumnWidth / MOBILE_LIBRARY_GRID_TILE_RATIO) + 4)
+  };
+}
 
 function isNestedTagDebugEnabled() {
   if (typeof window === "undefined") {
@@ -926,6 +956,27 @@ function shouldRegenerateLegacyBoardForImageCount(board, imageCount) {
 
 function sanitizeImageCountDraft(value) {
   return String(value ?? "").replace(/[^\d]/g, "").slice(0, 2);
+}
+
+function getTouchDistance(touches) {
+  if (!touches || touches.length < 2) {
+    return 0;
+  }
+
+  const deltaX = touches[0].clientX - touches[1].clientX;
+  const deltaY = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(deltaX, deltaY);
+}
+
+function getTouchMidpoint(touches) {
+  if (!touches || touches.length < 2) {
+    return null;
+  }
+
+  return {
+    clientX: (touches[0].clientX + touches[1].clientX) / 2,
+    clientY: (touches[0].clientY + touches[1].clientY) / 2
+  };
 }
 
 function getBoardImageCount(board) {
@@ -1815,7 +1866,8 @@ function getLibraryCardPresentation(item) {
         "--library-preview-padding": isWideLandscape ? "4px 6px" : "5px 7px 6px",
         "--library-preview-align": "center",
         "--library-image-width-base": isWideLandscape ? "182px" : "166px",
-        "--library-image-max-height": isWideLandscape ? "112px" : "122px"
+        "--library-image-max-height": isWideLandscape ? "112px" : "122px",
+        "--library-mobile-tile-ratio": isWideLandscape ? "1.28" : "1.12"
       }
     };
   }
@@ -1829,7 +1881,8 @@ function getLibraryCardPresentation(item) {
         "--library-preview-padding": "5px",
         "--library-preview-align": "center",
         "--library-image-width-base": "150px",
-        "--library-image-max-height": "136px"
+        "--library-image-max-height": "136px",
+        "--library-mobile-tile-ratio": "1"
       }
     };
   }
@@ -1844,7 +1897,8 @@ function getLibraryCardPresentation(item) {
       "--library-preview-padding": isTallPortrait ? "6px" : "6px",
       "--library-preview-align": "end",
       "--library-image-width-base": isTallPortrait ? "138px" : "142px",
-      "--library-image-max-height": isTallPortrait ? "148px" : "140px"
+      "--library-image-max-height": isTallPortrait ? "148px" : "140px",
+      "--library-mobile-tile-ratio": isTallPortrait ? "0.78" : "0.88"
     }
   };
 }
@@ -1853,6 +1907,8 @@ const LibraryGridCard = memo(function LibraryGridCard({
   item,
   isSelected,
   isExcluded,
+  isMobileViewport,
+  isMobileSelectMode,
   cardStyle = null,
   onSelectReference,
   onOpenReferencePreview,
@@ -1884,20 +1940,40 @@ const LibraryGridCard = memo(function LibraryGridCard({
 
   return (
     <article
-      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""}`}
+      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""} ${isMobileViewport ? "is-mobile-card" : ""} ${isMobileViewport && isMobileSelectMode ? "is-mobile-select-mode" : ""}`}
       style={mergedCardStyle}
     >
-      {isExcluded ? (
-        <div className="wardrobe-card-badges" aria-label="Reference status">
-          <span className="wardrobe-status-dot" aria-hidden="true" />
+      {isExcluded || (isMobileViewport && isSelected) ? (
+        <div className={`wardrobe-card-badges ${isMobileViewport ? "is-mobile-tile-badges" : ""}`} aria-label="Reference status">
+          {isMobileViewport && isSelected ? (
+            <span className="wardrobe-mobile-selection-badge" aria-hidden="true">✓</span>
+          ) : null}
+          {isExcluded ? (
+            <span className={`wardrobe-status-dot ${isMobileViewport ? "is-mobile-tile-dot" : ""}`} aria-hidden="true" />
+          ) : null}
         </div>
       ) : null}
       <button
         type="button"
-        className="wardrobe-preview"
+        className={`wardrobe-preview ${isMobileViewport ? "is-mobile-preview-card" : ""}`}
         onMouseDown={preventMouseButtonFocus}
-        onClick={(event) => onSelectReference(item.id, event)}
+        onClick={(event) => {
+          if (isMobileViewport && !isMobileSelectMode) {
+            if (event.currentTarget instanceof HTMLElement) {
+              event.currentTarget.blur();
+            }
+
+            onOpenReferencePreview(item);
+            return;
+          }
+
+          onSelectReference(item.id, event);
+        }}
         onDoubleClick={(event) => {
+          if (isMobileViewport) {
+            return;
+          }
+
           if (event.currentTarget instanceof HTMLElement) {
             event.currentTarget.blur();
           }
@@ -1905,6 +1981,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
           onOpenReferencePreview(item);
         }}
         aria-pressed={isSelected}
+        aria-label={isMobileViewport && !isMobileSelectMode ? `${itemName} preview` : `${itemName} select`}
       >
         <ManagedItemImage
           item={item}
@@ -1921,7 +1998,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
         />
       </button>
 
-      <div className="wardrobe-meta">
+      <div className={`wardrobe-meta ${isMobileViewport ? "is-mobile-hidden" : ""}`}>
         {showTitle ? (
           <strong title={itemName}>
             <span>{itemName}</span>
@@ -1936,6 +2013,8 @@ const LibraryGridCard = memo(function LibraryGridCard({
   prevProps.item === nextProps.item &&
   prevProps.isSelected === nextProps.isSelected &&
   prevProps.isExcluded === nextProps.isExcluded &&
+  prevProps.isMobileViewport === nextProps.isMobileViewport &&
+  prevProps.isMobileSelectMode === nextProps.isMobileSelectMode &&
   prevProps.cardStyle?.top === nextProps.cardStyle?.top &&
   prevProps.cardStyle?.left === nextProps.cardStyle?.left &&
   prevProps.cardStyle?.width === nextProps.cardStyle?.width &&
@@ -3682,6 +3761,7 @@ export default function App() {
   const editorImageRef = useRef(null);
   const cropEditorFrameRef = useRef(null);
   const boardInteractionRef = useRef(null);
+  const boardPinchRef = useRef(null);
   const boardGenerationFrameRef = useRef(null);
   const boardGenerationIndicatorTimeoutRef = useRef(null);
   const boardGenerationPerfRef = useRef(null);
@@ -3694,6 +3774,10 @@ export default function App() {
   const libraryPerfRef = useRef(null);
   const referencePreviewStageRef = useRef(null);
   const referencePreviewImageFrameRef = useRef(null);
+  const mobileReferencePreviewTouchRef = useRef(null);
+  const mobileReferencePreviewPinchRef = useRef(null);
+  const mobileReferencePreviewDidPinchRef = useRef(false);
+  const mobileReferencePreviewScaleRef = useRef(1);
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
   const currentPersistedAppStateRef = useRef(null);
@@ -3703,8 +3787,13 @@ export default function App() {
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
+  const wardrobeFiltersTriggerRef = useRef(null);
+  const mobileFilterDismissClickSuppressionRef = useRef(false);
+  const mobileFilterDismissClickSuppressionTimeoutRef = useRef(null);
+  const suppressMobileLibraryCardInteractionUntilRef = useRef(0);
   const wardrobeViewsPopoverRef = useRef(null);
   const controlsViewsPopoverRef = useRef(null);
+  const mobileLibraryMorePopoverRef = useRef(null);
   const wardrobeManagePopoverRef = useRef(null);
   const wardrobeAddPopoverRef = useRef(null);
   const sideEditorResizeCleanupRef = useRef(null);
@@ -3755,6 +3844,12 @@ export default function App() {
   const [referencePreview, setReferencePreview] = useState(null);
   const [isReferencePreviewZoomed, setIsReferencePreviewZoomed] = useState(false);
   const [referencePreviewZoomFocus, setReferencePreviewZoomFocus] = useState(null);
+  const [mobileReferencePreviewScale, setMobileReferencePreviewScale] = useState(1);
+  const [mobileLibrarySelectMode, setMobileLibrarySelectMode] = useState(false);
+  const [mobileLibraryMoreOpen, setMobileLibraryMoreOpen] = useState(false);
+  const [mobileReferencePreviewChromeVisible, setMobileReferencePreviewChromeVisible] = useState(false);
+  const [mobileReferencePreviewActionsOpen, setMobileReferencePreviewActionsOpen] = useState(false);
+  const [mobileReferencePreviewInfoOpen, setMobileReferencePreviewInfoOpen] = useState(false);
   const [wardrobeFiltersOpen, setWardrobeFiltersOpen] = useState(false);
   const [wardrobeWorthOpen, setWardrobeWorthOpen] = useState(false);
   const [wardrobeSavedOpen, setWardrobeSavedOpen] = useState(false);
@@ -3816,6 +3911,10 @@ export default function App() {
     latestExcludedStateRef.current = excluded;
   }, [excluded]);
 
+  useEffect(() => {
+    mobileReferencePreviewScaleRef.current = mobileReferencePreviewScale;
+  }, [mobileReferencePreviewScale]);
+
   useEffect(() => () => {
     if (excludedOutfitReconcileFrameRef.current) {
       window.cancelAnimationFrame(excludedOutfitReconcileFrameRef.current);
@@ -3825,6 +3924,13 @@ export default function App() {
   useEffect(() => () => {
     sideEditorResizeCleanupRef.current?.();
   }, []);
+
+  useEffect(() => () => {
+    if (mobileFilterDismissClickSuppressionTimeoutRef.current) {
+      window.clearTimeout(mobileFilterDismissClickSuppressionTimeoutRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     function handleWindowResize() {
       const viewportWidth = getViewportWidth();
@@ -3927,6 +4033,27 @@ export default function App() {
     }, 0);
   }
 
+  useEffect(() => {
+    function handleDocumentClickCapture(event) {
+      if (!mobileFilterDismissClickSuppressionRef.current || !isMobileViewport) {
+        return;
+      }
+
+      mobileFilterDismissClickSuppressionRef.current = false;
+
+      if (mobileFilterDismissClickSuppressionTimeoutRef.current) {
+        window.clearTimeout(mobileFilterDismissClickSuppressionTimeoutRef.current);
+        mobileFilterDismissClickSuppressionTimeoutRef.current = null;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    document.addEventListener("click", handleDocumentClickCapture, true);
+    return () => document.removeEventListener("click", handleDocumentClickCapture, true);
+  }, [isMobileViewport]);
+
   function blurRetainedPointerFocus() {
     const activeElement = document.activeElement;
     const pointerActivatedControl = pointerActivatedControlRef.current;
@@ -3942,6 +4069,10 @@ export default function App() {
 
     activeElement.blur();
     pointerActivatedControlRef.current = null;
+  }
+
+  function shouldSuppressMobileLibraryCardInteraction() {
+    return isMobileViewport && Date.now() < suppressMobileLibraryCardInteractionUntilRef.current;
   }
 
   const itemsById = useMemo(
@@ -4206,6 +4337,23 @@ export default function App() {
     mediaQuery.addListener(handleChange);
     return () => mediaQuery.removeListener(handleChange);
   }, [activePanel, controlsOpen]);
+
+  useEffect(() => {
+    if (!isMobileViewport) {
+      setMobileLibrarySelectMode(false);
+      setMobileLibraryMoreOpen(false);
+    }
+  }, [isMobileViewport]);
+
+  useEffect(() => {
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
+    setMobileReferencePreviewScale(1);
+  }, [isMobileViewport, referencePreview?.id]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -4650,7 +4798,7 @@ export default function App() {
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
 
   useEffect(() => {
-    if (!wardrobeViewsOpen && !controlsViewsOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
+    if (!wardrobeViewsOpen && !controlsViewsOpen && !mobileLibraryMoreOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
       return undefined;
     }
 
@@ -4667,6 +4815,13 @@ export default function App() {
       if (
         controlsViewsOpen &&
         controlsViewsPopoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      if (
+        mobileLibraryMoreOpen &&
+        mobileLibraryMorePopoverRef.current?.contains(target)
       ) {
         return;
       }
@@ -4693,6 +4848,10 @@ export default function App() {
         setControlsViewsOpen(false);
       }
 
+      if (mobileLibraryMoreOpen) {
+        setMobileLibraryMoreOpen(false);
+      }
+
       if (wardrobeManageOpen) {
         setWardrobeManageOpen(false);
       }
@@ -4704,7 +4863,7 @@ export default function App() {
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [controlsViewsOpen, wardrobeAddOpen, wardrobeManageOpen, wardrobeViewsOpen]);
+  }, [controlsViewsOpen, mobileLibraryMoreOpen, wardrobeAddOpen, wardrobeManageOpen, wardrobeViewsOpen]);
 
   useEffect(() => {
     return () => {
@@ -4733,6 +4892,9 @@ export default function App() {
   useEffect(() => {
     setIsReferencePreviewZoomed(false);
     setReferencePreviewZoomFocus(null);
+    setMobileReferencePreviewScale(1);
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
     if (referencePreviewStageRef.current) {
       referencePreviewStageRef.current.scrollLeft = 0;
       referencePreviewStageRef.current.scrollTop = 0;
@@ -4818,6 +4980,7 @@ export default function App() {
     () => getReferencePreviewNavigation(visibleWardrobeItems, referencePreview?.id ?? ""),
     [referencePreview?.id, visibleWardrobeItems]
   );
+  const isMobileReferencePreview = isMobileViewport && Boolean(referencePreview);
   const visibleBoardPickerItems = useMemo(
     () => getMetadataFilteredItems(items, generationMetadataFilters),
     [items, generationMetadataFilters]
@@ -4855,9 +5018,15 @@ export default function App() {
 
     return `${libraryStats.totalImages} images`;
   }, [libraryStats.totalImages, libraryStats.visibleImages]);
+  const mobileLibrarySelectionStatusLabel = selectedReferenceCount ? `${selectedReferenceCount} selected` : libraryImageCountLabel;
+  const showMobileLibrarySelectionToolbar = isMobileViewport && mobileLibrarySelectMode;
   const selectedReferenceIdSet = useMemo(
     () => new Set(selectedReferenceIdList),
     [selectedReferenceIdList]
+  );
+  const libraryGridLayoutConfig = useMemo(
+    () => getLibraryGridLayoutConfig({ viewportWidth: libraryGridViewport.width, isMobileViewport }),
+    [isMobileViewport, libraryGridViewport.width]
   );
   const shouldVirtualizeWardrobeGrid = visibleWardrobeItems.length >= LIBRARY_VIRTUALIZATION_THRESHOLD;
   const virtualizedWardrobeGrid = useMemo(() => {
@@ -4874,9 +5043,9 @@ export default function App() {
       viewportHeight: libraryGridViewport.height,
       scrollTop: libraryGridViewport.scrollTop,
       gridOffsetTop: libraryGridViewport.gridOffsetTop,
-      minColumnWidth: LIBRARY_GRID_MIN_COLUMN_WIDTH,
-      gap: LIBRARY_GRID_GAP,
-      estimatedRowHeight: LIBRARY_GRID_ESTIMATED_ROW_HEIGHT,
+      minColumnWidth: libraryGridLayoutConfig.minColumnWidth,
+      gap: libraryGridLayoutConfig.gap,
+      estimatedRowHeight: libraryGridLayoutConfig.estimatedRowHeight,
       overscanRows: LIBRARY_GRID_OVERSCAN_ROWS
     });
     const virtualItems = visibleWardrobeItems.slice(layout.startIndex, layout.endIndex).map((item, index) => {
@@ -4889,9 +5058,9 @@ export default function App() {
         style: {
           position: "absolute",
           top: `${rowIndex * layout.rowStride}px`,
-          left: `${columnIndex * (layout.columnWidth + LIBRARY_GRID_GAP)}px`,
+          left: `${columnIndex * (layout.columnWidth + libraryGridLayoutConfig.gap)}px`,
           width: `${layout.columnWidth}px`,
-          height: `${LIBRARY_GRID_ESTIMATED_ROW_HEIGHT}px`
+          height: `${libraryGridLayoutConfig.estimatedRowHeight}px`
         }
       };
     });
@@ -4900,7 +5069,7 @@ export default function App() {
       totalHeight: layout.totalHeight,
       virtualItems
     };
-  }, [libraryGridViewport.gridOffsetTop, libraryGridViewport.height, libraryGridViewport.scrollTop, libraryGridViewport.width, shouldVirtualizeWardrobeGrid, visibleWardrobeItems]);
+  }, [libraryGridLayoutConfig.estimatedRowHeight, libraryGridLayoutConfig.gap, libraryGridLayoutConfig.minColumnWidth, libraryGridViewport.gridOffsetTop, libraryGridViewport.height, libraryGridViewport.scrollTop, libraryGridViewport.width, shouldVirtualizeWardrobeGrid, visibleWardrobeItems]);
   const shouldVirtualizeBoardPicker = pickerBoardImageId && visibleBoardPickerItems.length >= LIBRARY_VIRTUALIZATION_THRESHOLD;
   const virtualizedBoardPickerItems = useMemo(() => {
     if (!shouldVirtualizeBoardPicker) {
@@ -5174,11 +5343,22 @@ export default function App() {
   }, [activePanel, shouldVirtualizeWardrobeGrid, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   const handleLibraryReferenceSelect = useCallback((itemId, event) => {
-    selectReference(itemId, event);
-  }, [selectReference]);
+    if (shouldSuppressMobileLibraryCardInteraction()) {
+      if (event) {
+        blurPointerActivatedControl(event);
+      }
+      return;
+    }
+
+    selectReference(itemId, event, { forceToggleSelection: isMobileViewport && mobileLibrarySelectMode });
+  }, [isMobileViewport, mobileLibrarySelectMode, selectReference]);
   const handleLibraryReferencePreview = useCallback((item) => {
+    if (shouldSuppressMobileLibraryCardInteraction()) {
+      return;
+    }
+
     openReferencePreview(item);
-  }, [openReferencePreview]);
+  }, [isMobileViewport, openReferencePreview]);
   const handleVisibleLibraryImageMount = useCallback(() => {
     const perfSession = libraryPerfRef.current;
 
@@ -6191,7 +6371,7 @@ export default function App() {
       if (referencePreview) {
         event.preventDefault();
         blurRetainedPointerFocus();
-        setReferencePreview(null);
+        closeReferencePreview();
         return;
       }
 
@@ -6234,6 +6414,13 @@ export default function App() {
         event.preventDefault();
         blurRetainedPointerFocus();
         setWardrobeViewsOpen(false);
+        return;
+      }
+
+      if (mobileLibraryMoreOpen) {
+        event.preventDefault();
+        blurRetainedPointerFocus();
+        setMobileLibraryMoreOpen(false);
         return;
       }
 
@@ -6285,6 +6472,7 @@ export default function App() {
     wardrobeWorthOpen,
     wardrobeSavedOpen,
     wardrobeViewsOpen,
+    mobileLibraryMoreOpen,
     wardrobeManageOpen
   ]);
 
@@ -7190,6 +7378,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(true);
     setReferencePreview(null);
@@ -7537,8 +7726,51 @@ async function handleExportBackup() {
     setItemImageDragActive(false);
   }
 
-  function selectReference(itemId, event = null) {
-    const isToggleSelection = Boolean(event?.metaKey || event?.ctrlKey);
+  function toggleMobileLibrarySelectionMode() {
+    setMobileLibrarySelectMode((current) => !current);
+    setMobileLibraryMoreOpen(false);
+    setWardrobeManageOpen(false);
+    setWardrobeViewsOpen(false);
+    setWardrobeAddOpen(false);
+    setWardrobeFiltersOpen(false);
+  }
+
+  function toggleMobileLibraryMore(event = null) {
+    closeUtilityWindows();
+    setWardrobeFiltersOpen(false);
+    setWardrobeViewsOpen(false);
+    setWardrobeManageOpen(false);
+    setWardrobeAddOpen(false);
+    setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen((current) => !current);
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function openMobileLibraryManage(event = null) {
+    closeUtilityWindows();
+    setWardrobeFiltersOpen(false);
+    setWardrobeViewsOpen(false);
+    setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen(false);
+    setWardrobeManageOpen(true);
+    setWardrobeAddOpen(false);
+    cancelEditSavedOutfit();
+
+    if (event) {
+      blurPointerActivatedControl(event);
+    }
+  }
+
+  function openMobileLibraryAdd(event = null) {
+    setMobileLibraryMoreOpen(false);
+    startCreate(event);
+  }
+
+  function selectReference(itemId, event = null, options = {}) {
+    const isToggleSelection = Boolean(options.forceToggleSelection || event?.metaKey || event?.ctrlKey);
     const isRangeSelection = Boolean(event?.shiftKey);
 
     setSelectedReferenceSelection((current) => {
@@ -9321,6 +9553,71 @@ async function handleExportBackup() {
     zoomBoardView((currentZoom) => currentZoom * zoomFactor, anchor);
   }
 
+  function handleBoardViewportTouchStart(event) {
+    if (!isMobileViewport || event.touches.length !== 2) {
+      if (event.touches.length < 2) {
+        boardPinchRef.current = null;
+      }
+      return;
+    }
+
+    const viewportRect = boardViewportRef.current?.getBoundingClientRect();
+    const midpoint = getTouchMidpoint(event.touches);
+    if (!viewportRect || !midpoint) {
+      boardPinchRef.current = null;
+      return;
+    }
+
+    event.preventDefault();
+    boardInteractionRef.current = null;
+    boardPinchRef.current = {
+      distance: getTouchDistance(event.touches),
+      anchor: {
+        x: midpoint.clientX - viewportRect.left,
+        y: midpoint.clientY - viewportRect.top
+      }
+    };
+  }
+
+  function handleBoardViewportTouchMove(event) {
+    if (!isMobileViewport || !boardPinchRef.current || event.touches.length !== 2) {
+      return;
+    }
+
+    const viewportRect = boardViewportRef.current?.getBoundingClientRect();
+    const midpoint = getTouchMidpoint(event.touches);
+    const distance = getTouchDistance(event.touches);
+    if (!viewportRect || !midpoint || distance <= 0 || boardPinchRef.current.distance <= 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const zoomFactor = distance / boardPinchRef.current.distance;
+    const anchor = {
+      x: midpoint.clientX - viewportRect.left,
+      y: midpoint.clientY - viewportRect.top
+    };
+    zoomBoardView((currentZoom) => currentZoom * zoomFactor, anchor);
+    boardPinchRef.current = {
+      distance,
+      anchor
+    };
+  }
+
+  function handleBoardViewportTouchEnd(event) {
+    if (event.touches.length < 2) {
+      boardPinchRef.current = null;
+    }
+  }
+
+  function handleBoardViewportGestureEvent(event) {
+    if (!isMobileViewport) {
+      return;
+    }
+
+    event.preventDefault();
+  }
+
   useEffect(() => {
     const viewportElement = boardViewportRef.current;
     if (!viewportElement) {
@@ -9328,7 +9625,22 @@ async function handleExportBackup() {
     }
 
     viewportElement.addEventListener("wheel", handleBoardViewportWheel, { passive: false });
-    return () => viewportElement.removeEventListener("wheel", handleBoardViewportWheel);
+    viewportElement.addEventListener("touchstart", handleBoardViewportTouchStart, { passive: false });
+    viewportElement.addEventListener("touchmove", handleBoardViewportTouchMove, { passive: false });
+    viewportElement.addEventListener("touchend", handleBoardViewportTouchEnd);
+    viewportElement.addEventListener("touchcancel", handleBoardViewportTouchEnd);
+    viewportElement.addEventListener("gesturestart", handleBoardViewportGestureEvent, { passive: false });
+    viewportElement.addEventListener("gesturechange", handleBoardViewportGestureEvent, { passive: false });
+
+    return () => {
+      viewportElement.removeEventListener("wheel", handleBoardViewportWheel);
+      viewportElement.removeEventListener("touchstart", handleBoardViewportTouchStart);
+      viewportElement.removeEventListener("touchmove", handleBoardViewportTouchMove);
+      viewportElement.removeEventListener("touchend", handleBoardViewportTouchEnd);
+      viewportElement.removeEventListener("touchcancel", handleBoardViewportTouchEnd);
+      viewportElement.removeEventListener("gesturestart", handleBoardViewportGestureEvent);
+      viewportElement.removeEventListener("gesturechange", handleBoardViewportGestureEvent);
+    };
   }, [board, isMobileViewport]);
 
   function saveCurrentOutfit() {
@@ -9746,6 +10058,7 @@ async function handleExportBackup() {
       setWardrobeWorthOpen(false);
       setWardrobeSavedOpen(false);
       setWardrobeViewsOpen(false);
+      setMobileLibraryMoreOpen(false);
       setWardrobeManageOpen(false);
       setWardrobeAddOpen(false);
       setLibrarySelectionActionsOpen(false);
@@ -9788,6 +10101,7 @@ async function handleExportBackup() {
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9827,6 +10141,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setWardrobeWorthOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen(true);
@@ -9853,6 +10168,7 @@ async function handleExportBackup() {
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9876,6 +10192,7 @@ async function handleExportBackup() {
     setWardrobeWorthOpen(false);
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     setLibrarySelectionActionsOpen(false);
@@ -9899,6 +10216,7 @@ async function handleExportBackup() {
     closeUtilityWindows();
     setWardrobeSavedOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     cancelEditSavedOutfit();
@@ -9930,6 +10248,7 @@ async function handleExportBackup() {
     setWardrobeFiltersOpen(false);
     setControlsViewsOpen(false);
     setWardrobeSavedOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeManageOpen(false);
     setWardrobeAddOpen(false);
     cancelEditSavedOutfit();
@@ -9953,6 +10272,7 @@ async function handleExportBackup() {
     closeUtilityWindows();
     setWardrobeFiltersOpen(false);
     setWardrobeViewsOpen(false);
+    setMobileLibraryMoreOpen(false);
     setWardrobeAddOpen(false);
     setWardrobeSavedOpen(false);
     cancelEditSavedOutfit();
@@ -10545,7 +10865,11 @@ async function handleExportBackup() {
           {boardGenerationError ? <span className="board-canvas-generation-status is-error">{boardGenerationError}</span> : null}
         </div>
 
-        <div className="board-canvas-viewport" ref={boardViewportRef} onPointerDown={handleBoardViewportPointerDown}>
+        <div
+          className={`board-canvas-viewport ${isMobileViewport ? "is-mobile-gesture-surface" : ""}`}
+          ref={boardViewportRef}
+          onPointerDown={handleBoardViewportPointerDown}
+        >
           {board?.images?.length ? (
             <div
               className="board-canvas-surface"
@@ -10600,6 +10924,8 @@ async function handleExportBackup() {
                 item={item}
                 isSelected={selectedReferenceIdSet.has(item.id)}
                 isExcluded={Boolean(excluded[item.id])}
+                isMobileViewport={isMobileViewport}
+                isMobileSelectMode={mobileLibrarySelectMode}
                 cardStyle={style}
                 onSelectReference={handleLibraryReferenceSelect}
                 onOpenReferencePreview={handleLibraryReferencePreview}
@@ -10614,6 +10940,8 @@ async function handleExportBackup() {
               item={item}
               isSelected={selectedReferenceIdSet.has(item.id)}
               isExcluded={Boolean(excluded[item.id])}
+              isMobileViewport={isMobileViewport}
+              isMobileSelectMode={mobileLibrarySelectMode}
               cardStyle={style}
               onSelectReference={handleLibraryReferenceSelect}
               onOpenReferencePreview={handleLibraryReferencePreview}
@@ -10732,12 +11060,28 @@ async function handleExportBackup() {
 
   function openReferencePreview(item) {
     setPickerBoardImageId(null);
+    setIsReferencePreviewZoomed(false);
+    setReferencePreviewZoomFocus(null);
+    setMobileReferencePreviewScale(1);
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
     setReferencePreview(normalizeItem(item));
   }
 
   function closeReferencePreview() {
     setIsReferencePreviewZoomed(false);
     setReferencePreviewZoomFocus(null);
+    setMobileReferencePreviewScale(1);
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
     if (referencePreviewStageRef.current) {
       referencePreviewStageRef.current.scrollLeft = 0;
       referencePreviewStageRef.current.scrollTop = 0;
@@ -10762,6 +11106,9 @@ async function handleExportBackup() {
     if (isReferencePreviewZoomed) {
       setIsReferencePreviewZoomed(false);
       setReferencePreviewZoomFocus(null);
+      setMobileReferencePreviewScale(1);
+      mobileReferencePreviewPinchRef.current = null;
+      mobileReferencePreviewDidPinchRef.current = false;
       if (referencePreviewStageRef.current) {
         referencePreviewStageRef.current.scrollLeft = 0;
         referencePreviewStageRef.current.scrollTop = 0;
@@ -10778,6 +11125,184 @@ async function handleExportBackup() {
     setReferencePreviewZoomFocus(focusRatio);
     setIsReferencePreviewZoomed(true);
   }
+
+  function toggleMobileReferencePreviewChrome() {
+    if (!isMobileViewport || !referencePreview) {
+      return;
+    }
+
+    setMobileReferencePreviewChromeVisible((current) => {
+      const nextVisible = !current;
+
+      if (!nextVisible) {
+        setMobileReferencePreviewActionsOpen(false);
+        setMobileReferencePreviewInfoOpen(false);
+      }
+
+      return nextVisible;
+    });
+  }
+
+  function toggleMobileReferencePreviewActions(event) {
+    event.stopPropagation();
+    setMobileReferencePreviewChromeVisible(true);
+    setMobileReferencePreviewInfoOpen(false);
+    setMobileReferencePreviewActionsOpen((current) => !current);
+  }
+
+  function toggleMobileReferencePreviewInfo(event) {
+    event.stopPropagation();
+    setMobileReferencePreviewChromeVisible(true);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen((current) => !current);
+  }
+
+  function syncMobileReferencePreviewScale(nextScale) {
+    const normalizedScale = Math.min(4, Math.max(1, Math.round(nextScale * 1000) / 1000));
+    setMobileReferencePreviewScale(normalizedScale);
+    setIsReferencePreviewZoomed(normalizedScale > 1.01);
+
+    if (normalizedScale <= 1.01) {
+      setReferencePreviewZoomFocus(null);
+    }
+  }
+
+  function handleMobileReferencePreviewPinchStart(event) {
+    if (!isMobileViewport || !referencePreview || event.touches.length !== 2) {
+      if (event.touches.length < 2) {
+        mobileReferencePreviewPinchRef.current = null;
+      }
+      return;
+    }
+
+    event.preventDefault();
+    mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewPinchRef.current = {
+      distance: getTouchDistance(event.touches),
+      scale: mobileReferencePreviewScaleRef.current
+    };
+  }
+
+  function handleMobileReferencePreviewPinchMove(event) {
+    if (!mobileReferencePreviewPinchRef.current || event.touches.length !== 2) {
+      return;
+    }
+
+    const distance = getTouchDistance(event.touches);
+    if (distance <= 0 || mobileReferencePreviewPinchRef.current.distance <= 0) {
+      return;
+    }
+
+    event.preventDefault();
+    mobileReferencePreviewDidPinchRef.current = true;
+    syncMobileReferencePreviewScale(
+      mobileReferencePreviewPinchRef.current.scale * (distance / mobileReferencePreviewPinchRef.current.distance)
+    );
+  }
+
+  function handleMobileReferencePreviewPinchEnd(event) {
+    if (event.touches.length >= 2) {
+      return;
+    }
+
+    mobileReferencePreviewPinchRef.current = null;
+    if (mobileReferencePreviewScaleRef.current <= 1.01) {
+      syncMobileReferencePreviewScale(1);
+      if (referencePreviewStageRef.current) {
+        referencePreviewStageRef.current.scrollLeft = 0;
+        referencePreviewStageRef.current.scrollTop = 0;
+      }
+    }
+  }
+
+  function handleMobileReferencePreviewGestureEvent(event) {
+    if (!isMobileViewport || !referencePreview) {
+      return;
+    }
+
+    event.preventDefault();
+  }
+
+  function handleReferencePreviewStageTouchStart(event) {
+    if (!isMobileViewport || isReferencePreviewZoomed) {
+      mobileReferencePreviewTouchRef.current = null;
+      return;
+    }
+
+    if (event.touches.length !== 1) {
+      mobileReferencePreviewTouchRef.current = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    mobileReferencePreviewTouchRef.current = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      endX: touch.clientX,
+      endY: touch.clientY
+    };
+  }
+
+  function handleReferencePreviewStageTouchMove(event) {
+    if (!mobileReferencePreviewTouchRef.current || event.touches.length !== 1) {
+      return;
+    }
+
+    const touch = event.touches[0];
+    mobileReferencePreviewTouchRef.current = {
+      ...mobileReferencePreviewTouchRef.current,
+      endX: touch.clientX,
+      endY: touch.clientY
+    };
+  }
+
+  function handleReferencePreviewStageTouchCancel() {
+    mobileReferencePreviewTouchRef.current = null;
+  }
+
+  function handleReferencePreviewStageTouchEnd(event) {
+    if (!mobileReferencePreviewTouchRef.current || isReferencePreviewZoomed) {
+      mobileReferencePreviewTouchRef.current = null;
+      return;
+    }
+
+    const direction = getReferencePreviewSwipeDirection(mobileReferencePreviewTouchRef.current);
+    mobileReferencePreviewTouchRef.current = null;
+
+    if (!direction) {
+      return;
+    }
+
+    event.preventDefault();
+    openAdjacentReferencePreview(direction);
+  }
+
+  useEffect(() => {
+    const stageElement = referencePreviewStageRef.current;
+    if (!stageElement || !isMobileViewport || !referencePreview) {
+      return undefined;
+    }
+
+    stageElement.addEventListener("touchstart", handleMobileReferencePreviewPinchStart, { passive: false });
+    stageElement.addEventListener("touchmove", handleMobileReferencePreviewPinchMove, { passive: false });
+    stageElement.addEventListener("touchend", handleMobileReferencePreviewPinchEnd);
+    stageElement.addEventListener("touchcancel", handleMobileReferencePreviewPinchEnd);
+    stageElement.addEventListener("gesturestart", handleMobileReferencePreviewGestureEvent, { passive: false });
+    stageElement.addEventListener("gesturechange", handleMobileReferencePreviewGestureEvent, { passive: false });
+
+    return () => {
+      stageElement.removeEventListener("touchstart", handleMobileReferencePreviewPinchStart);
+      stageElement.removeEventListener("touchmove", handleMobileReferencePreviewPinchMove);
+      stageElement.removeEventListener("touchend", handleMobileReferencePreviewPinchEnd);
+      stageElement.removeEventListener("touchcancel", handleMobileReferencePreviewPinchEnd);
+      stageElement.removeEventListener("gesturestart", handleMobileReferencePreviewGestureEvent);
+      stageElement.removeEventListener("gesturechange", handleMobileReferencePreviewGestureEvent);
+    };
+  }, [isMobileViewport, referencePreview]);
 
   async function toggleReferencePreviewFavorite() {
     if (!referencePreview?.id) {
@@ -11635,13 +12160,44 @@ async function handleExportBackup() {
         {activePanel ? (
           <div className="floating-backdrop active-panel-backdrop" onClick={closeWorkspacePanel}>
         <div
-          className={`active-panel-overlay ${activePanel === "wardrobe" ? "is-wardrobe-panel" : ""}`}
+          className={`active-panel-overlay ${activePanel === "wardrobe" ? "is-wardrobe-panel" : ""} ${activePanel === "wardrobe" && isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}
+          onPointerDownCapture={(event) => {
+            if (!wardrobeFiltersOpen || activePanel !== "wardrobe") {
+              return;
+            }
+
+            if (wardrobeFiltersPanelRef.current?.contains(event.target)) {
+              return;
+            }
+
+            if (wardrobeFiltersTriggerRef.current?.contains(event.target)) {
+              return;
+            }
+
+            if (isMobileViewport) {
+              mobileFilterDismissClickSuppressionRef.current = true;
+              suppressMobileLibraryCardInteractionUntilRef.current = Date.now() + 450;
+
+              if (mobileFilterDismissClickSuppressionTimeoutRef.current) {
+                window.clearTimeout(mobileFilterDismissClickSuppressionTimeoutRef.current);
+              }
+
+              mobileFilterDismissClickSuppressionTimeoutRef.current = window.setTimeout(() => {
+                mobileFilterDismissClickSuppressionRef.current = false;
+                mobileFilterDismissClickSuppressionTimeoutRef.current = null;
+              }, 400);
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            closeWardrobeFilters();
+          }}
           onClick={(event) => event.stopPropagation()}
         >
         {activePanel === "wardrobe" ? (
-        <div className="wardrobe-workspace">
-          <div className="panel wardrobe-panel">
-          <div className="panel-header">
+        <div className={`wardrobe-workspace ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}>
+          <div className={`panel wardrobe-panel ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}>
+          <div className={`panel-header ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}>
             {wardrobeSavedOpen ? (
               <div className="wardrobe-subview-header">
                 <div>
@@ -11650,7 +12206,162 @@ async function handleExportBackup() {
                 </div>
               </div>
             ) : (
-              <div className="library-command-bar">
+              <div className={`library-command-bar ${showMobileLibrarySelectionToolbar ? "is-mobile-selection-toolbar" : ""}`}>
+                {showMobileLibrarySelectionToolbar ? (
+                  <div className="library-selection-toolbar">
+                    <button
+                      type="button"
+                      className="ghost-button library-context-button"
+                      onClick={toggleMobileLibrarySelectionMode}
+                      aria-pressed={mobileLibrarySelectMode}
+                    >
+                      Done
+                    </button>
+                    <span className="library-selection-toolbar-status" aria-label={mobileLibrarySelectionStatusLabel}>
+                      {mobileLibrarySelectionStatusLabel}
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary-button library-context-button library-selection-edit-button"
+                      onMouseDown={preventMouseButtonFocus}
+                      onClick={openSelectionEditor}
+                    >
+                      Edit
+                    </button>
+                    <div
+                      ref={librarySelectionActionsRef}
+                      className={`library-tag-action-anchor ${isMobileViewport ? "is-mobile-library-actions-anchor" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className={`ghost-button library-context-button library-selection-actions-trigger ${librarySelectionActionsOpen || libraryTagActionMode ? "is-active" : ""}`}
+                        onMouseDown={preventMouseButtonFocus}
+                        onClick={toggleLibrarySelectionActions}
+                        aria-expanded={librarySelectionActionsOpen || Boolean(libraryTagActionMode)}
+                        aria-haspopup="menu"
+                        aria-controls="library-selection-actions-popover"
+                      >
+                        Actions ▾
+                      </button>
+                      {(librarySelectionActionsOpen || libraryTagActionMode) ? (
+                        <div
+                          id="library-selection-actions-popover"
+                          className={`selection-actions-popover ${isMobileViewport ? "is-mobile-library-actions-popover" : ""}`}
+                          aria-label="Selection actions"
+                        >
+                          {libraryTagActionMode ? (
+                            <div className="selection-action-editor">
+                              <button
+                                type="button"
+                                className="ghost-button selection-action-back"
+                                onClick={() => setLibraryTagActionMode(null)}
+                              >
+                                Back
+                              </button>
+                              <p className="selection-action-title">
+                                {libraryTagActionMode === "add" ? "Add tags" : "Remove tags"}
+                              </p>
+                              <TagInput
+                                selectedTags={libraryTagActionSelectedTags}
+                                allTags={libraryTagActionSuggestions}
+                                onChange={(nextTags) => {
+                                  void handleImmediateBulkTagDraftChange(libraryTagActionMode, nextTags);
+                                }}
+                                placeholder={libraryTagActionMode === "add" ? "Add tag" : "Remove tag"}
+                                autoFocus
+                                showAllSuggestionsOnFocus
+                                className="selection-action-tag-input"
+                                suggestionsClassName="selection-action-tag-input-suggestions"
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className="selection-actions-popover-section">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => toggleLibraryTagAction("add")}
+                                >
+                                  Add tags
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => toggleLibraryTagAction("remove")}
+                                >
+                                  Remove tags
+                                </button>
+                              </div>
+                              <div className="selection-actions-popover-section selection-actions-popover-section-divider">
+                                {showFavoriteSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkFavoriteEdit("yes");
+                                    }}
+                                  >
+                                    Favorite
+                                  </button>
+                                ) : null}
+                                {showUnfavoriteSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkFavoriteEdit("no");
+                                    }}
+                                  >
+                                    Unfavorite
+                                  </button>
+                                ) : null}
+                                {showExcludeSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkExcludedEdit("yes");
+                                    }}
+                                  >
+                                    Exclude
+                                  </button>
+                                ) : null}
+                                {showIncludeSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkExcludedEdit("no");
+                                    }}
+                                  >
+                                    Include
+                                  </button>
+                                ) : null}
+                              </div>
+                              <div className="selection-actions-popover-section selection-actions-popover-section-danger">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item is-danger"
+                                  onClick={async () => {
+                                    setLibrarySelectionActionsOpen(false);
+                                    await deleteSelectedReferences();
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <>
                   <div className="library-command-bar-leading">
                     <div className="library-command-bar-search">
                       <label className="wardrobe-search-control">
@@ -11678,77 +12389,25 @@ async function handleExportBackup() {
 
                     <div className="library-command-bar-main-actions">
                       <button
+                        ref={wardrobeFiltersTriggerRef}
                         type="button"
-                        className={`secondary-button filter-button ${wardrobeFiltersOpen || hasActiveWardrobeFilters ? "is-active" : ""}`}
+                        className={`secondary-button filter-button ${wardrobeFiltersOpen || hasActiveWardrobeFilters || matchingSavedLibraryViewId ? "is-active" : ""}`}
                         onClick={openWardrobeFilters}
                         aria-pressed={wardrobeFiltersOpen}
                         aria-expanded={wardrobeFiltersOpen}
                       >
                         Filter
                       </button>
-                      <div ref={wardrobeViewsPopoverRef} className="library-popover-anchor">
+                      {isMobileViewport ? (
                         <button
                           type="button"
-                          className={`ghost-button library-context-button ${wardrobeViewsOpen || matchingSavedLibraryViewId ? "is-active" : ""}`}
-                          onClick={(event) => toggleWardrobeViews(event)}
-                          aria-expanded={wardrobeViewsOpen}
-                          aria-haspopup="dialog"
-                          aria-controls="library-views-popover"
+                          className={`ghost-button library-context-button ${mobileLibrarySelectMode ? "is-active" : ""}`}
+                          onClick={toggleMobileLibrarySelectionMode}
+                          aria-pressed={mobileLibrarySelectMode}
                         >
-                          Views
+                          {mobileLibrarySelectMode ? "Done" : "Select"}
                         </button>
-                        <div
-                          id="library-views-popover"
-                          className={`wardrobe-manage-window wardrobe-saved-views-window ${wardrobeViewsOpen ? "is-open" : ""}`}
-                          aria-label="Saved library views"
-                        >
-                          <button
-                            type="button"
-                            className="ghost-button wardrobe-manage-action"
-                            onClick={handleSaveCurrentLibraryView}
-                          >
-                            Save current view
-                          </button>
-                          {savedLibraryViews.length ? (
-                            <div className="saved-library-views-list" aria-label="Saved library views list">
-                              {savedLibraryViews.map((view) => {
-                                const isCurrentView = view.id === matchingSavedLibraryViewId;
-
-                                return (
-                                  <div key={view.id} className={`saved-library-view-row ${isCurrentView ? "is-current" : ""}`}>
-                                    <button
-                                      type="button"
-                                      className="ghost-button saved-library-view-apply"
-                                      onClick={(event) => applyLibrarySavedView(view, event)}
-                                    >
-                                      <span>{view.name}</span>
-                                      {isCurrentView ? <strong>Current</strong> : null}
-                                    </button>
-                                    <div className="saved-library-view-actions">
-                                      <button
-                                        type="button"
-                                        className="ghost-button saved-library-view-action"
-                                        onClick={() => handleRenameSavedLibraryView(view)}
-                                      >
-                                        Rename
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="ghost-button saved-library-view-action danger"
-                                        onClick={() => handleDeleteSavedLibraryView(view)}
-                                      >
-                                        Delete
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <p className="wardrobe-filter-empty saved-library-views-empty">No saved views yet.</p>
-                          )}
-                        </div>
-                      </div>
+                      ) : null}
                       <label className="wardrobe-sort-control">
                         <select
                           value={wardrobeSort}
@@ -11764,17 +12423,55 @@ async function handleExportBackup() {
                           <option value="oldest">Oldest</option>
                         </select>
                       </label>
+                      {isMobileViewport ? (
+                        <div ref={mobileLibraryMorePopoverRef} className="library-popover-anchor library-mobile-more-anchor">
+                          <button
+                            type="button"
+                            className={`ghost-button library-context-button ${mobileLibraryMoreOpen ? "is-active" : ""}`}
+                            onClick={toggleMobileLibraryMore}
+                            aria-expanded={mobileLibraryMoreOpen}
+                            aria-haspopup="menu"
+                            aria-controls="library-mobile-more-popover"
+                          >
+                            More
+                          </button>
+                          {mobileLibraryMoreOpen ? (
+                            <div
+                              id="library-mobile-more-popover"
+                              className="selection-actions-popover library-mobile-more-popover"
+                              aria-label="More library actions"
+                            >
+                              <button
+                                type="button"
+                                className="selection-actions-popover-item"
+                                onClick={openMobileLibraryManage}
+                              >
+                                Manage
+                              </button>
+                              <button
+                                type="button"
+                                className="selection-actions-popover-item"
+                                onClick={openMobileLibraryAdd}
+                              >
+                                Add
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div ref={wardrobeManagePopoverRef} className="library-popover-anchor">
-                        <button
-                          type="button"
-                          className={`ghost-button library-context-button ${wardrobeManageOpen ? "is-active" : ""}`}
-                          onClick={(event) => toggleWardrobeManage(event)}
-                          aria-expanded={wardrobeManageOpen}
-                          aria-haspopup="dialog"
-                          aria-controls="library-manage-popover"
-                        >
-                          Manage
-                        </button>
+                        {!isMobileViewport ? (
+                          <button
+                            type="button"
+                            className={`ghost-button library-context-button ${wardrobeManageOpen ? "is-active" : ""}`}
+                            onClick={(event) => toggleWardrobeManage(event)}
+                            aria-expanded={wardrobeManageOpen}
+                            aria-haspopup="dialog"
+                            aria-controls="library-manage-popover"
+                          >
+                            Manage
+                          </button>
+                        ) : null}
                         <div
                           id="library-manage-popover"
                           className={`wardrobe-manage-window ${wardrobeManageOpen ? "is-open" : ""}`}
@@ -11878,16 +12575,18 @@ async function handleExportBackup() {
                         </div>
                       </div>
                       <div ref={wardrobeAddPopoverRef} className="library-popover-anchor">
-                        <button
-                          type="button"
-                          className={`primary-button library-context-button ${wardrobeAddOpen ? "is-active" : ""}`}
-                          onClick={(event) => (wardrobeAddOpen ? closeWardrobeAdd(event) : startCreate(event))}
-                          aria-expanded={wardrobeAddOpen}
-                          aria-haspopup="dialog"
-                          aria-controls="library-add-popover"
-                        >
-                          Add
-                        </button>
+                        {!isMobileViewport ? (
+                          <button
+                            type="button"
+                            className={`primary-button library-context-button ${wardrobeAddOpen ? "is-active" : ""}`}
+                            onClick={(event) => (wardrobeAddOpen ? closeWardrobeAdd(event) : startCreate(event))}
+                            aria-expanded={wardrobeAddOpen}
+                            aria-haspopup="dialog"
+                            aria-controls="library-add-popover"
+                          >
+                            Add
+                          </button>
+                        ) : null}
                         <div
                           id="library-add-popover"
                           className={`wardrobe-add-window ${wardrobeAddOpen ? "is-open" : ""}`}
@@ -11928,8 +12627,6 @@ async function handleExportBackup() {
                         ref={wardrobeFiltersPanelRef}
                         className={`wardrobe-controls ${wardrobeFiltersOpen ? "is-open" : ""}`}
                         aria-label="Library filters"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => event.stopPropagation()}
                       >
                         <label className="wardrobe-filter-search">
                           <span className="sr-only">Search filter tags</span>
@@ -12008,6 +12705,65 @@ async function handleExportBackup() {
                         </details>
 
                         <div className="wardrobe-controls-inline-row">
+                          <details className="wardrobe-filter-row wardrobe-filter-saved-views">
+                            <summary>
+                              <span>Views</span>
+                              {matchingSavedLibraryViewId ? (
+                                <strong className="wardrobe-filter-row-summary-meta">Current</strong>
+                              ) : null}
+                            </summary>
+                            <div className="wardrobe-filter-saved-views-body">
+                              <div className="wardrobe-filter-section-header">
+                                <span>Saved search, filter, and sort presets.</span>
+                                <button
+                                  type="button"
+                                  className="ghost-button saved-library-view-save-button"
+                                  onClick={handleSaveCurrentLibraryView}
+                                >
+                                  Save current view
+                                </button>
+                              </div>
+                              {savedLibraryViews.length ? (
+                                <div className="saved-library-views-list" aria-label="Saved library views list">
+                                  {savedLibraryViews.map((view) => {
+                                    const isCurrentView = view.id === matchingSavedLibraryViewId;
+
+                                    return (
+                                      <div key={view.id} className={`saved-library-view-row ${isCurrentView ? "is-current" : ""}`}>
+                                        <button
+                                          type="button"
+                                          className="ghost-button saved-library-view-apply"
+                                          onClick={(event) => applyLibrarySavedView(view, event)}
+                                        >
+                                          <span>{view.name}</span>
+                                          {isCurrentView ? <strong>Current</strong> : null}
+                                        </button>
+                                        <div className="saved-library-view-actions">
+                                          <button
+                                            type="button"
+                                            className="ghost-button saved-library-view-action"
+                                            onClick={() => handleRenameSavedLibraryView(view)}
+                                          >
+                                            Rename
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="ghost-button saved-library-view-action danger"
+                                            onClick={() => handleDeleteSavedLibraryView(view)}
+                                          >
+                                            Delete
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="wardrobe-filter-empty saved-library-views-empty">No saved views yet.</p>
+                              )}
+                            </div>
+                          </details>
+
                           <details className="wardrobe-filter-row">
                             <summary>
                               <span>Favorite</span>
@@ -12127,6 +12883,15 @@ async function handleExportBackup() {
                             >
                               Clear search + filters
                             </button>
+                            {isMobileViewport ? (
+                              <button
+                                type="button"
+                                className="secondary-button mobile-filter-close-button"
+                                onClick={closeWardrobeFilters}
+                              >
+                                Close
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                     </div>
@@ -12160,7 +12925,10 @@ async function handleExportBackup() {
                           >
                             Edit
                           </button>
-                          <div ref={librarySelectionActionsRef} className="library-tag-action-anchor">
+                          <div
+                            ref={librarySelectionActionsRef}
+                            className={`library-tag-action-anchor ${isMobileViewport ? "is-mobile-library-actions-anchor" : ""}`}
+                          >
                             <button
                               type="button"
                               className={`ghost-button library-context-button library-selection-actions-trigger ${librarySelectionActionsOpen || libraryTagActionMode ? "is-active" : ""}`}
@@ -12173,7 +12941,11 @@ async function handleExportBackup() {
                               Actions ▾
                             </button>
                             {(librarySelectionActionsOpen || libraryTagActionMode) ? (
-                              <div id="library-selection-actions-popover" className="selection-actions-popover" aria-label="Selection actions">
+                              <div
+                                id="library-selection-actions-popover"
+                                className={`selection-actions-popover ${isMobileViewport ? "is-mobile-library-actions-popover" : ""}`}
+                                aria-label="Selection actions"
+                              >
                                 {libraryTagActionMode ? (
                                   <div className="selection-action-editor">
                                     <button
@@ -12288,12 +13060,14 @@ async function handleExportBackup() {
                       </div>
                     ) : null}
                   </div>
+                  </>
+                )}
                 </div>
             )}
             </div>
 
             {wardrobeFiltersOpen ? (
-              <div className="floating-backdrop filter-backdrop" onClick={closeWardrobeFilters} />
+              <div className="floating-backdrop filter-backdrop" aria-hidden="true" />
             ) : null}
 
             <input
@@ -12305,10 +13079,13 @@ async function handleExportBackup() {
             />
 
             <div
-              className={`wardrobe-panel-body ${isSideEditorOpen ? "has-side-editor" : ""}`}
+              className={`wardrobe-panel-body ${isSideEditorOpen ? "has-side-editor" : ""} ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}
               style={!isMobileViewport ? { "--side-editor-width": `${sideEditorWidth}px` } : undefined}
             >
-              <div ref={wardrobePanelScrollRef} className="wardrobe-panel-scroll">
+              <div
+                ref={wardrobePanelScrollRef}
+                className={`wardrobe-panel-scroll ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}
+              >
                 {wardrobeSavedOpen ? (
                   renderSavedOutfitsContent()
                 ) : (
@@ -12464,13 +13241,159 @@ async function handleExportBackup() {
         {referencePreview ? (
           <div className="floating-backdrop fitpic-preview-backdrop" onClick={closeReferencePreview}>
             <div
-              className={`fitpic-preview-overlay reference-preview-overlay ${referencePreviewExcluded ? "is-excluded" : ""} ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+              className={`fitpic-preview-overlay reference-preview-overlay ${referencePreviewExcluded ? "is-excluded" : ""} ${isReferencePreviewZoomed ? "is-zoomed" : ""} ${isMobileReferencePreview ? "is-mobile-preview" : ""}`}
               onClick={(event) => event.stopPropagation()}
             >
               {(() => {
                 const referencePreviewTags = uniqueTags(referencePreview.tags);
                 const referencePreviewTagLabel = referencePreviewTags.map((tag) => getLeafTagLabel(tag)).join(", ");
                 const referencePreviewDescription = referencePreview.description?.trim() ?? "";
+
+                if (isMobileReferencePreview) {
+                  return (
+                    <>
+                      <div className={`reference-preview-mobile-chrome ${mobileReferencePreviewChromeVisible ? "is-visible" : ""}`}>
+                        <button
+                          type="button"
+                          className="reference-preview-mobile-control"
+                          onClick={closeReferencePreview}
+                          aria-label="Close reference preview"
+                        >
+                          &lt;
+                        </button>
+                        <div className="reference-preview-mobile-control-group">
+                          <button
+                            type="button"
+                            className="reference-preview-mobile-control"
+                            onClick={toggleMobileReferencePreviewInfo}
+                            aria-expanded={mobileReferencePreviewInfoOpen}
+                            aria-label="Show reference info"
+                          >
+                            i
+                          </button>
+                          <div className="reference-preview-mobile-overflow">
+                            <button
+                              type="button"
+                              className="reference-preview-mobile-control"
+                              onClick={toggleMobileReferencePreviewActions}
+                              aria-expanded={mobileReferencePreviewActionsOpen}
+                              aria-haspopup="menu"
+                              aria-label="Reference actions"
+                            >
+                              …
+                            </button>
+                            {mobileReferencePreviewActionsOpen ? (
+                              <div className="selection-actions-popover reference-preview-overflow-menu" role="menu" aria-label="Reference actions">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={async () => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    await toggleReferencePreviewFavorite();
+                                  }}
+                                >
+                                  {referencePreview.favorite ? "Unfavorite" : "Favorite"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    toggleExcluded(referencePreview.id);
+                                  }}
+                                >
+                                  {referencePreviewExcluded ? "Include" : "Exclude"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    startFloatingEditFromPreview(referencePreview);
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item is-danger"
+                                  onClick={async () => {
+                                    setMobileReferencePreviewActionsOpen(false);
+                                    await deleteReferencePreviewItem();
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        ref={referencePreviewStageRef}
+                        className={`reference-preview-stage reference-preview-mobile-stage ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+                        style={{ "--mobile-reference-preview-scale": mobileReferencePreviewScale }}
+                        onTouchStart={handleReferencePreviewStageTouchStart}
+                        onTouchMove={handleReferencePreviewStageTouchMove}
+                        onTouchEnd={handleReferencePreviewStageTouchEnd}
+                        onTouchCancel={handleReferencePreviewStageTouchCancel}
+                      >
+                        <button
+                          type="button"
+                          className={`reference-preview-image-button reference-preview-mobile-image-button ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (mobileReferencePreviewDidPinchRef.current) {
+                              mobileReferencePreviewDidPinchRef.current = false;
+                              return;
+                            }
+                            toggleMobileReferencePreviewChrome();
+                          }}
+                          aria-pressed={mobileReferencePreviewChromeVisible}
+                          aria-label={mobileReferencePreviewChromeVisible ? "Hide preview controls" : "Show preview controls"}
+                        >
+                          <ManagedItemImage
+                            item={referencePreview}
+                            alt={buildDisplayName(referencePreview)}
+                            dataItemId={referencePreview.id}
+                            frameRef={referencePreviewImageFrameRef}
+                            variant="original"
+                            useCrop
+                            usePresentation
+                          />
+                        </button>
+                      </div>
+                      {mobileReferencePreviewInfoOpen ? (
+                        <div className="reference-preview-mobile-sheet" onClick={(event) => event.stopPropagation()}>
+                          <div className="reference-preview-mobile-sheet-header">
+                            <strong>{buildDisplayName(referencePreview)}</strong>
+                            {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
+                          </div>
+                          {referencePreviewTagLabel ? (
+                            <div className="reference-preview-mobile-sheet-section">
+                              <span className="reference-preview-mobile-sheet-label">Tags</span>
+                              <p>{referencePreviewTagLabel}</p>
+                            </div>
+                          ) : null}
+                          {referencePreviewDescription ? (
+                            <div className="reference-preview-mobile-sheet-section">
+                              <span className="reference-preview-mobile-sheet-label">Description</span>
+                              <p>{referencePreviewDescription}</p>
+                            </div>
+                          ) : null}
+                          <div className="reference-preview-mobile-sheet-section">
+                            <span className="reference-preview-mobile-sheet-label">Status</span>
+                            <p>
+                              {referencePreview.favorite ? "Favorite" : "Not favorite"}
+                              {referencePreviewExcluded ? " · Excluded from generation" : ""}
+                              {!referencePreview.originalPreserved ? " · Original not preserved" : " · Original preserved"}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                }
 
                 return (
                   <div className="fitpic-preview-header">
