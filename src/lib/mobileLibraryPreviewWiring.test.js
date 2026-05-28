@@ -12,6 +12,11 @@ test("mobile library uses an explicit select mode toggle", () => {
   assert.equal(appSource.includes('const [mobileLibraryMoreOpen, setMobileLibraryMoreOpen] = useState(false);'), true);
   assert.equal(appSource.includes("function toggleMobileLibrarySelectionMode() {"), true);
   assert.equal(appSource.includes('{mobileLibrarySelectMode ? "Done" : "Select"}'), true);
+  assert.equal(appSource.includes('const mobileLibrarySelectionStatusLabel = selectedReferenceCount ? `${selectedReferenceCount} selected` : libraryImageCountLabel;'), true);
+  assert.equal(appSource.includes('const showMobileLibrarySelectionToolbar = isMobileViewport && mobileLibrarySelectMode;'), true);
+  assert.equal(appSource.includes('className={`library-command-bar ${showMobileLibrarySelectionToolbar ? "is-mobile-selection-toolbar" : ""}`}'), true);
+  assert.equal(appSource.includes('className="library-selection-toolbar"'), true);
+  assert.equal(appSource.includes('{mobileLibrarySelectionStatusLabel}'), true);
 });
 
 test("mobile library card tap opens preview while select mode keeps selection behavior", () => {

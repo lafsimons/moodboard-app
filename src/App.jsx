@@ -4953,6 +4953,8 @@ export default function App() {
 
     return `${libraryStats.totalImages} images`;
   }, [libraryStats.totalImages, libraryStats.visibleImages]);
+  const mobileLibrarySelectionStatusLabel = selectedReferenceCount ? `${selectedReferenceCount} selected` : libraryImageCountLabel;
+  const showMobileLibrarySelectionToolbar = isMobileViewport && mobileLibrarySelectMode;
   const selectedReferenceIdSet = useMemo(
     () => new Set(selectedReferenceIdList),
     [selectedReferenceIdList]
@@ -12093,7 +12095,162 @@ async function handleExportBackup() {
                 </div>
               </div>
             ) : (
-              <div className="library-command-bar">
+              <div className={`library-command-bar ${showMobileLibrarySelectionToolbar ? "is-mobile-selection-toolbar" : ""}`}>
+                {showMobileLibrarySelectionToolbar ? (
+                  <div className="library-selection-toolbar">
+                    <button
+                      type="button"
+                      className="ghost-button library-context-button"
+                      onClick={toggleMobileLibrarySelectionMode}
+                      aria-pressed={mobileLibrarySelectMode}
+                    >
+                      Done
+                    </button>
+                    <span className="library-selection-toolbar-status" aria-label={mobileLibrarySelectionStatusLabel}>
+                      {mobileLibrarySelectionStatusLabel}
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary-button library-context-button library-selection-edit-button"
+                      onMouseDown={preventMouseButtonFocus}
+                      onClick={openSelectionEditor}
+                    >
+                      Edit
+                    </button>
+                    <div
+                      ref={librarySelectionActionsRef}
+                      className={`library-tag-action-anchor ${isMobileViewport ? "is-mobile-library-actions-anchor" : ""}`}
+                    >
+                      <button
+                        type="button"
+                        className={`ghost-button library-context-button library-selection-actions-trigger ${librarySelectionActionsOpen || libraryTagActionMode ? "is-active" : ""}`}
+                        onMouseDown={preventMouseButtonFocus}
+                        onClick={toggleLibrarySelectionActions}
+                        aria-expanded={librarySelectionActionsOpen || Boolean(libraryTagActionMode)}
+                        aria-haspopup="menu"
+                        aria-controls="library-selection-actions-popover"
+                      >
+                        Actions ▾
+                      </button>
+                      {(librarySelectionActionsOpen || libraryTagActionMode) ? (
+                        <div
+                          id="library-selection-actions-popover"
+                          className={`selection-actions-popover ${isMobileViewport ? "is-mobile-library-actions-popover" : ""}`}
+                          aria-label="Selection actions"
+                        >
+                          {libraryTagActionMode ? (
+                            <div className="selection-action-editor">
+                              <button
+                                type="button"
+                                className="ghost-button selection-action-back"
+                                onClick={() => setLibraryTagActionMode(null)}
+                              >
+                                Back
+                              </button>
+                              <p className="selection-action-title">
+                                {libraryTagActionMode === "add" ? "Add tags" : "Remove tags"}
+                              </p>
+                              <TagInput
+                                selectedTags={libraryTagActionSelectedTags}
+                                allTags={libraryTagActionSuggestions}
+                                onChange={(nextTags) => {
+                                  void handleImmediateBulkTagDraftChange(libraryTagActionMode, nextTags);
+                                }}
+                                placeholder={libraryTagActionMode === "add" ? "Add tag" : "Remove tag"}
+                                autoFocus
+                                showAllSuggestionsOnFocus
+                                className="selection-action-tag-input"
+                                suggestionsClassName="selection-action-tag-input-suggestions"
+                              />
+                            </div>
+                          ) : (
+                            <>
+                              <div className="selection-actions-popover-section">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => toggleLibraryTagAction("add")}
+                                >
+                                  Add tags
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={() => toggleLibraryTagAction("remove")}
+                                >
+                                  Remove tags
+                                </button>
+                              </div>
+                              <div className="selection-actions-popover-section selection-actions-popover-section-divider">
+                                {showFavoriteSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkFavoriteEdit("yes");
+                                    }}
+                                  >
+                                    Favorite
+                                  </button>
+                                ) : null}
+                                {showUnfavoriteSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkFavoriteEdit("no");
+                                    }}
+                                  >
+                                    Unfavorite
+                                  </button>
+                                ) : null}
+                                {showExcludeSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkExcludedEdit("yes");
+                                    }}
+                                  >
+                                    Exclude
+                                  </button>
+                                ) : null}
+                                {showIncludeSelectedAction ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={async () => {
+                                      setLibrarySelectionActionsOpen(false);
+                                      await applyImmediateBulkExcludedEdit("no");
+                                    }}
+                                  >
+                                    Include
+                                  </button>
+                                ) : null}
+                              </div>
+                              <div className="selection-actions-popover-section selection-actions-popover-section-danger">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item is-danger"
+                                  onClick={async () => {
+                                    setLibrarySelectionActionsOpen(false);
+                                    await deleteSelectedReferences();
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : (
+                  <>
                   <div className="library-command-bar-leading">
                     <div className="library-command-bar-search">
                       <label className="wardrobe-search-control">
@@ -12788,6 +12945,8 @@ async function handleExportBackup() {
                       </div>
                     ) : null}
                   </div>
+                  </>
+                )}
                 </div>
             )}
             </div>

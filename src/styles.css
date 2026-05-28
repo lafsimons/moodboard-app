@@ -3030,6 +3030,10 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.library-command-bar.is-mobile-selection-toolbar {
+  align-items: stretch;
+}
+
 .library-command-bar-leading {
   display: inline-flex;
   align-items: center;
@@ -3102,6 +3106,27 @@ button:disabled {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.library-selection-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.library-selection-toolbar-status {
+  min-width: 0;
+  color: var(--muted-strong);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 .wardrobe-search-control {
@@ -6241,6 +6266,10 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
     gap: 8px;
   }
 
+  .library-command-bar.is-mobile-selection-toolbar {
+    gap: 0;
+  }
+
   .library-command-bar-leading {
     display: grid;
     gap: 8px;
@@ -6277,6 +6306,20 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   .library-command-bar-main-actions .library-context-button {
     justify-content: center;
     padding-inline: 6px;
+  }
+
+  .library-selection-toolbar {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 5px;
+  }
+
+  .library-selection-toolbar .library-context-button {
+    justify-content: center;
+    padding-inline: 8px;
+  }
+
+  .library-selection-toolbar-status {
+    font-size: 0.68rem;
   }
 
   .wardrobe-sort-control select {

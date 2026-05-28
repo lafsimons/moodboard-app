@@ -9,8 +9,11 @@ const stylesSource = readFileSync(
 
 test("mobile library command bar compacts into a search row and dense primary controls row", () => {
   assert.match(stylesSource, /@media \(max-width: 960px\) \{[\s\S]*\.library-command-bar\s*\{[\s\S]*display:\s*grid;[\s\S]*gap:\s*8px;/);
+  assert.match(stylesSource, /\.library-selection-toolbar\s*\{[\s\S]*grid-template-columns:\s*auto minmax\(0, 1fr\) auto auto;[\s\S]*gap:\s*6px;/);
   assert.match(stylesSource, /\.library-command-bar-leading\s*\{[\s\S]*display:\s*grid;[\s\S]*gap:\s*8px;/);
   assert.match(stylesSource, /\.library-command-bar-main-actions\s*\{[\s\S]*grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\);[\s\S]*gap:\s*5px;/);
+  assert.match(stylesSource, /@media \(max-width: 960px\) \{[\s\S]*\.library-command-bar\.is-mobile-selection-toolbar\s*\{[\s\S]*gap:\s*0;/);
+  assert.match(stylesSource, /\.library-selection-toolbar-status\s*\{[\s\S]*font-variant-numeric:\s*tabular-nums;/);
   assert.match(stylesSource, /\.library-mobile-more-popover\s*\{[\s\S]*width:\s*min\(180px,\s*calc\(100vw - 28px\)\);/);
 });
 
