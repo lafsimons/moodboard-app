@@ -5272,8 +5272,8 @@ export default function App() {
   }, [activePanel, shouldVirtualizeWardrobeGrid, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   const handleLibraryReferenceSelect = useCallback((itemId, event) => {
-    selectReference(itemId, event);
-  }, [selectReference]);
+    selectReference(itemId, event, { forceToggleSelection: isMobileViewport && mobileLibrarySelectMode });
+  }, [isMobileViewport, mobileLibrarySelectMode, selectReference]);
   const handleLibraryReferencePreview = useCallback((item) => {
     openReferencePreview(item);
   }, [openReferencePreview]);
@@ -7687,8 +7687,8 @@ async function handleExportBackup() {
     startCreate(event);
   }
 
-  function selectReference(itemId, event = null) {
-    const isToggleSelection = Boolean(event?.metaKey || event?.ctrlKey);
+  function selectReference(itemId, event = null, options = {}) {
+    const isToggleSelection = Boolean(options.forceToggleSelection || event?.metaKey || event?.ctrlKey);
     const isRangeSelection = Boolean(event?.shiftKey);
 
     setSelectedReferenceSelection((current) => {
@@ -12653,7 +12653,10 @@ async function handleExportBackup() {
                           >
                             Edit
                           </button>
-                          <div ref={librarySelectionActionsRef} className="library-tag-action-anchor">
+                          <div
+                            ref={librarySelectionActionsRef}
+                            className={`library-tag-action-anchor ${isMobileViewport ? "is-mobile-library-actions-anchor" : ""}`}
+                          >
                             <button
                               type="button"
                               className={`ghost-button library-context-button library-selection-actions-trigger ${librarySelectionActionsOpen || libraryTagActionMode ? "is-active" : ""}`}
@@ -12666,7 +12669,11 @@ async function handleExportBackup() {
                               Actions ▾
                             </button>
                             {(librarySelectionActionsOpen || libraryTagActionMode) ? (
-                              <div id="library-selection-actions-popover" className="selection-actions-popover" aria-label="Selection actions">
+                              <div
+                                id="library-selection-actions-popover"
+                                className={`selection-actions-popover ${isMobileViewport ? "is-mobile-library-actions-popover" : ""}`}
+                                aria-label="Selection actions"
+                              >
                                 {libraryTagActionMode ? (
                                   <div className="selection-action-editor">
                                     <button

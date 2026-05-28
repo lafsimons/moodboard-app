@@ -18,6 +18,8 @@ test("mobile library card tap opens preview while select mode keeps selection be
   assert.equal(appSource.includes("if (isMobileViewport && !isMobileSelectMode) {"), true);
   assert.equal(appSource.includes("onOpenReferencePreview(item);"), true);
   assert.equal(appSource.includes("onSelectReference(item.id, event);"), true);
+  assert.equal(appSource.includes("selectReference(itemId, event, { forceToggleSelection: isMobileViewport && mobileLibrarySelectMode });"), true);
+  assert.equal(appSource.includes("const isToggleSelection = Boolean(options.forceToggleSelection || event?.metaKey || event?.ctrlKey);"), true);
   assert.equal(appSource.includes("onDoubleClick={(event) => {"), true);
   assert.equal(appSource.includes("if (isMobileViewport) {"), true);
   assert.equal(appSource.includes('className={`wardrobe-card-badges ${isMobileViewport ? "is-mobile-tile-badges" : ""}`}'), true);
@@ -61,4 +63,9 @@ test("mobile library fullscreen shell reuses the existing wardrobe overlay struc
   assert.equal(appSource.includes('className={`panel wardrobe-panel ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
   assert.equal(appSource.includes('className={`panel-header ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
   assert.equal(appSource.includes('className={`wardrobe-panel-scroll ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
+});
+
+test("mobile library selection actions popover uses mobile-only anchor and clamp classes", () => {
+  assert.equal(appSource.includes('className={`library-tag-action-anchor ${isMobileViewport ? "is-mobile-library-actions-anchor" : ""}`}'), true);
+  assert.equal(appSource.includes('className={`selection-actions-popover ${isMobileViewport ? "is-mobile-library-actions-popover" : ""}`}'), true);
 });

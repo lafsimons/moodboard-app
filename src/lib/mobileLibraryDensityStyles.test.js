@@ -29,3 +29,8 @@ test("mobile library fullscreen shell flattens the overlay into an edge-to-edge 
   assert.match(stylesSource, /\.wardrobe-panel > \.panel-header\.is-mobile-fullscreen-shell\s*\{[\s\S]*position:\s*sticky;[\s\S]*top:\s*0;[\s\S]*background:\s*transparent;[\s\S]*backdrop-filter:\s*none;/);
   assert.match(stylesSource, /\.wardrobe-panel-scroll\.is-mobile-fullscreen-shell\s*\{[\s\S]*padding:[\s\S]*78px \+ env\(safe-area-inset-bottom\)[\s\S]*overflow-y:\s*auto;/);
 });
+
+test("mobile library selection actions popover stays anchored inside the viewport", () => {
+  assert.match(stylesSource, /@media \(max-width: 900px\) \{[\s\S]*\.library-tag-action-anchor\.is-mobile-library-actions-anchor\s*\{[\s\S]*margin-left:\s*auto;/);
+  assert.match(stylesSource, /\.selection-actions-popover\.is-mobile-library-actions-popover\s*\{[\s\S]*left:\s*auto;[\s\S]*right:\s*0;[\s\S]*width:\s*min\(236px,\s*calc\(100vw - 24px - env\(safe-area-inset-left\) - env\(safe-area-inset-right\)\)\);[\s\S]*max-width:\s*calc\(100vw - 24px - env\(safe-area-inset-left\) - env\(safe-area-inset-right\)\);/);
+});

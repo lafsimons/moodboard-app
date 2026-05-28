@@ -3378,6 +3378,17 @@ button:disabled {
     justify-content: flex-start;
     flex-wrap: wrap;
   }
+
+  .library-tag-action-anchor.is-mobile-library-actions-anchor {
+    margin-left: auto;
+  }
+
+  .selection-actions-popover.is-mobile-library-actions-popover {
+    left: auto;
+    right: 0;
+    width: min(236px, calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+    max-width: calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right));
+  }
 }
 
 .active-filter-summary {
