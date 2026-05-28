@@ -4240,6 +4240,13 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   flex: 0 0 auto;
 }
 
+.wardrobe-popover-actions .mobile-filter-close-button {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 0.62rem;
+  flex: 0 0 auto;
+}
+
 .active-panel-overlay .wardrobe-workspace {
   max-height: calc(100vh - 164px - env(safe-area-inset-bottom));
 }
@@ -6449,6 +6456,11 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
   .filter-summary-actions {
     justify-content: flex-start;
+  }
+
+  .wardrobe-popover-actions .mobile-filter-close-button {
+    margin-left: auto;
+    min-width: 74px;
   }
 
   .wardrobe-controls-inline-row {

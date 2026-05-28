@@ -74,11 +74,24 @@ test("mobile library routes lower-priority actions through a More popover while 
 });
 
 test("mobile library filter panel keeps internal interactions contained and closes only from outside dismissal", () => {
+  assert.equal(appSource.includes("const mobileFilterDismissClickSuppressionRef = useRef(false);"), true);
+  assert.equal(appSource.includes("const mobileFilterDismissClickSuppressionTimeoutRef = useRef(null);"), true);
+  assert.equal(appSource.includes("const suppressMobileLibraryCardInteractionUntilRef = useRef(0);"), true);
   assert.equal(appSource.includes('if (!wardrobeFiltersOpen || activePanel !== "wardrobe") {'), true);
   assert.equal(appSource.includes('onPointerDownCapture={(event) => {'), true);
   assert.equal(appSource.includes("if (wardrobeFiltersPanelRef.current?.contains(event.target)) {"), true);
   assert.equal(appSource.includes("if (wardrobeFiltersTriggerRef.current?.contains(event.target)) {"), true);
+  assert.equal(appSource.includes("if (!mobileFilterDismissClickSuppressionRef.current || !isMobileViewport) {"), true);
+  assert.equal(appSource.includes("document.addEventListener(\"click\", handleDocumentClickCapture, true);"), true);
+  assert.equal(appSource.includes("mobileFilterDismissClickSuppressionRef.current = true;"), true);
+  assert.equal(appSource.includes("suppressMobileLibraryCardInteractionUntilRef.current = Date.now() + 450;"), true);
+  assert.equal(appSource.includes("function shouldSuppressMobileLibraryCardInteraction() {"), true);
+  assert.equal(appSource.includes("if (shouldSuppressMobileLibraryCardInteraction()) {"), true);
+  assert.equal(appSource.includes("mobileFilterDismissClickSuppressionTimeoutRef.current = window.setTimeout(() => {"), true);
   assert.equal(appSource.includes("closeWardrobeFilters();"), true);
+  assert.equal(appSource.includes("{isMobileViewport ? ("), true);
+  assert.equal(appSource.includes('className="secondary-button mobile-filter-close-button"'), true);
+  assert.equal(appSource.includes("Close"), true);
   assert.equal(appSource.includes("event.stopPropagation();"), true);
   assert.equal(appSource.includes("event.preventDefault();"), true);
   assert.equal(appSource.includes("document.addEventListener(\"pointerdown\", handlePointerDown, true);"), false);

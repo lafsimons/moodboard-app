@@ -38,6 +38,8 @@ test("mobile filter sheet stacks above the dismissal backdrop while the backdrop
   assert.match(stylesSource, /\.wardrobe-panel > \.panel-header\s*\{[\s\S]*z-index:\s*66;/);
   assert.match(stylesSource, /\.wardrobe-controls\s*\{[\s\S]*z-index:\s*70;/);
   assert.match(stylesSource, /@media \(max-width: 900px\) \{[\s\S]*\.wardrobe-controls,[\s\S]*z-index:\s*70;/);
+  assert.match(stylesSource, /\.wardrobe-popover-actions \.mobile-filter-close-button\s*\{[\s\S]*min-height:\s*28px;[\s\S]*padding:\s*4px 10px;/);
+  assert.match(stylesSource, /@media \(max-width: 900px\) \{[\s\S]*\.wardrobe-popover-actions \.mobile-filter-close-button\s*\{[\s\S]*margin-left:\s*auto;[\s\S]*min-width:\s*74px;/);
 });
 
 test("mobile library selection actions popover stays anchored inside the viewport", () => {

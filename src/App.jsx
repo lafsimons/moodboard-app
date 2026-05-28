@@ -3788,6 +3788,9 @@ export default function App() {
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
   const wardrobeFiltersTriggerRef = useRef(null);
+  const mobileFilterDismissClickSuppressionRef = useRef(false);
+  const mobileFilterDismissClickSuppressionTimeoutRef = useRef(null);
+  const suppressMobileLibraryCardInteractionUntilRef = useRef(0);
   const wardrobeViewsPopoverRef = useRef(null);
   const controlsViewsPopoverRef = useRef(null);
   const mobileLibraryMorePopoverRef = useRef(null);
@@ -3921,6 +3924,13 @@ export default function App() {
   useEffect(() => () => {
     sideEditorResizeCleanupRef.current?.();
   }, []);
+
+  useEffect(() => () => {
+    if (mobileFilterDismissClickSuppressionTimeoutRef.current) {
+      window.clearTimeout(mobileFilterDismissClickSuppressionTimeoutRef.current);
+    }
+  }, []);
+
   useEffect(() => {
     function handleWindowResize() {
       const viewportWidth = getViewportWidth();
@@ -4023,6 +4033,27 @@ export default function App() {
     }, 0);
   }
 
+  useEffect(() => {
+    function handleDocumentClickCapture(event) {
+      if (!mobileFilterDismissClickSuppressionRef.current || !isMobileViewport) {
+        return;
+      }
+
+      mobileFilterDismissClickSuppressionRef.current = false;
+
+      if (mobileFilterDismissClickSuppressionTimeoutRef.current) {
+        window.clearTimeout(mobileFilterDismissClickSuppressionTimeoutRef.current);
+        mobileFilterDismissClickSuppressionTimeoutRef.current = null;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    document.addEventListener("click", handleDocumentClickCapture, true);
+    return () => document.removeEventListener("click", handleDocumentClickCapture, true);
+  }, [isMobileViewport]);
+
   function blurRetainedPointerFocus() {
     const activeElement = document.activeElement;
     const pointerActivatedControl = pointerActivatedControlRef.current;
@@ -4038,6 +4069,10 @@ export default function App() {
 
     activeElement.blur();
     pointerActivatedControlRef.current = null;
+  }
+
+  function shouldSuppressMobileLibraryCardInteraction() {
+    return isMobileViewport && Date.now() < suppressMobileLibraryCardInteractionUntilRef.current;
   }
 
   const itemsById = useMemo(
@@ -5308,11 +5343,22 @@ export default function App() {
   }, [activePanel, shouldVirtualizeWardrobeGrid, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   const handleLibraryReferenceSelect = useCallback((itemId, event) => {
+    if (shouldSuppressMobileLibraryCardInteraction()) {
+      if (event) {
+        blurPointerActivatedControl(event);
+      }
+      return;
+    }
+
     selectReference(itemId, event, { forceToggleSelection: isMobileViewport && mobileLibrarySelectMode });
   }, [isMobileViewport, mobileLibrarySelectMode, selectReference]);
   const handleLibraryReferencePreview = useCallback((item) => {
+    if (shouldSuppressMobileLibraryCardInteraction()) {
+      return;
+    }
+
     openReferencePreview(item);
-  }, [openReferencePreview]);
+  }, [isMobileViewport, openReferencePreview]);
   const handleVisibleLibraryImageMount = useCallback(() => {
     const perfSession = libraryPerfRef.current;
 
@@ -12128,6 +12174,20 @@ async function handleExportBackup() {
               return;
             }
 
+            if (isMobileViewport) {
+              mobileFilterDismissClickSuppressionRef.current = true;
+              suppressMobileLibraryCardInteractionUntilRef.current = Date.now() + 450;
+
+              if (mobileFilterDismissClickSuppressionTimeoutRef.current) {
+                window.clearTimeout(mobileFilterDismissClickSuppressionTimeoutRef.current);
+              }
+
+              mobileFilterDismissClickSuppressionTimeoutRef.current = window.setTimeout(() => {
+                mobileFilterDismissClickSuppressionRef.current = false;
+                mobileFilterDismissClickSuppressionTimeoutRef.current = null;
+              }, 400);
+            }
+
             event.preventDefault();
             event.stopPropagation();
             closeWardrobeFilters();
@@ -12823,6 +12883,15 @@ async function handleExportBackup() {
                             >
                               Clear search + filters
                             </button>
+                            {isMobileViewport ? (
+                              <button
+                                type="button"
+                                className="secondary-button mobile-filter-close-button"
+                                onClick={closeWardrobeFilters}
+                              >
+                                Close
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                     </div>
