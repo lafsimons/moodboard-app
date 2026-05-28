@@ -929,6 +929,27 @@ function sanitizeImageCountDraft(value) {
   return String(value ?? "").replace(/[^\d]/g, "").slice(0, 2);
 }
 
+function getTouchDistance(touches) {
+  if (!touches || touches.length < 2) {
+    return 0;
+  }
+
+  const deltaX = touches[0].clientX - touches[1].clientX;
+  const deltaY = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(deltaX, deltaY);
+}
+
+function getTouchMidpoint(touches) {
+  if (!touches || touches.length < 2) {
+    return null;
+  }
+
+  return {
+    clientX: (touches[0].clientX + touches[1].clientX) / 2,
+    clientY: (touches[0].clientY + touches[1].clientY) / 2
+  };
+}
+
 function getBoardImageCount(board) {
   if (!Array.isArray(board?.images) || !board.images.length) {
     return DEFAULT_BOARD_IMAGE_COUNT;
@@ -1816,7 +1837,8 @@ function getLibraryCardPresentation(item) {
         "--library-preview-padding": isWideLandscape ? "4px 6px" : "5px 7px 6px",
         "--library-preview-align": "center",
         "--library-image-width-base": isWideLandscape ? "182px" : "166px",
-        "--library-image-max-height": isWideLandscape ? "112px" : "122px"
+        "--library-image-max-height": isWideLandscape ? "112px" : "122px",
+        "--library-mobile-tile-ratio": isWideLandscape ? "1.28" : "1.12"
       }
     };
   }
@@ -1830,7 +1852,8 @@ function getLibraryCardPresentation(item) {
         "--library-preview-padding": "5px",
         "--library-preview-align": "center",
         "--library-image-width-base": "150px",
-        "--library-image-max-height": "136px"
+        "--library-image-max-height": "136px",
+        "--library-mobile-tile-ratio": "1"
       }
     };
   }
@@ -1845,7 +1868,8 @@ function getLibraryCardPresentation(item) {
       "--library-preview-padding": isTallPortrait ? "6px" : "6px",
       "--library-preview-align": "end",
       "--library-image-width-base": isTallPortrait ? "138px" : "142px",
-      "--library-image-max-height": isTallPortrait ? "148px" : "140px"
+      "--library-image-max-height": isTallPortrait ? "148px" : "140px",
+      "--library-mobile-tile-ratio": isTallPortrait ? "0.78" : "0.88"
     }
   };
 }
@@ -1890,9 +1914,14 @@ const LibraryGridCard = memo(function LibraryGridCard({
       className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""} ${isMobileViewport ? "is-mobile-card" : ""} ${isMobileViewport && isMobileSelectMode ? "is-mobile-select-mode" : ""}`}
       style={mergedCardStyle}
     >
-      {isExcluded ? (
-        <div className="wardrobe-card-badges" aria-label="Reference status">
-          <span className="wardrobe-status-dot" aria-hidden="true" />
+      {isExcluded || (isMobileViewport && isSelected) ? (
+        <div className={`wardrobe-card-badges ${isMobileViewport ? "is-mobile-tile-badges" : ""}`} aria-label="Reference status">
+          {isMobileViewport && isSelected ? (
+            <span className="wardrobe-mobile-selection-badge" aria-hidden="true">✓</span>
+          ) : null}
+          {isExcluded ? (
+            <span className={`wardrobe-status-dot ${isMobileViewport ? "is-mobile-tile-dot" : ""}`} aria-hidden="true" />
+          ) : null}
         </div>
       ) : null}
       <button
@@ -3703,6 +3732,7 @@ export default function App() {
   const editorImageRef = useRef(null);
   const cropEditorFrameRef = useRef(null);
   const boardInteractionRef = useRef(null);
+  const boardPinchRef = useRef(null);
   const boardGenerationFrameRef = useRef(null);
   const boardGenerationIndicatorTimeoutRef = useRef(null);
   const boardGenerationPerfRef = useRef(null);
@@ -3716,6 +3746,9 @@ export default function App() {
   const referencePreviewStageRef = useRef(null);
   const referencePreviewImageFrameRef = useRef(null);
   const mobileReferencePreviewTouchRef = useRef(null);
+  const mobileReferencePreviewPinchRef = useRef(null);
+  const mobileReferencePreviewDidPinchRef = useRef(false);
+  const mobileReferencePreviewScaleRef = useRef(1);
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
   const currentPersistedAppStateRef = useRef(null);
@@ -3778,6 +3811,7 @@ export default function App() {
   const [referencePreview, setReferencePreview] = useState(null);
   const [isReferencePreviewZoomed, setIsReferencePreviewZoomed] = useState(false);
   const [referencePreviewZoomFocus, setReferencePreviewZoomFocus] = useState(null);
+  const [mobileReferencePreviewScale, setMobileReferencePreviewScale] = useState(1);
   const [mobileLibrarySelectMode, setMobileLibrarySelectMode] = useState(false);
   const [mobileLibraryMoreOpen, setMobileLibraryMoreOpen] = useState(false);
   const [mobileReferencePreviewChromeVisible, setMobileReferencePreviewChromeVisible] = useState(false);
@@ -3843,6 +3877,10 @@ export default function App() {
   useEffect(() => {
     latestExcludedStateRef.current = excluded;
   }, [excluded]);
+
+  useEffect(() => {
+    mobileReferencePreviewScaleRef.current = mobileReferencePreviewScale;
+  }, [mobileReferencePreviewScale]);
 
   useEffect(() => () => {
     if (excludedOutfitReconcileFrameRef.current) {
@@ -4247,6 +4285,9 @@ export default function App() {
     setMobileReferencePreviewActionsOpen(false);
     setMobileReferencePreviewInfoOpen(false);
     mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
+    setMobileReferencePreviewScale(1);
   }, [isMobileViewport, referencePreview?.id]);
 
   useEffect(() => {
@@ -4786,6 +4827,9 @@ export default function App() {
   useEffect(() => {
     setIsReferencePreviewZoomed(false);
     setReferencePreviewZoomFocus(null);
+    setMobileReferencePreviewScale(1);
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
     if (referencePreviewStageRef.current) {
       referencePreviewStageRef.current.scrollLeft = 0;
       referencePreviewStageRef.current.scrollTop = 0;
@@ -9427,6 +9471,71 @@ async function handleExportBackup() {
     zoomBoardView((currentZoom) => currentZoom * zoomFactor, anchor);
   }
 
+  function handleBoardViewportTouchStart(event) {
+    if (!isMobileViewport || event.touches.length !== 2) {
+      if (event.touches.length < 2) {
+        boardPinchRef.current = null;
+      }
+      return;
+    }
+
+    const viewportRect = boardViewportRef.current?.getBoundingClientRect();
+    const midpoint = getTouchMidpoint(event.touches);
+    if (!viewportRect || !midpoint) {
+      boardPinchRef.current = null;
+      return;
+    }
+
+    event.preventDefault();
+    boardInteractionRef.current = null;
+    boardPinchRef.current = {
+      distance: getTouchDistance(event.touches),
+      anchor: {
+        x: midpoint.clientX - viewportRect.left,
+        y: midpoint.clientY - viewportRect.top
+      }
+    };
+  }
+
+  function handleBoardViewportTouchMove(event) {
+    if (!isMobileViewport || !boardPinchRef.current || event.touches.length !== 2) {
+      return;
+    }
+
+    const viewportRect = boardViewportRef.current?.getBoundingClientRect();
+    const midpoint = getTouchMidpoint(event.touches);
+    const distance = getTouchDistance(event.touches);
+    if (!viewportRect || !midpoint || distance <= 0 || boardPinchRef.current.distance <= 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const zoomFactor = distance / boardPinchRef.current.distance;
+    const anchor = {
+      x: midpoint.clientX - viewportRect.left,
+      y: midpoint.clientY - viewportRect.top
+    };
+    zoomBoardView((currentZoom) => currentZoom * zoomFactor, anchor);
+    boardPinchRef.current = {
+      distance,
+      anchor
+    };
+  }
+
+  function handleBoardViewportTouchEnd(event) {
+    if (event.touches.length < 2) {
+      boardPinchRef.current = null;
+    }
+  }
+
+  function handleBoardViewportGestureEvent(event) {
+    if (!isMobileViewport) {
+      return;
+    }
+
+    event.preventDefault();
+  }
+
   useEffect(() => {
     const viewportElement = boardViewportRef.current;
     if (!viewportElement) {
@@ -9434,7 +9543,22 @@ async function handleExportBackup() {
     }
 
     viewportElement.addEventListener("wheel", handleBoardViewportWheel, { passive: false });
-    return () => viewportElement.removeEventListener("wheel", handleBoardViewportWheel);
+    viewportElement.addEventListener("touchstart", handleBoardViewportTouchStart, { passive: false });
+    viewportElement.addEventListener("touchmove", handleBoardViewportTouchMove, { passive: false });
+    viewportElement.addEventListener("touchend", handleBoardViewportTouchEnd);
+    viewportElement.addEventListener("touchcancel", handleBoardViewportTouchEnd);
+    viewportElement.addEventListener("gesturestart", handleBoardViewportGestureEvent, { passive: false });
+    viewportElement.addEventListener("gesturechange", handleBoardViewportGestureEvent, { passive: false });
+
+    return () => {
+      viewportElement.removeEventListener("wheel", handleBoardViewportWheel);
+      viewportElement.removeEventListener("touchstart", handleBoardViewportTouchStart);
+      viewportElement.removeEventListener("touchmove", handleBoardViewportTouchMove);
+      viewportElement.removeEventListener("touchend", handleBoardViewportTouchEnd);
+      viewportElement.removeEventListener("touchcancel", handleBoardViewportTouchEnd);
+      viewportElement.removeEventListener("gesturestart", handleBoardViewportGestureEvent);
+      viewportElement.removeEventListener("gesturechange", handleBoardViewportGestureEvent);
+    };
   }, [board, isMobileViewport]);
 
   function saveCurrentOutfit() {
@@ -10659,7 +10783,11 @@ async function handleExportBackup() {
           {boardGenerationError ? <span className="board-canvas-generation-status is-error">{boardGenerationError}</span> : null}
         </div>
 
-        <div className="board-canvas-viewport" ref={boardViewportRef} onPointerDown={handleBoardViewportPointerDown}>
+        <div
+          className={`board-canvas-viewport ${isMobileViewport ? "is-mobile-gesture-surface" : ""}`}
+          ref={boardViewportRef}
+          onPointerDown={handleBoardViewportPointerDown}
+        >
           {board?.images?.length ? (
             <div
               className="board-canvas-surface"
@@ -10850,20 +10978,28 @@ async function handleExportBackup() {
 
   function openReferencePreview(item) {
     setPickerBoardImageId(null);
+    setIsReferencePreviewZoomed(false);
+    setReferencePreviewZoomFocus(null);
+    setMobileReferencePreviewScale(1);
     setMobileReferencePreviewChromeVisible(false);
     setMobileReferencePreviewActionsOpen(false);
     setMobileReferencePreviewInfoOpen(false);
     mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
     setReferencePreview(normalizeItem(item));
   }
 
   function closeReferencePreview() {
     setIsReferencePreviewZoomed(false);
     setReferencePreviewZoomFocus(null);
+    setMobileReferencePreviewScale(1);
     setMobileReferencePreviewChromeVisible(false);
     setMobileReferencePreviewActionsOpen(false);
     setMobileReferencePreviewInfoOpen(false);
     mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewPinchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
     if (referencePreviewStageRef.current) {
       referencePreviewStageRef.current.scrollLeft = 0;
       referencePreviewStageRef.current.scrollTop = 0;
@@ -10888,6 +11024,9 @@ async function handleExportBackup() {
     if (isReferencePreviewZoomed) {
       setIsReferencePreviewZoomed(false);
       setReferencePreviewZoomFocus(null);
+      setMobileReferencePreviewScale(1);
+      mobileReferencePreviewPinchRef.current = null;
+      mobileReferencePreviewDidPinchRef.current = false;
       if (referencePreviewStageRef.current) {
         referencePreviewStageRef.current.scrollLeft = 0;
         referencePreviewStageRef.current.scrollTop = 0;
@@ -10934,6 +11073,76 @@ async function handleExportBackup() {
     setMobileReferencePreviewChromeVisible(true);
     setMobileReferencePreviewActionsOpen(false);
     setMobileReferencePreviewInfoOpen((current) => !current);
+  }
+
+  function syncMobileReferencePreviewScale(nextScale) {
+    const normalizedScale = Math.min(4, Math.max(1, Math.round(nextScale * 1000) / 1000));
+    setMobileReferencePreviewScale(normalizedScale);
+    setIsReferencePreviewZoomed(normalizedScale > 1.01);
+
+    if (normalizedScale <= 1.01) {
+      setReferencePreviewZoomFocus(null);
+    }
+  }
+
+  function handleMobileReferencePreviewPinchStart(event) {
+    if (!isMobileViewport || !referencePreview || event.touches.length !== 2) {
+      if (event.touches.length < 2) {
+        mobileReferencePreviewPinchRef.current = null;
+      }
+      return;
+    }
+
+    event.preventDefault();
+    mobileReferencePreviewTouchRef.current = null;
+    mobileReferencePreviewDidPinchRef.current = false;
+    setMobileReferencePreviewChromeVisible(false);
+    setMobileReferencePreviewActionsOpen(false);
+    setMobileReferencePreviewInfoOpen(false);
+    mobileReferencePreviewPinchRef.current = {
+      distance: getTouchDistance(event.touches),
+      scale: mobileReferencePreviewScaleRef.current
+    };
+  }
+
+  function handleMobileReferencePreviewPinchMove(event) {
+    if (!mobileReferencePreviewPinchRef.current || event.touches.length !== 2) {
+      return;
+    }
+
+    const distance = getTouchDistance(event.touches);
+    if (distance <= 0 || mobileReferencePreviewPinchRef.current.distance <= 0) {
+      return;
+    }
+
+    event.preventDefault();
+    mobileReferencePreviewDidPinchRef.current = true;
+    syncMobileReferencePreviewScale(
+      mobileReferencePreviewPinchRef.current.scale * (distance / mobileReferencePreviewPinchRef.current.distance)
+    );
+  }
+
+  function handleMobileReferencePreviewPinchEnd(event) {
+    if (event.touches.length >= 2) {
+      return;
+    }
+
+    mobileReferencePreviewPinchRef.current = null;
+    if (mobileReferencePreviewScaleRef.current <= 1.01) {
+      syncMobileReferencePreviewScale(1);
+      if (referencePreviewStageRef.current) {
+        referencePreviewStageRef.current.scrollLeft = 0;
+        referencePreviewStageRef.current.scrollTop = 0;
+      }
+    }
+  }
+
+  function handleMobileReferencePreviewGestureEvent(event) {
+    if (!isMobileViewport || !referencePreview) {
+      return;
+    }
+
+    event.preventDefault();
   }
 
   function handleReferencePreviewStageTouchStart(event) {
@@ -10989,6 +11198,29 @@ async function handleExportBackup() {
     event.preventDefault();
     openAdjacentReferencePreview(direction);
   }
+
+  useEffect(() => {
+    const stageElement = referencePreviewStageRef.current;
+    if (!stageElement || !isMobileViewport || !referencePreview) {
+      return undefined;
+    }
+
+    stageElement.addEventListener("touchstart", handleMobileReferencePreviewPinchStart, { passive: false });
+    stageElement.addEventListener("touchmove", handleMobileReferencePreviewPinchMove, { passive: false });
+    stageElement.addEventListener("touchend", handleMobileReferencePreviewPinchEnd);
+    stageElement.addEventListener("touchcancel", handleMobileReferencePreviewPinchEnd);
+    stageElement.addEventListener("gesturestart", handleMobileReferencePreviewGestureEvent, { passive: false });
+    stageElement.addEventListener("gesturechange", handleMobileReferencePreviewGestureEvent, { passive: false });
+
+    return () => {
+      stageElement.removeEventListener("touchstart", handleMobileReferencePreviewPinchStart);
+      stageElement.removeEventListener("touchmove", handleMobileReferencePreviewPinchMove);
+      stageElement.removeEventListener("touchend", handleMobileReferencePreviewPinchEnd);
+      stageElement.removeEventListener("touchcancel", handleMobileReferencePreviewPinchEnd);
+      stageElement.removeEventListener("gesturestart", handleMobileReferencePreviewGestureEvent);
+      stageElement.removeEventListener("gesturechange", handleMobileReferencePreviewGestureEvent);
+    };
+  }, [isMobileViewport, referencePreview]);
 
   async function toggleReferencePreviewFavorite() {
     if (!referencePreview?.id) {
@@ -12816,6 +13048,7 @@ async function handleExportBackup() {
                       <div
                         ref={referencePreviewStageRef}
                         className={`reference-preview-stage reference-preview-mobile-stage ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
+                        style={{ "--mobile-reference-preview-scale": mobileReferencePreviewScale }}
                         onTouchStart={handleReferencePreviewStageTouchStart}
                         onTouchMove={handleReferencePreviewStageTouchMove}
                         onTouchEnd={handleReferencePreviewStageTouchEnd}
@@ -12826,6 +13059,10 @@ async function handleExportBackup() {
                           className={`reference-preview-image-button reference-preview-mobile-image-button ${isReferencePreviewZoomed ? "is-zoomed" : ""}`}
                           onClick={(event) => {
                             event.stopPropagation();
+                            if (mobileReferencePreviewDidPinchRef.current) {
+                              mobileReferencePreviewDidPinchRef.current = false;
+                              return;
+                            }
                             toggleMobileReferencePreviewChrome();
                           }}
                           aria-pressed={mobileReferencePreviewChromeVisible}

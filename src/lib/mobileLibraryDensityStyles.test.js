@@ -15,7 +15,9 @@ test("mobile library command bar compacts into a search row and dense primary co
 });
 
 test("mobile library grid and cards tighten spacing while keeping two columns", () => {
-  assert.match(stylesSource, /@media \(max-width: 960px\) \{[\s\S]*\.wardrobe-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);[\s\S]*gap:\s*4px;/);
-  assert.match(stylesSource, /\.wardrobe-card\.is-mobile-card\s*\{[\s\S]*--library-card-min-height:\s*192px;[\s\S]*padding:\s*6px;/);
-  assert.match(stylesSource, /\.wardrobe-preview\.is-mobile-preview-card\s*\{[\s\S]*padding:\s*4px;[\s\S]*border-radius:\s*10px;/);
+  assert.match(stylesSource, /@media \(max-width: 960px\) \{[\s\S]*\.wardrobe-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);[\s\S]*gap:\s*3px;/);
+  assert.match(stylesSource, /\.wardrobe-card\.is-mobile-card\s*\{[\s\S]*--library-card-min-height:\s*0;[\s\S]*padding:\s*0;[\s\S]*border:\s*none;[\s\S]*background:\s*transparent;/);
+  assert.match(stylesSource, /\.wardrobe-preview\.is-mobile-preview-card\s*\{[\s\S]*aspect-ratio:\s*var\(--library-mobile-tile-ratio, 0\.9\);[\s\S]*padding:\s*0;[\s\S]*background:\s*transparent;/);
+  assert.match(stylesSource, /\.wardrobe-card\.is-mobile-card\.is-selected \.wardrobe-preview::after,[\s\S]*box-shadow:\s*inset 0 0 0 2px rgba\(255, 255, 255, 0\.94\), inset 0 0 0 4px rgba\(17, 17, 17, 0\.22\);/);
+  assert.match(stylesSource, /\.wardrobe-mobile-selection-badge\s*\{[\s\S]*min-width:\s*22px;[\s\S]*background:\s*rgba\(17, 17, 17, 0\.82\);/);
 });

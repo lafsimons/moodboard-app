@@ -20,6 +20,8 @@ test("mobile library card tap opens preview while select mode keeps selection be
   assert.equal(appSource.includes("onSelectReference(item.id, event);"), true);
   assert.equal(appSource.includes("onDoubleClick={(event) => {"), true);
   assert.equal(appSource.includes("if (isMobileViewport) {"), true);
+  assert.equal(appSource.includes('className={`wardrobe-card-badges ${isMobileViewport ? "is-mobile-tile-badges" : ""}`}'), true);
+  assert.equal(appSource.includes('className="wardrobe-mobile-selection-badge"'), true);
 });
 
 test("mobile reference preview hides chrome behind explicit toggles and uses overflow plus info states", () => {
