@@ -3787,6 +3787,7 @@ export default function App() {
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
+  const wardrobeFiltersTriggerRef = useRef(null);
   const wardrobeViewsPopoverRef = useRef(null);
   const controlsViewsPopoverRef = useRef(null);
   const mobileLibraryMorePopoverRef = useRef(null);
@@ -12114,6 +12115,23 @@ async function handleExportBackup() {
           <div className="floating-backdrop active-panel-backdrop" onClick={closeWorkspacePanel}>
         <div
           className={`active-panel-overlay ${activePanel === "wardrobe" ? "is-wardrobe-panel" : ""} ${activePanel === "wardrobe" && isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}
+          onPointerDownCapture={(event) => {
+            if (!wardrobeFiltersOpen || activePanel !== "wardrobe") {
+              return;
+            }
+
+            if (wardrobeFiltersPanelRef.current?.contains(event.target)) {
+              return;
+            }
+
+            if (wardrobeFiltersTriggerRef.current?.contains(event.target)) {
+              return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+            closeWardrobeFilters();
+          }}
           onClick={(event) => event.stopPropagation()}
         >
         {activePanel === "wardrobe" ? (
@@ -12311,8 +12329,9 @@ async function handleExportBackup() {
 
                     <div className="library-command-bar-main-actions">
                       <button
+                        ref={wardrobeFiltersTriggerRef}
                         type="button"
-                        className={`secondary-button filter-button ${wardrobeFiltersOpen || hasActiveWardrobeFilters ? "is-active" : ""}`}
+                        className={`secondary-button filter-button ${wardrobeFiltersOpen || hasActiveWardrobeFilters || matchingSavedLibraryViewId ? "is-active" : ""}`}
                         onClick={openWardrobeFilters}
                         aria-pressed={wardrobeFiltersOpen}
                         aria-expanded={wardrobeFiltersOpen}
@@ -12329,69 +12348,6 @@ async function handleExportBackup() {
                           {mobileLibrarySelectMode ? "Done" : "Select"}
                         </button>
                       ) : null}
-                      <div ref={wardrobeViewsPopoverRef} className="library-popover-anchor">
-                        <button
-                          type="button"
-                          className={`ghost-button library-context-button ${wardrobeViewsOpen || matchingSavedLibraryViewId ? "is-active" : ""}`}
-                          onClick={(event) => toggleWardrobeViews(event)}
-                          aria-expanded={wardrobeViewsOpen}
-                          aria-haspopup="dialog"
-                          aria-controls="library-views-popover"
-                        >
-                          Views
-                        </button>
-                        <div
-                          id="library-views-popover"
-                          className={`wardrobe-manage-window wardrobe-saved-views-window ${wardrobeViewsOpen ? "is-open" : ""}`}
-                          aria-label="Saved library views"
-                        >
-                          <button
-                            type="button"
-                            className="ghost-button wardrobe-manage-action"
-                            onClick={handleSaveCurrentLibraryView}
-                          >
-                            Save current view
-                          </button>
-                          {savedLibraryViews.length ? (
-                            <div className="saved-library-views-list" aria-label="Saved library views list">
-                              {savedLibraryViews.map((view) => {
-                                const isCurrentView = view.id === matchingSavedLibraryViewId;
-
-                                return (
-                                  <div key={view.id} className={`saved-library-view-row ${isCurrentView ? "is-current" : ""}`}>
-                                    <button
-                                      type="button"
-                                      className="ghost-button saved-library-view-apply"
-                                      onClick={(event) => applyLibrarySavedView(view, event)}
-                                    >
-                                      <span>{view.name}</span>
-                                      {isCurrentView ? <strong>Current</strong> : null}
-                                    </button>
-                                    <div className="saved-library-view-actions">
-                                      <button
-                                        type="button"
-                                        className="ghost-button saved-library-view-action"
-                                        onClick={() => handleRenameSavedLibraryView(view)}
-                                      >
-                                        Rename
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="ghost-button saved-library-view-action danger"
-                                        onClick={() => handleDeleteSavedLibraryView(view)}
-                                      >
-                                        Delete
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <p className="wardrobe-filter-empty saved-library-views-empty">No saved views yet.</p>
-                          )}
-                        </div>
-                      </div>
                       <label className="wardrobe-sort-control">
                         <select
                           value={wardrobeSort}
@@ -12611,8 +12567,6 @@ async function handleExportBackup() {
                         ref={wardrobeFiltersPanelRef}
                         className={`wardrobe-controls ${wardrobeFiltersOpen ? "is-open" : ""}`}
                         aria-label="Library filters"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => event.stopPropagation()}
                       >
                         <label className="wardrobe-filter-search">
                           <span className="sr-only">Search filter tags</span>
@@ -12691,6 +12645,65 @@ async function handleExportBackup() {
                         </details>
 
                         <div className="wardrobe-controls-inline-row">
+                          <details className="wardrobe-filter-row wardrobe-filter-saved-views">
+                            <summary>
+                              <span>Views</span>
+                              {matchingSavedLibraryViewId ? (
+                                <strong className="wardrobe-filter-row-summary-meta">Current</strong>
+                              ) : null}
+                            </summary>
+                            <div className="wardrobe-filter-saved-views-body">
+                              <div className="wardrobe-filter-section-header">
+                                <span>Saved search, filter, and sort presets.</span>
+                                <button
+                                  type="button"
+                                  className="ghost-button saved-library-view-save-button"
+                                  onClick={handleSaveCurrentLibraryView}
+                                >
+                                  Save current view
+                                </button>
+                              </div>
+                              {savedLibraryViews.length ? (
+                                <div className="saved-library-views-list" aria-label="Saved library views list">
+                                  {savedLibraryViews.map((view) => {
+                                    const isCurrentView = view.id === matchingSavedLibraryViewId;
+
+                                    return (
+                                      <div key={view.id} className={`saved-library-view-row ${isCurrentView ? "is-current" : ""}`}>
+                                        <button
+                                          type="button"
+                                          className="ghost-button saved-library-view-apply"
+                                          onClick={(event) => applyLibrarySavedView(view, event)}
+                                        >
+                                          <span>{view.name}</span>
+                                          {isCurrentView ? <strong>Current</strong> : null}
+                                        </button>
+                                        <div className="saved-library-view-actions">
+                                          <button
+                                            type="button"
+                                            className="ghost-button saved-library-view-action"
+                                            onClick={() => handleRenameSavedLibraryView(view)}
+                                          >
+                                            Rename
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="ghost-button saved-library-view-action danger"
+                                            onClick={() => handleDeleteSavedLibraryView(view)}
+                                          >
+                                            Delete
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="wardrobe-filter-empty saved-library-views-empty">No saved views yet.</p>
+                              )}
+                            </div>
+                          </details>
+
                           <details className="wardrobe-filter-row">
                             <summary>
                               <span>Favorite</span>
@@ -12985,7 +12998,7 @@ async function handleExportBackup() {
             </div>
 
             {wardrobeFiltersOpen ? (
-              <div className="floating-backdrop filter-backdrop" onClick={closeWardrobeFilters} />
+              <div className="floating-backdrop filter-backdrop" aria-hidden="true" />
             ) : null}
 
             <input

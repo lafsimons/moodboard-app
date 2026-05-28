@@ -69,6 +69,23 @@ test("mobile library routes lower-priority actions through a More popover while 
   assert.equal(appSource.includes("!isMobileViewport ? ("), true);
   assert.equal(appSource.includes("Manage\n                          </button>"), true);
   assert.equal(appSource.includes("Add\n                          </button>"), true);
+  assert.equal(appSource.includes('aria-controls="library-views-popover"'), false);
+  assert.equal(appSource.includes('className="wardrobe-filter-saved-views-body"'), true);
+});
+
+test("mobile library filter panel keeps internal interactions contained and closes only from outside dismissal", () => {
+  assert.equal(appSource.includes('if (!wardrobeFiltersOpen || activePanel !== "wardrobe") {'), true);
+  assert.equal(appSource.includes('onPointerDownCapture={(event) => {'), true);
+  assert.equal(appSource.includes("if (wardrobeFiltersPanelRef.current?.contains(event.target)) {"), true);
+  assert.equal(appSource.includes("if (wardrobeFiltersTriggerRef.current?.contains(event.target)) {"), true);
+  assert.equal(appSource.includes("closeWardrobeFilters();"), true);
+  assert.equal(appSource.includes("event.stopPropagation();"), true);
+  assert.equal(appSource.includes("event.preventDefault();"), true);
+  assert.equal(appSource.includes("document.addEventListener(\"pointerdown\", handlePointerDown, true);"), false);
+  assert.equal(appSource.includes("onPointerDownCapture={(event) => event.stopPropagation()}"), false);
+  assert.equal(appSource.includes("onPointerUpCapture={(event) => event.stopPropagation()}"), false);
+  assert.equal(appSource.includes("onClickCapture={(event) => event.stopPropagation()}"), false);
+  assert.equal(appSource.includes('className="floating-backdrop filter-backdrop" aria-hidden="true"'), true);
 });
 
 test("mobile library fullscreen shell reuses the existing wardrobe overlay structure with mobile-only classes", () => {

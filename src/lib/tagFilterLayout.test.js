@@ -36,13 +36,14 @@ test("MBA tag filter header controls stay compact and wrap safely at narrow widt
   assert.match(stylesSource, /\.wardrobe-tag-match-option\s*\{[\s\S]*white-space:\s*nowrap;/);
 });
 
-test("MBA library command bar includes a compact saved views control with save, rename, delete, and apply actions", () => {
-  assert.match(appSource, /aria-controls="library-views-popover"[\s\S]*>\s*Views\s*</);
-  assert.match(appSource, /id="library-views-popover"[\s\S]*Save current view/);
+test("MBA library filter panel contains the saved views controls instead of a standalone header button", () => {
+  assert.doesNotMatch(appSource, /aria-controls="library-views-popover"[\s\S]*>\s*Views\s*</);
+  assert.match(appSource, /<details className="wardrobe-filter-row wardrobe-filter-saved-views">[\s\S]*>\s*Views\s*</);
+  assert.match(appSource, /wardrobe-filter-saved-views-body[\s\S]*Save current view/);
   assert.match(appSource, /saved-library-view-apply/);
   assert.match(appSource, /handleRenameSavedLibraryView/);
   assert.match(appSource, /handleDeleteSavedLibraryView/);
-  assert.match(stylesSource, /\.wardrobe-saved-views-window\s*\{/);
+  assert.match(stylesSource, /\.wardrobe-filter-saved-views-body\s*\{/);
   assert.match(stylesSource, /\.saved-library-view-row\s*\{/);
 });
 

@@ -1036,7 +1036,8 @@ button:disabled {
 }
 
 .filter-backdrop {
-  z-index: 34;
+  z-index: 60;
+  pointer-events: none;
 }
 
 .active-panel-overlay {
@@ -2605,7 +2606,7 @@ button:disabled {
   justify-items: start;
   overflow: auto;
   padding: 16px;
-  z-index: 60;
+  z-index: 70;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.14);
 }
 
@@ -3310,7 +3311,7 @@ button:disabled {
 
 .wardrobe-panel > .panel-header {
   position: relative;
-  z-index: 35;
+  z-index: 66;
   display: grid;
   justify-content: stretch;
   align-items: start;
@@ -3746,6 +3747,15 @@ button:disabled {
   text-transform: none;
 }
 
+.wardrobe-filter-row-summary-meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .wardrobe-filter-row summary::after {
   content: "+";
   color: var(--muted);
@@ -3769,6 +3779,20 @@ button:disabled {
   overflow: auto;
   overflow-x: hidden;
   padding: 0 2px 12px 0;
+}
+
+.wardrobe-filter-saved-views-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 0 12px;
+  width: 100%;
+}
+
+.saved-library-view-save-button {
+  min-height: 24px;
+  padding: 2px 7px;
+  font-size: 0.62rem;
+  white-space: nowrap;
 }
 
 .wardrobe-filter-option {
@@ -6023,7 +6047,7 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   .wardrobe-panel > .panel-header.is-mobile-fullscreen-shell {
     position: sticky;
     top: 0;
-    z-index: 24;
+    z-index: 66;
     margin: 0;
     padding:
       calc(10px + env(safe-area-inset-top))
@@ -6285,7 +6309,7 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
 
   .library-command-bar-main-actions {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 5px;
     width: 100%;
     flex-wrap: nowrap;
@@ -6380,7 +6404,7 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
     left: 10px;
     right: 10px;
     top: 16px;
-    z-index: 45;
+    z-index: 70;
     display: none;
     max-height: calc(100vh - 112px - env(safe-area-inset-bottom));
     overflow: auto;
