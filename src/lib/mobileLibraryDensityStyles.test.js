@@ -21,3 +21,11 @@ test("mobile library grid and cards tighten spacing while keeping two columns", 
   assert.match(stylesSource, /\.wardrobe-card\.is-mobile-card\.is-selected \.wardrobe-preview::after,[\s\S]*box-shadow:\s*inset 0 0 0 2px rgba\(255, 255, 255, 0\.94\), inset 0 0 0 4px rgba\(17, 17, 17, 0\.22\);/);
   assert.match(stylesSource, /\.wardrobe-mobile-selection-badge\s*\{[\s\S]*min-width:\s*22px;[\s\S]*background:\s*rgba\(17, 17, 17, 0\.82\);/);
 });
+
+test("mobile library fullscreen shell flattens the overlay into an edge-to-edge viewport surface with sticky transparent header", () => {
+  assert.match(stylesSource, /\.active-panel-overlay\.is-wardrobe-panel\.is-mobile-fullscreen-shell\s*\{[\s\S]*top:\s*0;[\s\S]*left:\s*0;[\s\S]*right:\s*0;[\s\S]*bottom:\s*0;[\s\S]*width:\s*100vw;[\s\S]*max-width:\s*none;[\s\S]*transform:\s*none;[\s\S]*background:\s*var\(--bg\);[\s\S]*z-index:\s*52;/);
+  assert.match(stylesSource, /\.wardrobe-workspace\.is-mobile-fullscreen-shell\s*\{[\s\S]*width:\s*100%;[\s\S]*height:\s*100dvh;[\s\S]*max-height:\s*none;/);
+  assert.match(stylesSource, /\.wardrobe-panel\.is-mobile-fullscreen-shell\s*\{[\s\S]*width:\s*100%;[\s\S]*height:\s*100dvh;[\s\S]*border:\s*none;[\s\S]*border-radius:\s*0;[\s\S]*background:\s*var\(--bg\);[\s\S]*overflow:\s*hidden;/);
+  assert.match(stylesSource, /\.wardrobe-panel > \.panel-header\.is-mobile-fullscreen-shell\s*\{[\s\S]*position:\s*sticky;[\s\S]*top:\s*0;[\s\S]*background:\s*transparent;[\s\S]*backdrop-filter:\s*none;/);
+  assert.match(stylesSource, /\.wardrobe-panel-scroll\.is-mobile-fullscreen-shell\s*\{[\s\S]*padding:[\s\S]*78px \+ env\(safe-area-inset-bottom\)[\s\S]*overflow-y:\s*auto;/);
+});

@@ -54,3 +54,11 @@ test("mobile library routes lower-priority actions through a More popover while 
   assert.equal(appSource.includes("Manage\n                          </button>"), true);
   assert.equal(appSource.includes("Add\n                          </button>"), true);
 });
+
+test("mobile library fullscreen shell reuses the existing wardrobe overlay structure with mobile-only classes", () => {
+  assert.equal(appSource.includes('activePanel === "wardrobe" && isMobileViewport ? "is-mobile-fullscreen-shell" : ""'), true);
+  assert.equal(appSource.includes('className={`wardrobe-workspace ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
+  assert.equal(appSource.includes('className={`panel wardrobe-panel ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
+  assert.equal(appSource.includes('className={`panel-header ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
+  assert.equal(appSource.includes('className={`wardrobe-panel-scroll ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
+});

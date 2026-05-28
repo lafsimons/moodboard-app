@@ -12078,13 +12078,13 @@ async function handleExportBackup() {
         {activePanel ? (
           <div className="floating-backdrop active-panel-backdrop" onClick={closeWorkspacePanel}>
         <div
-          className={`active-panel-overlay ${activePanel === "wardrobe" ? "is-wardrobe-panel" : ""}`}
+          className={`active-panel-overlay ${activePanel === "wardrobe" ? "is-wardrobe-panel" : ""} ${activePanel === "wardrobe" && isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}
           onClick={(event) => event.stopPropagation()}
         >
         {activePanel === "wardrobe" ? (
-        <div className="wardrobe-workspace">
-          <div className="panel wardrobe-panel">
-          <div className="panel-header">
+        <div className={`wardrobe-workspace ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}>
+          <div className={`panel wardrobe-panel ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}>
+          <div className={`panel-header ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}>
             {wardrobeSavedOpen ? (
               <div className="wardrobe-subview-header">
                 <div>
@@ -12798,10 +12798,13 @@ async function handleExportBackup() {
             />
 
             <div
-              className={`wardrobe-panel-body ${isSideEditorOpen ? "has-side-editor" : ""}`}
+              className={`wardrobe-panel-body ${isSideEditorOpen ? "has-side-editor" : ""} ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}
               style={!isMobileViewport ? { "--side-editor-width": `${sideEditorWidth}px` } : undefined}
             >
-              <div ref={wardrobePanelScrollRef} className="wardrobe-panel-scroll">
+              <div
+                ref={wardrobePanelScrollRef}
+                className={`wardrobe-panel-scroll ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}
+              >
                 {wardrobeSavedOpen ? (
                   renderSavedOutfitsContent()
                 ) : (
