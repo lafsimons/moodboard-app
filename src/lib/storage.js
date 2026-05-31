@@ -12,8 +12,11 @@ import { ensureBoardUuid, ensureSavedBoardUuid } from "./boardIdentity.js";
 import {
   applyPreviewImageFields,
   createImageAsset,
+  itemHasExplicitMediaChange,
+  itemHasExplicitMediaRemoval,
   itemHasImagePayload,
   mergeItemImageState,
+  normalizeMediaUpdateIntent,
   normalizeItemImages
 } from "./itemImages.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
@@ -391,12 +394,13 @@ function stripLocalOnlyAppState(appState) {
 
 function stripItemInlineMediaFields(record = {}) {
   const normalizedImages = normalizeItemImages(record);
+  const { mediaUpdateIntent: _mediaUpdateIntent, ...rest } = record ?? {};
 
   return {
-    ...record,
+    ...rest,
     imageUrl: "",
     images: {
-      ...(record?.images && typeof record.images === "object" && !Array.isArray(record.images) ? record.images : {}),
+      ...(rest?.images && typeof rest.images === "object" && !Array.isArray(rest.images) ? rest.images : {}),
       original: {
         ...normalizedImages.original,
         src: ""
@@ -411,6 +415,84 @@ function stripItemInlineMediaFields(record = {}) {
       }
     },
     originalPreserved: normalizedImages.originalPreserved
+  };
+}
+
+function omitMediaUpdateIntent(record = {}) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return record;
+  }
+
+  const { mediaUpdateIntent: _mediaUpdateIntent, ...rest } = record;
+  return rest;
+}
+
+function classifyItemSave(existingOwnerItem, incomingItem) {
+  if (!existingOwnerItem) {
+    return "newItem";
+  }
+
+  if (itemHasExplicitMediaRemoval(incomingItem)) {
+    return "mediaRemove";
+  }
+
+  if (itemHasExplicitMediaChange(incomingItem) || itemHasImagePayload(incomingItem) || normalizeMediaUpdateIntent(incomingItem?.mediaUpdateIntent) === "replace") {
+    return "mediaReplace";
+  }
+
+  return "metadataOnly";
+}
+
+async function hasOtherStoredItemWithItemUuid(itemUuid, excludedIds = []) {
+  const normalizedItemUuid = normalizeSyncText(itemUuid);
+
+  if (!normalizedItemUuid) {
+    return false;
+  }
+
+  const excludedIdSet = new Set((Array.isArray(excludedIds) ? excludedIds : []).map((value) => normalizeSyncText(value)).filter(Boolean));
+  const items = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.getAll());
+
+  return (Array.isArray(items) ? items : []).some((item) => {
+    const itemId = normalizeSyncText(item?.id);
+    return normalizeSyncText(item?.itemUuid) === normalizedItemUuid && !excludedIdSet.has(itemId);
+  });
+}
+
+async function createSaveMediaDebugSnapshot(item = null) {
+  const normalizedItemId = normalizeSyncText(item?.id);
+  const normalizedItemUuid = normalizeSyncText(item?.itemUuid);
+  const normalizedImages = normalizeItemImages(item);
+  const [storedPreview, storedThumbnail, storedOriginal] = await Promise.all([
+    normalizedItemId ? loadStoredItemMediaAsset(normalizedItemId, "preview") : null,
+    normalizedItemId ? loadStoredItemMediaAsset(normalizedItemId, "thumbnail") : null,
+    normalizedItemUuid ? loadOriginalImageBlobEntry(normalizedItemUuid) : null
+  ]);
+
+  return {
+    id: normalizedItemId,
+    itemUuid: normalizedItemUuid,
+    originalFilename: normalizeSyncText(item?.originalFilename),
+    previewAssetKey: createItemMediaKey(normalizedItemId, "preview"),
+    thumbnailAssetKey: createItemMediaKey(normalizedItemId, "thumbnail"),
+    originalBlobKey: normalizedItemUuid,
+    imageUrl: normalizeSyncText(item?.imageUrl),
+    images: {
+      preview: createImageAsset(normalizedImages.preview),
+      thumbnail: createImageAsset(normalizedImages.thumbnail),
+      original: createImageAsset(normalizedImages.original)
+    },
+    storedPreview: storedPreview ? createImageAsset(storedPreview) : null,
+    storedThumbnail: storedThumbnail ? createImageAsset(storedThumbnail) : null,
+    storedOriginal: storedOriginal
+      ? {
+          mimeType: normalizeSyncText(storedOriginal.mimeType),
+          width: Math.max(0, Math.round(Number(storedOriginal.width) || 0)),
+          height: Math.max(0, Math.round(Number(storedOriginal.height) || 0)),
+          fileSize: Math.max(0, Math.round(Number(storedOriginal.fileSize) || 0)),
+          originalFilename: normalizeSyncText(storedOriginal.originalFilename)
+        }
+      : null
   };
 }
 
@@ -1035,7 +1117,7 @@ async function copyStoredItemMediaAssets(sourceItemId, targetItemId) {
 
   await Promise.all(
     assets
-      .filter(([, asset]) => asset?.src)
+      .filter(([, asset]) => asset?.src || asset?.blob instanceof Blob)
       .map(([variant, asset]) => saveStoredItemMediaAsset(normalizedTargetItemId, variant, asset))
   );
 }
@@ -1204,49 +1286,94 @@ export async function loadItems(options = {}) {
 }
 
 export async function saveItem(item) {
-  const existingItem = typeof item?.id === "string" && item.id.trim()
-    ? await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(item.id.trim()))
+  const incomingItem = omitMediaUpdateIntent(item);
+  const existingItem = typeof incomingItem?.id === "string" && incomingItem.id.trim()
+    ? await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(incomingItem.id.trim()))
     : null;
-  const hasIncomingMediaPayload = itemHasImagePayload(item);
-  const mergedItem = mergeItemImageState(existingItem, item);
+  const matchingStoredItem = incomingItem?.itemUuid
+    ? await findStoredItemByItemUuid(incomingItem.itemUuid, incomingItem.id)
+    : null;
+  const existingOwnerItem = existingItem ?? matchingStoredItem ?? null;
+  const saveKind = classifyItemSave(existingOwnerItem, item);
+  const mergedItem = mergeItemImageState(existingOwnerItem, incomingItem);
   const normalizedMergedImages = normalizeItemImages(mergedItem);
   const storedItem = stripItemInlineMediaFields(mergedItem);
+  const beforeSnapshot = await createSaveMediaDebugSnapshot(existingOwnerItem);
+
+  console.log("[storage.saveItem] before", {
+    saveKind,
+    mediaUpdateIntent: normalizeMediaUpdateIntent(item?.mediaUpdateIntent),
+    snapshot: beforeSnapshot
+  });
 
   await withStore(ITEM_STORE, "readwrite", (store) => store.put(storedItem));
 
   const previewAsset = normalizedMergedImages.preview;
   const thumbnailAsset = normalizedMergedImages.thumbnail;
 
-  if (previewAsset?.src) {
-    await saveStoredItemMediaAsset(storedItem.id, "preview", previewAsset);
-  } else if (!existingItem) {
-    await deleteStoredItemMediaAsset(storedItem.id, "preview");
-  }
+  if (saveKind === "metadataOnly") {
+    const [storedPreviewAsset, storedThumbnailAsset, storedOriginalEntry] = await Promise.all([
+      loadStoredItemMediaAsset(storedItem.id, "preview"),
+      loadStoredItemMediaAsset(storedItem.id, "thumbnail"),
+      storedItem.itemUuid ? loadOriginalImageBlobEntry(storedItem.itemUuid) : Promise.resolve(null)
+    ]);
 
-  if (thumbnailAsset?.src) {
-    await saveStoredItemMediaAsset(storedItem.id, "thumbnail", thumbnailAsset);
-  } else if (!existingItem) {
-    await deleteStoredItemMediaAsset(storedItem.id, "thumbnail");
-  }
-
-  if (storedItem.originalPreserved && storedItem.itemUuid && normalizedMergedImages.original?.src) {
-    const originalBlob = await convertImageAssetToBlob(normalizedMergedImages.original);
-
-    if (originalBlob) {
-      await saveOriginalImageBlob(storedItem.itemUuid, originalBlob, normalizedMergedImages.original);
+    if (!storedPreviewAsset && previewAsset?.src) {
+      await saveStoredItemMediaAsset(storedItem.id, "preview", previewAsset);
     }
-  }
 
-  if (!hasIncomingMediaPayload && !existingItem && storedItem.itemUuid) {
-    const matchingStoredItem = await findStoredItemByItemUuid(storedItem.itemUuid, storedItem.id);
+    if (!storedThumbnailAsset && thumbnailAsset?.src) {
+      await saveStoredItemMediaAsset(storedItem.id, "thumbnail", thumbnailAsset);
+    }
 
-    if (matchingStoredItem?.id) {
-      await copyStoredItemMediaAssets(matchingStoredItem.id, storedItem.id);
+    if (!storedOriginalEntry && storedItem.originalPreserved && storedItem.itemUuid && normalizedMergedImages.original?.src) {
+      const originalBlob = await convertImageAssetToBlob(normalizedMergedImages.original);
+
+      if (originalBlob) {
+        await saveOriginalImageBlob(storedItem.itemUuid, originalBlob, normalizedMergedImages.original);
+      }
+    }
+
+    if (!existingItem && existingOwnerItem?.id && existingOwnerItem.id !== storedItem.id) {
+      await copyStoredItemMediaAssets(existingOwnerItem.id, storedItem.id);
+    }
+  } else if (saveKind === "mediaRemove") {
+    await deleteStoredItemMediaAssets(storedItem.id);
+
+    if (storedItem.itemUuid && !await hasOtherStoredItemWithItemUuid(storedItem.itemUuid, [storedItem.id])) {
+      await deleteOriginalImageBlob(storedItem.itemUuid);
+    }
+  } else {
+    if (previewAsset?.src) {
+      await saveStoredItemMediaAsset(storedItem.id, "preview", previewAsset);
+    } else if (!existingOwnerItem) {
+      await deleteStoredItemMediaAsset(storedItem.id, "preview");
+    }
+
+    if (thumbnailAsset?.src) {
+      await saveStoredItemMediaAsset(storedItem.id, "thumbnail", thumbnailAsset);
+    } else if (!existingOwnerItem) {
+      await deleteStoredItemMediaAsset(storedItem.id, "thumbnail");
+    }
+
+    if (storedItem.originalPreserved && storedItem.itemUuid && normalizedMergedImages.original?.src) {
+      const originalBlob = await convertImageAssetToBlob(normalizedMergedImages.original);
+
+      if (originalBlob) {
+        await saveOriginalImageBlob(storedItem.itemUuid, originalBlob, normalizedMergedImages.original);
+      }
     }
   }
 
   const stableKey = normalizeSyncText(storedItem?.itemUuid);
   const materializedMergedItem = await materializeStoredItemMedia(mergedItem);
+  const afterSnapshot = await createSaveMediaDebugSnapshot(storedItem);
+
+  console.log("[storage.saveItem] after", {
+    saveKind,
+    mediaUpdateIntent: normalizeMediaUpdateIntent(item?.mediaUpdateIntent),
+    snapshot: afterSnapshot
+  });
 
   if (!stableKey) {
     return materializedMergedItem;

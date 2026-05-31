@@ -1611,6 +1611,294 @@ test("metadata-only edits preserve out-of-line media assets", async () => {
   assert.equal(asset.width, 640);
 });
 
+test("metadata-only rename of blob-backed imported items preserves identity and media ownership", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    exportedAt: "2026-05-31T10:00:00.000Z",
+    items: [
+      {
+        id: "item-blob",
+        itemUuid: "uuid-blob",
+        name: "Before",
+        originalFilename: "imported.webp",
+        originalPreserved: true,
+        images: {
+          original: {
+            src: "",
+            mimeType: "image/png",
+            width: 1800,
+            height: 1200,
+            originalFilename: "imported.png"
+          },
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            originalFilename: "imported.webp"
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0,
+            originalFilename: ""
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-blob",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          originalFilename: "imported.webp",
+          blob: new Blob(["blob-preview"], { type: "image/webp" })
+        }
+      }
+    ]
+  });
+  await saveOriginalImageBlob("uuid-blob", new Blob(["blob-original"], { type: "image/png" }), {
+    mimeType: "image/png",
+    width: 1800,
+    height: 1200,
+    originalFilename: "imported.png"
+  });
+
+  await saveItem({
+    id: "item-blob",
+    itemUuid: "uuid-blob",
+    name: "After",
+    tags: ["renamed"],
+    imageUrl: "",
+    images: {
+      preview: {
+        src: "",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480
+      }
+    }
+  });
+
+  const [savedMetadata] = await loadStartupItemMetadata();
+  const previewAsset = await loadItemMediaAssetById("item-blob", "preview");
+  const originalBlob = await loadOriginalImageBlobEntry("uuid-blob");
+  const mediaStore = getStoreStats(indexedDb, "itemMediaAssets");
+
+  assert.equal(savedMetadata.id, "item-blob");
+  assert.equal(savedMetadata.itemUuid, "uuid-blob");
+  assert.equal(savedMetadata.originalFilename, "imported.webp");
+  assert.equal(mediaStore.records.size, 1);
+  assert.equal(mediaStore.records.has("item-blob:preview"), true);
+  assert.equal(previewAsset.blob instanceof Blob, true);
+  assert.equal(await previewAsset.blob.text(), "blob-preview");
+  assert.equal(originalBlob.itemUuid, "uuid-blob");
+  assert.equal(await originalBlob.blob.text(), "blob-original");
+});
+
+test("repeated metadata-only saves keep preview and thumbnail asset counts stable", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-stable",
+    itemUuid: "uuid-stable",
+    name: "Stable",
+    imageUrl: "data:image/webp;base64,c3RhYmxlLXByZXZpZXc=",
+    originalFilename: "stable.webp",
+    originalPreserved: true,
+    images: {
+      original: {
+        src: "data:image/png;base64,c3RhYmxlLW9yaWdpbmFs",
+        mimeType: "image/png",
+        width: 1800,
+        height: 1200,
+        originalFilename: "stable.png"
+      },
+      preview: {
+        src: "data:image/webp;base64,c3RhYmxlLXByZXZpZXc=",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "stable.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,c3RhYmxlLXRodW1i",
+        mimeType: "image/webp",
+        width: 320,
+        height: 240,
+        originalFilename: "stable-thumb.webp"
+      }
+    }
+  });
+
+  await saveItem({
+    id: "item-stable",
+    itemUuid: "uuid-stable",
+    name: "Stable 2",
+    tags: ["one"]
+  });
+  await saveItem({
+    id: "item-stable",
+    itemUuid: "uuid-stable",
+    name: "Stable 3",
+    tags: ["one", "two"],
+    description: "metadata only"
+  });
+
+  const mediaStore = getStoreStats(indexedDb, "itemMediaAssets");
+  const originalStore = getStoreStats(indexedDb, "originalImageBlobs");
+
+  assert.equal(mediaStore.records.size, 2);
+  assert.equal(mediaStore.putCount, 2);
+  assert.equal(originalStore.records.size, 1);
+  assert.equal(originalStore.putCount, 1);
+});
+
+test("explicit media replacement updates stored assets without changing ownership keys", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-replace",
+    itemUuid: "uuid-replace",
+    name: "Before",
+    imageUrl: "data:image/webp;base64,b2xkLXByZXZpZXc=",
+    originalFilename: "before.webp",
+    originalPreserved: true,
+    images: {
+      original: {
+        src: "data:image/png;base64,b2xkLW9yaWdpbmFs",
+        mimeType: "image/png",
+        width: 1800,
+        height: 1200,
+        originalFilename: "before.png"
+      },
+      preview: {
+        src: "data:image/webp;base64,b2xkLXByZXZpZXc=",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "before.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,b2xkLXRodW1i",
+        mimeType: "image/webp",
+        width: 320,
+        height: 240,
+        originalFilename: "before-thumb.webp"
+      }
+    }
+  });
+
+  await saveItem({
+    id: "item-replace",
+    itemUuid: "uuid-replace",
+    name: "After",
+    mediaUpdateIntent: "replace",
+    imageUrl: "data:image/webp;base64,bmV3LXByZXZpZXc=",
+    originalFilename: "after.webp",
+    originalPreserved: true,
+    images: {
+      original: {
+        src: "data:image/png;base64,bmV3LW9yaWdpbmFs",
+        mimeType: "image/png",
+        width: 2000,
+        height: 1400,
+        originalFilename: "after.png"
+      },
+      preview: {
+        src: "data:image/webp;base64,bmV3LXByZXZpZXc=",
+        mimeType: "image/webp",
+        width: 800,
+        height: 560,
+        originalFilename: "after.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,bmV3LXRodW1i",
+        mimeType: "image/webp",
+        width: 320,
+        height: 224,
+        originalFilename: "after-thumb.webp"
+      }
+    }
+  });
+
+  const mediaStore = getStoreStats(indexedDb, "itemMediaAssets");
+  const previewRecord = mediaStore.records.get("item-replace:preview");
+  const thumbnailRecord = mediaStore.records.get("item-replace:thumbnail");
+  const originalEntry = await loadOriginalImageBlobEntry("uuid-replace");
+
+  assert.equal(mediaStore.records.size, 2);
+  assert.equal(previewRecord.asset.src, "data:image/webp;base64,bmV3LXByZXZpZXc=");
+  assert.equal(thumbnailRecord.asset.src, "data:image/webp;base64,bmV3LXRodW1i");
+  assert.equal(await originalEntry.blob.text(), "new-original");
+});
+
+test("explicit remove-image deletes owned media rows and original blob", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-remove",
+    itemUuid: "uuid-remove",
+    name: "Before",
+    imageUrl: "data:image/webp;base64,cmVtb3ZlLXByZXZpZXc=",
+    originalFilename: "remove.webp",
+    originalPreserved: true,
+    images: {
+      original: {
+        src: "data:image/png;base64,cmVtb3ZlLW9yaWdpbmFs",
+        mimeType: "image/png",
+        width: 1800,
+        height: 1200,
+        originalFilename: "remove.png"
+      },
+      preview: {
+        src: "data:image/webp;base64,cmVtb3ZlLXByZXZpZXc=",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "remove.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,cmVtb3ZlLXRodW1i",
+        mimeType: "image/webp",
+        width: 320,
+        height: 240,
+        originalFilename: "remove-thumb.webp"
+      }
+    }
+  });
+
+  await saveItem({
+    id: "item-remove",
+    itemUuid: "uuid-remove",
+    name: "Removed",
+    imageUrl: "",
+    mediaUpdateIntent: "remove",
+    originalPreserved: false,
+    images: {
+      original: { src: "" },
+      preview: { src: "" },
+      thumbnail: { src: "" }
+    }
+  });
+
+  const mediaStore = getStoreStats(indexedDb, "itemMediaAssets");
+
+  assert.equal(mediaStore.records.size, 0);
+  assert.equal(await hasOriginalImageBlob("uuid-remove"), false);
+});
+
 test("loadItems keeps visible-card records metadata-only while media resolves through the helper", async () => {
   installFakeIndexedDb();
 
