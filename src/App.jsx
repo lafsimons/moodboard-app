@@ -6895,6 +6895,8 @@ async function handleExportBackup() {
         items,
         appState: currentPersistedAppState,
         resolvePreviewAsset: resolvePreviewAssetForBackupPackageExport,
+        createPreviewAsset: createPreviewImageAsset,
+        createThumbnailAsset: createThumbnailImageAsset,
         onProgress: updateBackupPackageExportProgress
       });
       applyProvenanceUpdate(
@@ -8658,13 +8660,7 @@ async function handleExportBackup() {
               },
               items
             )
-          : createUniqueItemId(
-              {
-                ...normalizedDraft
-              },
-              items,
-              draft.id
-            ),
+          : draft.id,
       name: uniqueName,
       description: trimmedDescription
     };
@@ -8854,17 +8850,20 @@ async function handleExportBackup() {
     try {
       setImageUploadError("");
       const nextImageSet = await buildImageSetFromSourceFile(file);
-      setDraft((current) => replaceItemImageSet({
-        ...current,
-        imageFrameScale: 100,
-        imageScale: 100,
-        imageOffsetX: 0,
-        imageOffsetY: 0,
-        imageCropX: 0,
-        imageCropY: 0,
-        imageCropWidth: 100,
-        imageCropHeight: 100
-      }, nextImageSet));
+      setDraft((current) => ({
+        ...replaceItemImageSet({
+          ...current,
+          imageFrameScale: 100,
+          imageScale: 100,
+          imageOffsetX: 0,
+          imageOffsetY: 0,
+          imageCropX: 0,
+          imageCropY: 0,
+          imageCropWidth: 100,
+          imageCropHeight: 100
+        }, nextImageSet),
+        mediaUpdateIntent: "replace"
+      }));
       if (options.ignoredExtraFiles) {
         setImageUploadError("Using the first image only. Additional files were ignored.");
       }
@@ -8916,7 +8915,10 @@ async function handleExportBackup() {
         replacementOptions.thumbnailAsset = thumbnail;
       }
 
-      setDraft((current) => replaceItemOriginalImage(current, originalAsset, replacementOptions));
+      setDraft((current) => ({
+        ...replaceItemOriginalImage(current, originalAsset, replacementOptions),
+        mediaUpdateIntent: "replace"
+      }));
       if (options.ignoredExtraFiles) {
         setImageUploadError("Using the first image only. Additional files were ignored.");
       }
@@ -9002,6 +9004,7 @@ async function handleExportBackup() {
       imageUrl: "",
       images: emptyForm.images,
       originalPreserved: false,
+      mediaUpdateIntent: "remove",
       imageFrameScale: 100,
       imageScale: 100,
       imageOffsetX: 0,
@@ -9229,6 +9232,7 @@ async function handleExportBackup() {
               preview: nextPreviewAsset,
               thumbnail: nextThumbnailAsset
             },
+            mediaUpdateIntent: "replace",
             imageFrameScale: 100,
             imageScale: 100,
             imageOffsetX: 0,

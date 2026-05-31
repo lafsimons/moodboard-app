@@ -105,45 +105,50 @@ export function itemHasImagePayload(item) {
   ].some((value) => typeof value === "string" && value.trim());
 }
 
+export function normalizeMediaUpdateIntent(value) {
+  const normalizedValue = normalizeImageText(value).toLowerCase();
+
+  if (normalizedValue === "replace" || normalizedValue === "remove") {
+    return normalizedValue;
+  }
+
+  return "";
+}
+
+export function itemHasExplicitMediaRemoval(item) {
+  return normalizeMediaUpdateIntent(item?.mediaUpdateIntent) === "remove";
+}
+
+export function itemHasExplicitMediaChange(item) {
+  return itemHasImagePayload(item) || itemHasExplicitMediaRemoval(item) || normalizeMediaUpdateIntent(item?.mediaUpdateIntent) === "replace";
+}
+
 export function mergeItemImageState(existingItem, item) {
-  if (!existingItem || itemHasImagePayload(item)) {
+  if (!existingItem || itemHasExplicitMediaChange(item)) {
     return item;
   }
 
   const existingImages = normalizeItemImages(existingItem);
-  const incomingImages = normalizeItemImages(item);
 
   return {
     ...existingItem,
     ...item,
-    imageUrl: item?.imageUrl || existingItem.imageUrl,
-    mimeType: item?.mimeType || existingItem.mimeType,
-    imageWidth: Number(item?.imageWidth) > 0 ? item.imageWidth : existingItem.imageWidth,
-    imageHeight: Number(item?.imageHeight) > 0 ? item.imageHeight : existingItem.imageHeight,
-    fileSize: Number(item?.fileSize) > 0 ? item.fileSize : existingItem.fileSize,
-    originalFilename: item?.originalFilename || existingItem.originalFilename,
-    aspectRatio: Number(item?.aspectRatio) > 0 ? item.aspectRatio : existingItem.aspectRatio,
-    orientation: item?.orientation || existingItem.orientation,
+    imageUrl: existingItem.imageUrl,
+    mimeType: existingItem.mimeType,
+    imageWidth: existingItem.imageWidth,
+    imageHeight: existingItem.imageHeight,
+    fileSize: existingItem.fileSize,
+    originalFilename: existingItem.originalFilename,
+    aspectRatio: existingItem.aspectRatio,
+    orientation: existingItem.orientation,
     images: {
       ...existingItem?.images,
       ...item?.images,
-      original: createImageAsset({
-        ...existingImages.original,
-        ...incomingImages.original
-      }),
-      preview: createImageAsset({
-        ...existingImages.preview,
-        ...incomingImages.preview
-      }),
-      thumbnail: createImageAsset({
-        ...existingImages.thumbnail,
-        ...incomingImages.thumbnail
-      })
+      original: createImageAsset(existingImages.original),
+      preview: createImageAsset(existingImages.preview),
+      thumbnail: createImageAsset(existingImages.thumbnail)
     },
-    originalPreserved:
-      typeof item?.originalPreserved === "boolean"
-        ? item.originalPreserved
-        : existingItem.originalPreserved
+    originalPreserved: existingItem.originalPreserved
   };
 }
 

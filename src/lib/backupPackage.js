@@ -120,6 +120,15 @@ function createExportWarning(item, message) {
   };
 }
 
+function createExportMediaAsset(asset = {}) {
+  const normalizedAsset = createImageAsset(asset);
+  const { packagePath: _packagePath, ...rest } = normalizedAsset;
+  return {
+    ...rest,
+    src: ""
+  };
+}
+
 function buildBackupPackageWarningReport({
   exportedAt = new Date().toISOString(),
   warnings = []
@@ -591,9 +600,13 @@ export function getBackupPackagePreviewFileName(item, previewAsset = {}) {
   return `${baseName}${extension}`;
 }
 
-export function buildBackupPackageItemRecord(item, previewFileName = "") {
+export function buildBackupPackageItemRecord(item, previewFileName = "", options = {}) {
   const exportedReference = sanitizeBackupReference(item);
   const previewPackagePath = previewFileName ? `${PACKAGE_PREVIEWS_DIR}/${previewFileName}` : "";
+  const normalizedImages = normalizeItemImages(exportedReference);
+  const previewAsset = options.previewAsset ? createExportMediaAsset(options.previewAsset) : createExportMediaAsset(normalizedImages.preview);
+  const thumbnailAsset = options.thumbnailAsset ? createExportMediaAsset(options.thumbnailAsset) : createExportMediaAsset(normalizedImages.thumbnail);
+  const originalAsset = options.originalAsset ? createExportMediaAsset(options.originalAsset) : createExportMediaAsset(normalizedImages.original);
 
   return {
     ...exportedReference,
@@ -602,19 +615,12 @@ export function buildBackupPackageItemRecord(item, previewFileName = "") {
       ...(exportedReference?.images && typeof exportedReference.images === "object" && !Array.isArray(exportedReference.images)
         ? exportedReference.images
         : {}),
-      original: {
-        ...createImageAsset(exportedReference?.images?.original),
-        src: ""
-      },
+      original: originalAsset,
       preview: {
-        ...createImageAsset(exportedReference?.images?.preview),
-        src: "",
+        ...previewAsset,
         ...(previewPackagePath ? { packagePath: previewPackagePath } : {})
       },
-      thumbnail: {
-        ...createImageAsset(exportedReference?.images?.thumbnail),
-        src: ""
-      }
+      thumbnail: thumbnailAsset
     }
   };
 }
@@ -628,6 +634,8 @@ export async function exportBackupPackageToDirectory({
   items,
   appState,
   resolvePreviewAsset,
+  createPreviewAsset,
+  createThumbnailAsset,
   onProgress
 }) {
   if (!rootHandle || typeof rootHandle.getDirectoryHandle !== "function" || typeof rootHandle.getFileHandle !== "function") {
@@ -655,24 +663,60 @@ export async function exportBackupPackageToDirectory({
   try {
     for (const item of itemList) {
       let previewFileName = "";
+      let exportedPreviewAsset = null;
+      let exportedThumbnailAsset = null;
+      let exportedOriginalAsset = null;
 
       try {
         const normalizedImages = normalizeItemImages(item);
-        const previewAsset = normalizedImages.preview?.src
+        const resolvedPreviewAsset = normalizedImages.preview?.src
           ? createImageAsset(normalizedImages.preview)
           : createImageAsset(await resolvePreviewAsset(item, "preview"));
-        const previewBlob = await createPreviewBlob(previewAsset);
+        exportedPreviewAsset = resolvedPreviewAsset;
+        exportedThumbnailAsset = createImageAsset(normalizedImages.thumbnail);
+        exportedOriginalAsset = createImageAsset(normalizedImages.original);
+        let previewBlob = await createPreviewBlob(resolvedPreviewAsset);
 
         if (!previewBlob) {
+          const resolvedOriginalAsset = normalizedImages.original?.src
+            ? createImageAsset(normalizedImages.original)
+            : createImageAsset(await resolvePreviewAsset(item, "original"));
+          exportedOriginalAsset = resolvedOriginalAsset;
+          const originalBlob = await createPreviewBlob(resolvedOriginalAsset);
+
+          if (originalBlob && typeof createPreviewAsset === "function") {
+            const repairedPreviewAsset = createImageAsset(await createPreviewAsset(originalBlob, item));
+            const repairedThumbnailAsset = typeof createThumbnailAsset === "function"
+              ? createImageAsset(await createThumbnailAsset(originalBlob, item))
+              : exportedThumbnailAsset;
+            const repairedPreviewBlob = await createPreviewBlob(repairedPreviewAsset);
+
+            if (repairedPreviewBlob) {
+              exportedPreviewAsset = repairedPreviewAsset;
+              exportedThumbnailAsset = repairedThumbnailAsset;
+              previewBlob = repairedPreviewBlob;
+              warnings.push(
+                createExportWarning(item, `Repaired missing preview media from the preserved original for export.`)
+              );
+            }
+          }
+        }
+
+        if (!previewBlob) {
+          exportedPreviewAsset = createExportMediaAsset(exportedPreviewAsset ?? normalizedImages.preview);
+          exportedThumbnailAsset = createExportMediaAsset({});
           warnings.push(
-            createExportWarning(item, `Reference "${item?.id || "unknown"}" is missing an exportable preview asset.`)
+            createExportWarning(item, `Omitted broken preview media from export because no resolvable preview or original was available.`)
           );
         } else {
-          previewFileName = createUniquePreviewFileName(item, previewAsset, usedFileNames);
+          previewFileName = createUniquePreviewFileName(item, exportedPreviewAsset, usedFileNames);
           await writeBlobToFile(previewsDirectoryHandle, previewFileName, previewBlob);
           previewFileCount += 1;
         }
       } catch (error) {
+        exportedPreviewAsset = createExportMediaAsset(normalizeItemImages(item).preview);
+        exportedThumbnailAsset = createExportMediaAsset({});
+        exportedOriginalAsset = createExportMediaAsset(normalizeItemImages(item).original);
         warnings.push(
           createExportWarning(
             item,
@@ -681,7 +725,11 @@ export async function exportBackupPackageToDirectory({
         );
       }
 
-      const itemRecord = buildBackupPackageItemRecord(item, previewFileName);
+      const itemRecord = buildBackupPackageItemRecord(item, previewFileName, {
+        previewAsset: exportedPreviewAsset,
+        thumbnailAsset: exportedThumbnailAsset,
+        originalAsset: exportedOriginalAsset
+      });
       await itemsWritable.write(createTextBlob(serializeBackupPackageItemRecord(itemRecord)));
       if (typeof onProgress === "function") {
         onProgress({ phase: "writing-previews", completed: Math.min(previewFileCount + warnings.length, total), total });

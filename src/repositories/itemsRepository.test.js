@@ -555,6 +555,135 @@ test("metadata-only edits return a saved item with preserved image-bearing field
   assert.equal(savedItem.images.thumbnail.originalFilename, "preserve-thumb.webp");
 });
 
+test("rename plus tag edit preserves resolved blob-backed preview media for imported items", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    exportedAt: "2026-05-31T10:00:00.000Z",
+    items: [
+      {
+        id: "item-imported",
+        itemUuid: "uuid-imported",
+        name: "Before",
+        tags: [],
+        originalFilename: "imported.webp",
+        images: {
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            originalFilename: "imported.webp"
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-imported",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          originalFilename: "imported.webp",
+          blob: new Blob(["repo-preview"], { type: "image/webp" })
+        }
+      }
+    ]
+  });
+
+  await saveItem({
+    id: "item-imported",
+    itemUuid: "uuid-imported",
+    name: "After",
+    tags: ["archive"]
+  });
+
+  const [metadataOnlyItem] = await loadStartupItemMetadata();
+  const [runtimeItem] = await loadItems();
+  const resolvedPreviewMedia = await resolveItemMediaSource(metadataOnlyItem, "preview", { preferDataUrl: true });
+
+  assert.equal(metadataOnlyItem.id, "item-imported");
+  assert.equal(metadataOnlyItem.itemUuid, "uuid-imported");
+  assert.equal(metadataOnlyItem.originalFilename, "imported.webp");
+  assert.deepEqual(metadataOnlyItem.tags, ["archive"]);
+  assert.equal(runtimeItem.name, "After");
+  assert.deepEqual(runtimeItem.tags, ["archive"]);
+  assert.equal(resolvedPreviewMedia.src, "data:image/webp;base64,cmVwby1wcmV2aWV3");
+  assert.equal(indexedDb.database.stores.get("itemMediaAssets").records.size, 1);
+});
+
+test("repeated metadata-only repository saves keep blob-backed preview ownership stable", async () => {
+  const indexedDb = installFakeIndexedDb();
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    exportedAt: "2026-05-31T10:00:00.000Z",
+    items: [
+      {
+        id: "item-repeat",
+        itemUuid: "uuid-repeat",
+        name: "Before",
+        originalFilename: "repeat.webp",
+        images: {
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            originalFilename: "repeat.webp"
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-repeat",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          originalFilename: "repeat.webp",
+          blob: new Blob(["repeat-preview"], { type: "image/webp" })
+        }
+      }
+    ]
+  });
+
+  await saveItem({
+    id: "item-repeat",
+    itemUuid: "uuid-repeat",
+    name: "First rename"
+  });
+  await saveItem({
+    id: "item-repeat",
+    itemUuid: "uuid-repeat",
+    name: "Second rename",
+    description: "metadata only"
+  });
+
+  const [metadataOnlyItem] = await loadStartupItemMetadata();
+  const resolvedPreviewMedia = await resolveItemMediaSource(metadataOnlyItem, "preview", { preferDataUrl: true });
+
+  assert.equal(metadataOnlyItem.id, "item-repeat");
+  assert.equal(metadataOnlyItem.itemUuid, "uuid-repeat");
+  assert.equal(indexedDb.database.stores.get("itemMediaAssets").records.size, 1);
+  assert.equal(resolvedPreviewMedia.src, "data:image/webp;base64,cmVwZWF0LXByZXZpZXc=");
+});
+
 test("resolveItemMediaSource creates an object URL for blob-backed preview assets restored by scalable package import", async () => {
   const originalCreateObjectUrl = URL.createObjectURL;
   const originalRevokeObjectUrl = URL.revokeObjectURL;

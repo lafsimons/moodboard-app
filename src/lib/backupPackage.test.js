@@ -185,6 +185,38 @@ test("buildBackupPackageItemRecord strips inline media and adds preview packageP
   assert.equal(record.images.thumbnail.src, "");
 });
 
+test("buildBackupPackageItemRecord strips stale package paths when no preview file is staged", () => {
+  const record = buildBackupPackageItemRecord({
+    id: "item-stale",
+    itemUuid: "uuid-stale",
+    images: {
+      original: {
+        src: "",
+        mimeType: "image/png",
+        width: 1200,
+        height: 800
+      },
+      preview: {
+        src: "",
+        mimeType: "image/png",
+        width: 640,
+        height: 480,
+        packagePath: "media/previews/stale.png"
+      },
+      thumbnail: {
+        src: "",
+        mimeType: "image/png",
+        width: 320,
+        height: 240,
+        packagePath: "media/previews/stale-thumb.png"
+      }
+    }
+  });
+
+  assert.equal("packagePath" in record.images.preview, false);
+  assert.equal("packagePath" in record.images.thumbnail, false);
+});
+
 test("serializeBackupPackageItemRecord emits one NDJSON line", () => {
   const line = serializeBackupPackageItemRecord({
     id: "item-1",
@@ -589,6 +621,85 @@ test("exportBackupPackageToDirectory keeps exporting metadata when preview media
   const warningReport = JSON.parse(warningReportText);
   assert.equal(warningReport.warningCount, 1);
   assert.equal(warningReport.warnings[0].id, "item-missing-preview");
+});
+
+test("exportBackupPackageToDirectory repairs stale preview metadata from the original when available", async () => {
+  const rootHandle = new FakeDirectoryHandle();
+
+  const result = await exportBackupPackageToDirectory({
+    rootHandle,
+    items: [
+      {
+        id: "item-repairable",
+        itemUuid: "uuid-repairable",
+        name: "Repairable",
+        originalFilename: "repairable.png",
+        originalPreserved: true,
+        images: {
+          original: {
+            src: "",
+            mimeType: "image/png",
+            width: 1800,
+            height: 1200,
+            originalFilename: "repairable.png"
+          },
+          preview: {
+            src: "",
+            mimeType: "image/png",
+            width: 640,
+            height: 480,
+            packagePath: "media/previews/c2fd6546-569f-43ca-88f1-89b774e8defa.png"
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "image/png",
+            width: 320,
+            height: 240
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    resolvePreviewAsset: async (_item, variant) => {
+      if (variant === "original") {
+        return {
+          blob: new Blob(["original-binary"], { type: "image/png" }),
+          mimeType: "image/png",
+          width: 1800,
+          height: 1200,
+          originalFilename: "repairable.png"
+        };
+      }
+
+      return null;
+    },
+    createPreviewAsset: async (source) => ({
+      blob: source,
+      mimeType: "image/png",
+      width: 900,
+      height: 600,
+      originalFilename: "repairable-preview.png"
+    }),
+    createThumbnailAsset: async () => ({
+      mimeType: "image/png",
+      width: 320,
+      height: 213,
+      originalFilename: "repairable-thumb.png"
+    })
+  });
+
+  assert.equal(result.previewFileCount, 1);
+  assert.equal(result.warningCount, 1);
+  assert.match(result.warnings[0].message, /Repaired missing preview media/i);
+
+  const itemsText = await rootHandle.files.get(PACKAGE_ITEMS_FILE).readText();
+  const [record] = itemsText.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(record.images.preview.packagePath, "media/previews/uuid-repairable.png");
+  assert.equal(record.images.preview.originalFilename, "repairable-preview.png");
+  assert.equal(record.images.thumbnail.originalFilename, "repairable-thumb.png");
+  assert.equal(rootHandle.directories.get("media").directories.get("previews").files.has("uuid-repairable.png"), true);
 });
 
 test("prepareBackupPackageImportFromDirectory accepts metadata-only damaged items without preview package paths", async () => {
