@@ -1003,6 +1003,27 @@ function normalizeMetadataOnlyTags(value) {
     : [];
 }
 
+function normalizeMetadataOnlyFilenameAliases(value) {
+  const seen = new Set();
+
+  return (Array.isArray(value) ? value : [])
+    .map((alias) => normalizeMetadataOnlyText(alias))
+    .filter((alias) => {
+      if (!alias) {
+        return false;
+      }
+
+      const aliasKey = alias.toLowerCase();
+
+      if (seen.has(aliasKey)) {
+        return false;
+      }
+
+      seen.add(aliasKey);
+      return true;
+    });
+}
+
 function createMetadataOnlyItem(record, excludedById = {}) {
   const strippedRecord = stripItemMediaPayloads(record);
   const id = normalizeMetadataOnlyText(strippedRecord?.id);
@@ -1014,6 +1035,7 @@ function createMetadataOnlyItem(record, excludedById = {}) {
     tags: normalizeMetadataOnlyTags(strippedRecord?.tags),
     favorite: Boolean(strippedRecord?.favorite),
     excluded: Boolean(id && excludedById[id]),
+    sourceFilenameAliases: normalizeMetadataOnlyFilenameAliases(strippedRecord?.sourceFilenameAliases),
     originalFilename: normalizeMetadataOnlyText(strippedRecord?.originalFilename),
     importedAt: normalizeMetadataOnlyTimestamp(strippedRecord?.importedAt),
     createdAt: normalizeMetadataOnlyTimestamp(strippedRecord?.createdAt),

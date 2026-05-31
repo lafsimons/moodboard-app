@@ -101,7 +101,7 @@ import {
   replaceItemImageSet,
   replaceItemOriginalImage
 } from "./lib/itemImages";
-import { normalizeItemSourceIdentity } from "./lib/itemIdentity";
+import { normalizeItemSourceIdentity, normalizeSourceFilenameAliases } from "./lib/itemIdentity";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
 import TagInput from "./components/TagInput";
 import {
@@ -3175,12 +3175,17 @@ function itemNeedsDefaultMetadataMigration(originalItem, normalizedItem) {
 }
 
 function itemNeedsMoodboardMetadataMigration(originalItem, normalizedItem) {
+  const normalizedOriginalAliases = normalizeSourceFilenameAliases(originalItem?.sourceFilenameAliases);
+  const normalizedNextAliases = normalizeSourceFilenameAliases(normalizedItem?.sourceFilenameAliases);
+
   return (
     !areEditorValuesEqual(uniqueTags(migrateReferenceMetadataToTags(originalItem)?.tags), normalizedItem.tags) ||
     normalizeFileMetadataText(originalItem.itemUuid) !== normalizedItem.itemUuid ||
     normalizeFileMetadataText(originalItem.sourceNamespace) !== normalizedItem.sourceNamespace ||
     normalizeFileMetadataText(originalItem.sourceRelativePath) !== normalizedItem.sourceRelativePath ||
     normalizeFileMetadataText(originalItem.sourceOriginalFilename) !== normalizedItem.sourceOriginalFilename ||
+    normalizedOriginalAliases.length !== normalizedNextAliases.length ||
+    normalizedOriginalAliases.some((alias, index) => alias !== normalizedNextAliases[index]) ||
     normalizeWholeNumber(originalItem.sourceFileSize) !== normalizedItem.sourceFileSize ||
     normalizeWholeNumber(originalItem.sourceImageWidth) !== normalizedItem.sourceImageWidth ||
     normalizeWholeNumber(originalItem.sourceImageHeight) !== normalizedItem.sourceImageHeight ||

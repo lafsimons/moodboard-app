@@ -97,6 +97,7 @@ test("createReferenceFromFile applies defaults and persists the item", async () 
   assert.equal(item.originalPreserved, true);
   assert.ok(item.itemUuid);
   assert.equal(item.sourceOriginalFilename, "Camel Coat.png");
+  assert.deepEqual(item.sourceFilenameAliases, []);
   assert.equal(item.sourceFileSize, 0);
   assert.equal(item.sourceImageWidth, 3200);
   assert.equal(item.sourceImageHeight, 2400);

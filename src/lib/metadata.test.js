@@ -56,6 +56,7 @@ test("migrateReferenceMetadataToTags preserves tags and merges legacy metadata",
   assert.equal(migrated.relinkStatus, "pending");
   assert.ok(migrated.itemUuid);
   assert.equal(migrated.sourceOriginalFilename, "photo.jpg");
+  assert.deepEqual(migrated.sourceFilenameAliases, []);
   assert.equal("category" in migrated, false);
   assert.equal("collection" in migrated, false);
   assert.equal("productType" in migrated, false);
@@ -153,6 +154,23 @@ test("migrateReferenceMetadataToTags preserves opaque relinkStatus importSource 
   assert.deepEqual(migrated.styleTags, ["Smart Casual"]);
   assert.deepEqual(migrated.climateTags, ["Cold"]);
   assert.deepEqual(migrated.tags, ["archive"]);
+});
+
+test("migrateReferenceMetadataToTags backfills distinct filename aliases without duplicating sourceOriginalFilename", () => {
+  const migrated = migrateReferenceMetadataToTags({
+    id: "1",
+    sourceOriginalFilename: "canonical.jpg",
+    sourceFilenameAliases: [" Archive.JPG ", "archive.jpg", ""],
+    originalFilename: "preview-name.webp",
+    images: {
+      preview: {
+        originalFilename: "preview-name.webp"
+      }
+    }
+  });
+
+  assert.equal(migrated.sourceOriginalFilename, "canonical.jpg");
+  assert.deepEqual(migrated.sourceFilenameAliases, ["Archive.JPG", "preview-name.webp"]);
 });
 
 test("sanitizeBackupReference preserves portable preview assets and strips only embedded original src", () => {
