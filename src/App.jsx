@@ -133,9 +133,11 @@ import {
   applySavedLibraryViewToMetadataFilters,
   createSavedLibraryViewSnapshot,
   deleteSavedLibraryView,
+  formatImportSourceFormatLabel,
   markBackupExported,
   markBackupImported,
   markLibraryEdited,
+  markMetadataExported,
   normalizeLocalSafetyState,
   normalizeLibraryProvenance,
   doesSavedLibraryViewMatchMetadataState,
@@ -708,21 +710,6 @@ function formatCreatedAt(value) {
 
 function formatLibraryProvenanceValue(value) {
   return formatCreatedAt(value) || "Never";
-}
-
-function formatBackupSchemaLabel(provenance) {
-  const source = typeof provenance?.lastImportedBackupSource === "string" ? provenance.lastImportedBackupSource.trim() : "";
-  const version = typeof provenance?.lastImportedBackupSchemaVersion === "string" ? provenance.lastImportedBackupSchemaVersion.trim() : "";
-
-  if (source && version) {
-    return `${source} v${version}`;
-  }
-
-  if (version) {
-    return `v${version}`;
-  }
-
-  return "";
 }
 
 function normalizeFileMetadataText(value) {
@@ -7088,10 +7075,26 @@ export default function App() {
       }
 
       if (downloadStatus === "saved") {
+        applyProvenanceUpdate(
+          (current) => markMetadataExported(current, { itemCountSnapshot: items.length }),
+          {
+            itemCountSnapshot: items.length,
+            immediate: true,
+            reason: "metadataBackupExport"
+          }
+        );
         setBackupExportStatus("Metadata backup saved.");
         return;
       }
 
+      applyProvenanceUpdate(
+        (current) => markMetadataExported(current, { itemCountSnapshot: items.length }),
+        {
+          itemCountSnapshot: items.length,
+          immediate: true,
+          reason: "metadataBackupExport"
+        }
+      );
       setBackupExportStatus("Metadata backup download attempted.");
     } catch {
       setBackupExportStatus("Metadata backup export failed in this browser.");
@@ -11170,7 +11173,7 @@ export default function App() {
     itemCountSnapshot: items.length
   });
   const normalizedLocalSafety = normalizeLocalSafetyState(localSafety);
-  const packageSchemaLabel = formatBackupSchemaLabel(normalizedProvenance);
+  const lastImportSourceFormatLabel = formatImportSourceFormatLabel(normalizedProvenance);
   const lastBackupImportLabel = normalizedProvenance.lastImportedBackupName
     ? `${formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt)} (${normalizedProvenance.lastImportedBackupName})`
     : formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt);
@@ -11181,13 +11184,14 @@ export default function App() {
     ["Last metadata snapshot", formatLibraryProvenanceValue(normalizedLocalSafety.lastMetadataSnapshotAt)],
     ["Metadata snapshot reason", normalizedLocalSafety.lastMetadataSnapshotReason || "None"],
     ["Last backup export", formatLibraryProvenanceValue(normalizedProvenance.lastBackupExportAt)],
+    ["Last metadata export", formatLibraryProvenanceValue(normalizedProvenance.lastMetadataExportAt)],
     ["Changed since snapshot", normalizedLocalSafety.metadataDirtySinceSnapshot ? "Yes" : "No"],
     ["Changed since full backup", normalizedLocalSafety.metadataDirtySinceFullBackup ? "Yes" : "No"],
     ["Changed items since backup", String(normalizedLocalSafety.changedItemIdsSinceFullBackup.length)],
     ["Snapshot status", normalizedLocalSafety.lastMetadataSnapshotError || "Healthy"],
     ["Last backup import", lastBackupImportLabel],
     ["Items", String(normalizedProvenance.itemCountSnapshot || items.length || 0)],
-    ["Package schema", packageSchemaLabel || "Unknown"]
+    ["Last import source/format", lastImportSourceFormatLabel || "Unknown"]
   ];
   const mediaIntegritySummaryEntries = mediaIntegrityReport
     ? [

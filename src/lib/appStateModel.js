@@ -21,6 +21,7 @@ export const emptySavedLibraryViews = [];
 export const emptyLibraryProvenance = {
   lastLibraryEditAt: "",
   lastBackupExportAt: "",
+  lastMetadataExportAt: "",
   lastBackupImportAt: "",
   lastImportedBackupName: "",
   lastImportedBackupSource: "",
@@ -138,6 +139,7 @@ export function normalizeLibraryProvenance(value, options = {}) {
     ...value,
     lastLibraryEditAt: normalizeLibraryProvenanceTimestamp(value.lastLibraryEditAt),
     lastBackupExportAt: normalizeLibraryProvenanceTimestamp(value.lastBackupExportAt),
+    lastMetadataExportAt: normalizeLibraryProvenanceTimestamp(value.lastMetadataExportAt),
     lastBackupImportAt: normalizeLibraryProvenanceTimestamp(value.lastBackupImportAt),
     lastImportedBackupName: normalizeLibraryProvenanceText(value.lastImportedBackupName),
     lastImportedBackupSource: normalizeLibraryProvenanceText(value.lastImportedBackupSource),
@@ -171,6 +173,16 @@ export function markBackupExported(provenance, options = {}) {
   }, options);
 }
 
+export function markMetadataExported(provenance, options = {}) {
+  const normalizedTimestamp = getLibraryProvenanceTimestamp(options.exportedAt);
+
+  return normalizeLibraryProvenance({
+    ...normalizeLibraryProvenance(provenance, options),
+    lastMetadataExportAt: normalizedTimestamp,
+    itemCountSnapshot: options.itemCountSnapshot
+  }, options);
+}
+
 export function markBackupImported(provenance, options = {}) {
   const normalizedTimestamp = getLibraryProvenanceTimestamp(options.importedAt);
 
@@ -183,6 +195,26 @@ export function markBackupImported(provenance, options = {}) {
     lastImportedBackupSchemaVersion: normalizeLibraryProvenanceVersion(options.lastImportedBackupSchemaVersion),
     itemCountSnapshot: options.itemCountSnapshot
   }, options);
+}
+
+export function formatImportSourceFormatLabel(provenance) {
+  const normalizedProvenance = normalizeLibraryProvenance(provenance);
+  const source = normalizedProvenance.lastImportedBackupSource;
+  const version = normalizedProvenance.lastImportedBackupSchemaVersion;
+
+  if (source && version) {
+    return `${source} v${version}`;
+  }
+
+  if (source) {
+    return source;
+  }
+
+  if (version) {
+    return `v${version}`;
+  }
+
+  return "";
 }
 
 export function normalizeMetadataFilterState(filters) {

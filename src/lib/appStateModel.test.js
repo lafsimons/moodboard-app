@@ -10,9 +10,11 @@ import {
   defaultWardrobeSort,
   doesSavedLibraryViewMatchMetadataState,
   emptyWardrobeFilters,
+  formatImportSourceFormatLabel,
   markBackupExported,
   markBackupImported,
   markLibraryEdited,
+  markMetadataExported,
   normalizeLibraryProvenance,
   normalizeLocalSafetyState,
   normalizeSavedLibraryViews,
@@ -299,6 +301,7 @@ test("normalizeLibraryProvenance loads old app states safely and keeps additive 
     {
       lastLibraryEditAt: "",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "",
       lastImportedBackupSource: "",
@@ -320,6 +323,7 @@ test("normalizeLibraryProvenance loads old app states safely and keeps additive 
     {
       lastLibraryEditAt: "2026-05-26T10:00:00.000Z",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "Archive MBA",
       lastImportedBackupSource: "moodboard-app-package",
@@ -346,7 +350,14 @@ test("provenance helper updates track edits exports and imports additively", () 
   assert.equal(afterExport.lastLibraryEditAt, "2026-05-26T11:00:00.000Z");
   assert.equal(afterExport.lastBackupExportAt, "2026-05-26T12:00:00.000Z");
 
-  const afterImport = markBackupImported(afterExport, {
+  const afterMetadataExport = markMetadataExported(afterExport, {
+    exportedAt: "2026-05-26T12:30:00.000Z",
+    itemCountSnapshot: 5
+  });
+  assert.equal(afterMetadataExport.lastBackupExportAt, "2026-05-26T12:00:00.000Z");
+  assert.equal(afterMetadataExport.lastMetadataExportAt, "2026-05-26T12:30:00.000Z");
+
+  const afterImport = markBackupImported(afterMetadataExport, {
     importedAt: "2026-05-26T13:00:00.000Z",
     lastImportedBackupName: "mba-package",
     lastImportedBackupSource: "moodboard-app-package",
@@ -355,9 +366,30 @@ test("provenance helper updates track edits exports and imports additively", () 
   });
   assert.equal(afterImport.lastLibraryEditAt, "2026-05-26T13:00:00.000Z");
   assert.equal(afterImport.lastBackupExportAt, "2026-05-26T12:00:00.000Z");
+  assert.equal(afterImport.lastMetadataExportAt, "2026-05-26T12:30:00.000Z");
   assert.equal(afterImport.lastBackupImportAt, "2026-05-26T13:00:00.000Z");
   assert.equal(afterImport.lastImportedBackupName, "mba-package");
   assert.equal(afterImport.lastImportedBackupSource, "moodboard-app-package");
   assert.equal(afterImport.lastImportedBackupSchemaVersion, "1");
   assert.equal(afterImport.itemCountSnapshot, 9);
+});
+
+test("formatImportSourceFormatLabel reports generic import source/version without implying package schema", () => {
+  assert.equal(
+    formatImportSourceFormatLabel({
+      lastImportedBackupSource: "moodboard-app-package",
+      lastImportedBackupSchemaVersion: 1
+    }),
+    "moodboard-app-package v1"
+  );
+
+  assert.equal(
+    formatImportSourceFormatLabel({
+      lastImportedBackupSource: "moodboard-app",
+      lastImportedBackupSchemaVersion: 2
+    }),
+    "moodboard-app v2"
+  );
+
+  assert.equal(formatImportSourceFormatLabel({}), "");
 });

@@ -46,6 +46,11 @@ import {
   pruneOutfitForDeletedReferences,
   pruneSavedOutfitsForDeletedReferences
 } from "./deleteStatePruning.js";
+import {
+  formatImportSourceFormatLabel,
+  markBackupExported,
+  markMetadataExported
+} from "./appStateModel.js";
 import defaultWardrobe from "../data/defaultWardrobe.js";
 
 class FakeIDBRequest {
@@ -518,6 +523,52 @@ test("metadata dirty tracking updates and full backup reset is separated from sn
   assert.equal(resetForFullBackup.metadataDirtySinceFullBackup, false);
   assert.deepEqual(resetForFullBackup.changedItemIdsSinceSnapshot, ["item-1", "item-2"]);
   assert.deepEqual(resetForFullBackup.changedItemIdsSinceFullBackup, []);
+});
+
+test("metadata-only export updates metadata export provenance without clearing the full-backup dirty baseline", () => {
+  const changedLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-1"]
+  });
+  const nextProvenance = markMetadataExported(undefined, {
+    exportedAt: "2026-05-31T12:00:00.000Z",
+    itemCountSnapshot: 1
+  });
+
+  assert.equal(nextProvenance.lastMetadataExportAt, "2026-05-31T12:00:00.000Z");
+  assert.equal(nextProvenance.lastBackupExportAt, "");
+  assert.equal(changedLocalSafety.metadataDirtySinceFullBackup, true);
+  assert.deepEqual(changedLocalSafety.changedItemIdsSinceFullBackup, ["item-1"]);
+});
+
+test("full JSON backup export clears the full-backup dirty baseline and updates last backup export provenance", () => {
+  const changedLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-1", "item-2"]
+  });
+  const nextProvenance = markBackupExported(undefined, {
+    exportedAt: "2026-05-31T13:00:00.000Z",
+    itemCountSnapshot: 2
+  });
+  const nextLocalSafety = markFullBackupExported(changedLocalSafety);
+
+  assert.equal(nextProvenance.lastBackupExportAt, "2026-05-31T13:00:00.000Z");
+  assert.equal(nextProvenance.lastMetadataExportAt, "");
+  assert.equal(nextLocalSafety.metadataDirtySinceFullBackup, false);
+  assert.deepEqual(nextLocalSafety.changedItemIdsSinceFullBackup, []);
+});
+
+test("scalable package export uses the same full-backup provenance and dirty-baseline reset semantics", () => {
+  const changedLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-9"]
+  });
+  const nextProvenance = markBackupExported(undefined, {
+    exportedAt: "2026-05-31T14:00:00.000Z",
+    itemCountSnapshot: 1
+  });
+  const nextLocalSafety = markFullBackupExported(changedLocalSafety);
+
+  assert.equal(nextProvenance.lastBackupExportAt, "2026-05-31T14:00:00.000Z");
+  assert.equal(nextLocalSafety.metadataDirtySinceFullBackup, false);
+  assert.deepEqual(nextLocalSafety.changedItemIdsSinceFullBackup, []);
 });
 
 test("requestMetadataSnapshot serializes overlapping autosnapshot requests into at most one follow-up write", async () => {
@@ -1645,6 +1696,7 @@ test("saveAppState skips oversized persisted payloads", async () => {
     provenance: {
       lastLibraryEditAt: "",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "",
       lastImportedBackupSource: "",
@@ -2317,6 +2369,7 @@ test("prepareBackupImport normalizes legacy backups and fills source identity de
     provenance: {
       lastLibraryEditAt: "",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "",
       lastImportedBackupSource: "",
@@ -2359,6 +2412,7 @@ test("prepareBackupImport accepts moodboard-app backups", () => {
     provenance: {
       lastLibraryEditAt: "",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "",
       lastImportedBackupSource: "",
@@ -3050,6 +3104,7 @@ test("replaceWithPreparedBackup persists imported items and app state across sta
   assert.equal(startupAppState.librarySearch, "imported-library");
   assert.equal(startupAppState.savedOutfits.length, 1);
   assert.equal(startupAppState.provenance.lastImportedBackupName, "backup.json");
+  assert.equal(formatImportSourceFormatLabel(startupAppState.provenance), "moodboard-app v2");
 });
 
 test("imported items remain present after subsequent localSafety persistence", async () => {
@@ -3161,6 +3216,7 @@ test("imported items remain present after subsequent localSafety persistence", a
   assert.equal(startupAppState.provenance.lastImportedBackupName, "package-dir");
   assert.equal(startupAppState.provenance.lastImportedBackupSource, "moodboard-app-package");
   assert.equal(startupAppState.provenance.lastImportedBackupSchemaVersion, "1");
+  assert.equal(formatImportSourceFormatLabel(startupAppState.provenance), "moodboard-app-package v1");
   assert.equal(startupAppState.localSafety.metadataDirtySinceSnapshot, true);
   assert.deepEqual(startupAppState.localSafety.changedItemIdsSinceSnapshot, ["item-a"]);
 });
@@ -3455,6 +3511,7 @@ test("saveAppState persists provenance metadata and loadStartupAppState returns 
     provenance: {
       lastLibraryEditAt: "2026-05-26T11:00:00.000Z",
       lastBackupExportAt: "2026-05-26T12:00:00.000Z",
+      lastMetadataExportAt: "2026-05-26T12:30:00.000Z",
       lastBackupImportAt: "2026-05-26T13:00:00.000Z",
       lastImportedBackupName: "mba-package",
       lastImportedBackupSource: "moodboard-app-package",
@@ -3469,6 +3526,7 @@ test("saveAppState persists provenance metadata and loadStartupAppState returns 
   assert.deepEqual(loaded.provenance, {
     lastLibraryEditAt: "2026-05-26T11:00:00.000Z",
     lastBackupExportAt: "2026-05-26T12:00:00.000Z",
+    lastMetadataExportAt: "2026-05-26T12:30:00.000Z",
     lastBackupImportAt: "2026-05-26T13:00:00.000Z",
     lastImportedBackupName: "mba-package",
     lastImportedBackupSource: "moodboard-app-package",
@@ -3521,6 +3579,7 @@ test("replaceWithPreparedBackup preserves imported provenance metadata and old a
   assert.deepEqual(oldState.provenance, {
     lastLibraryEditAt: "",
     lastBackupExportAt: "",
+    lastMetadataExportAt: "",
     lastBackupImportAt: "",
     lastImportedBackupName: "",
     lastImportedBackupSource: "",
