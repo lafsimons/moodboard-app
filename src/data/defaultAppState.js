@@ -50,6 +50,15 @@ const defaultAppState = {
   provenance: {
     itemCountSnapshot: 0
   },
+  localSafety: {
+    lastMetadataSnapshotAt: "",
+    lastMetadataSnapshotReason: "",
+    lastMetadataSnapshotError: "",
+    metadataDirtySinceSnapshot: false,
+    metadataDirtySinceFullBackup: false,
+    changedItemIdsSinceSnapshot: [],
+    changedItemIdsSinceFullBackup: []
+  },
   libraryUiState: {
     libraryOpen: false,
     wardrobeFiltersOpen: false,

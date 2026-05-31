@@ -29,6 +29,28 @@ export const emptyLibraryProvenance = {
   appVersion: ""
 };
 
+export const metadataSnapshotReasons = [
+  "autosnapshot",
+  "visibility-hidden",
+  "before-import",
+  "before-bulk-edit",
+  "before-delete",
+  "before-migration",
+  "before-repair",
+  "before-dedupe",
+  "manual"
+];
+
+export const emptyLocalSafetyState = {
+  lastMetadataSnapshotAt: "",
+  lastMetadataSnapshotReason: "",
+  lastMetadataSnapshotError: "",
+  metadataDirtySinceSnapshot: false,
+  metadataDirtySinceFullBackup: false,
+  changedItemIdsSinceSnapshot: [],
+  changedItemIdsSinceFullBackup: []
+};
+
 function normalizeLibraryProvenanceText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -55,6 +77,50 @@ function normalizeLibraryProvenanceTimestamp(value) {
 function normalizeLibraryProvenanceCount(value, fallback = 0) {
   const parsedValue = Number(value);
   return Number.isFinite(parsedValue) && parsedValue >= 0 ? Math.round(parsedValue) : fallback;
+}
+
+function normalizeLocalSafetyBoolean(value) {
+  return Boolean(value);
+}
+
+function normalizeLocalSafetyIdList(value) {
+  const seenIds = new Set();
+
+  return (Array.isArray(value) ? value : [])
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => {
+      if (!entry || seenIds.has(entry)) {
+        return false;
+      }
+
+      seenIds.add(entry);
+      return true;
+    });
+}
+
+export function normalizeMetadataSnapshotReason(value) {
+  const normalizedValue = typeof value === "string" ? value.trim() : "";
+  return metadataSnapshotReasons.includes(normalizedValue) ? normalizedValue : "";
+}
+
+export function normalizeLocalSafetyState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      ...emptyLocalSafetyState
+    };
+  }
+
+  return {
+    ...emptyLocalSafetyState,
+    ...value,
+    lastMetadataSnapshotAt: normalizeLibraryProvenanceTimestamp(value.lastMetadataSnapshotAt),
+    lastMetadataSnapshotReason: normalizeMetadataSnapshotReason(value.lastMetadataSnapshotReason),
+    lastMetadataSnapshotError: normalizeLibraryProvenanceText(value.lastMetadataSnapshotError),
+    metadataDirtySinceSnapshot: normalizeLocalSafetyBoolean(value.metadataDirtySinceSnapshot),
+    metadataDirtySinceFullBackup: normalizeLocalSafetyBoolean(value.metadataDirtySinceFullBackup),
+    changedItemIdsSinceSnapshot: normalizeLocalSafetyIdList(value.changedItemIdsSinceSnapshot),
+    changedItemIdsSinceFullBackup: normalizeLocalSafetyIdList(value.changedItemIdsSinceFullBackup)
+  };
 }
 
 export function normalizeLibraryProvenance(value, options = {}) {

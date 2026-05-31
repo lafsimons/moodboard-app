@@ -14,6 +14,7 @@ import {
   markBackupImported,
   markLibraryEdited,
   normalizeLibraryProvenance,
+  normalizeLocalSafetyState,
   normalizeSavedLibraryViews,
   normalizeLibrarySearch,
   normalizeLibraryUiState,
@@ -94,6 +95,29 @@ test("normalizeLibrarySearch and normalizeWardrobeSort stay additive", () => {
   assert.equal(normalizeWardrobeSort("name-desc"), "name-desc");
   assert.equal(normalizeWardrobeSort("tag"), "tag");
   assert.equal(normalizeWardrobeSort("unsupported"), defaultWardrobeSort);
+});
+
+test("normalizeLocalSafetyState preserves additive metadata snapshot state", () => {
+  assert.deepEqual(
+    normalizeLocalSafetyState({
+      lastMetadataSnapshotAt: "2026-05-26T10:00:00.000Z",
+      lastMetadataSnapshotReason: "before-import",
+      lastMetadataSnapshotError: "warning",
+      metadataDirtySinceSnapshot: 1,
+      metadataDirtySinceFullBackup: true,
+      changedItemIdsSinceSnapshot: ["item-1", "item-1", "", "item-2"],
+      changedItemIdsSinceFullBackup: ["item-2", "item-3"]
+    }),
+    {
+      lastMetadataSnapshotAt: "2026-05-26T10:00:00.000Z",
+      lastMetadataSnapshotReason: "before-import",
+      lastMetadataSnapshotError: "warning",
+      metadataDirtySinceSnapshot: true,
+      metadataDirtySinceFullBackup: true,
+      changedItemIdsSinceSnapshot: ["item-1", "item-2"],
+      changedItemIdsSinceFullBackup: ["item-2", "item-3"]
+    }
+  );
 });
 
 test("saved library view snapshot captures and reapplies MBA library filters and sort", () => {
