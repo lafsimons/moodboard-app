@@ -6895,6 +6895,8 @@ async function handleExportBackup() {
         items,
         appState: currentPersistedAppState,
         resolvePreviewAsset: resolvePreviewAssetForBackupPackageExport,
+        createPreviewAsset: createPreviewImageAsset,
+        createThumbnailAsset: createThumbnailImageAsset,
         onProgress: updateBackupPackageExportProgress
       });
       applyProvenanceUpdate(
