@@ -1,5 +1,5 @@
 import { applyPreviewImageFields, materializeItemImagesForExport, normalizeItemImages } from "./itemImages.js";
-import { normalizeItemSourceIdentity } from "./itemIdentity.js";
+import { normalizeItemSourceIdentity, normalizeSourceFilenameAliases } from "./itemIdentity.js";
 
 const LEGACY_METADATA_FIELDS = ["category", "collection", "productType", "sourceTags", "brand"];
 
@@ -81,11 +81,21 @@ export function migrateReferenceMetadataToTags(reference) {
     ...rest
   } = reference;
   const normalizedImages = normalizeItemImages(reference);
+  const canonicalSourceFilename =
+    reference?.sourceOriginalFilename ??
+    reference?.originalFilename ??
+    normalizedImages.original.originalFilename ??
+    normalizedImages.preview.originalFilename;
+  const sourceFilenameAliases = normalizeSourceFilenameAliases([
+    ...(Array.isArray(reference?.sourceFilenameAliases) ? reference.sourceFilenameAliases : []),
+    reference?.originalFilename,
+    normalizedImages.preview.originalFilename
+  ], {
+    excludedValues: [canonicalSourceFilename]
+  });
   const sourceIdentity = normalizeItemSourceIdentity(reference, {
     fallbackSourceOriginalFilename:
-      reference?.originalFilename ??
-      normalizedImages.original.originalFilename ??
-      normalizedImages.preview.originalFilename
+      canonicalSourceFilename
   });
 
   const normalizedReference = {
@@ -97,6 +107,7 @@ export function migrateReferenceMetadataToTags(reference) {
     },
     originalPreserved: normalizedImages.originalPreserved,
     ...sourceIdentity,
+    sourceFilenameAliases,
     tags,
     favorite: Boolean(reference.favorite)
   };

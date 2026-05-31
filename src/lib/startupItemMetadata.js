@@ -17,6 +17,35 @@ function normalizeArray(value) {
   return Array.isArray(value) ? [...value] : [];
 }
 
+function normalizeFilenameAlias(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeFilenameAliasKey(value) {
+  return normalizeFilenameAlias(value).toLowerCase();
+}
+
+function normalizeFilenameAliases(value) {
+  const seen = new Set();
+
+  return (Array.isArray(value) ? value : [])
+    .map(normalizeFilenameAlias)
+    .filter((alias) => {
+      if (!alias) {
+        return false;
+      }
+
+      const aliasKey = normalizeFilenameAliasKey(alias);
+
+      if (seen.has(aliasKey)) {
+        return false;
+      }
+
+      seen.add(aliasKey);
+      return true;
+    });
+}
+
 function createMetadataOnlyAsset(asset = {}) {
   const normalizedAsset = createImageAsset(asset);
 
@@ -78,6 +107,7 @@ export function stripItemMediaPayloads(record = {}) {
     sourceNamespace: normalizeText(record?.sourceNamespace),
     sourceRelativePath: normalizeText(record?.sourceRelativePath),
     sourceOriginalFilename: normalizeText(record?.sourceOriginalFilename),
+    sourceFilenameAliases: normalizeFilenameAliases(record?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(record?.sourceFileSize),
     sourceImageWidth: normalizeNumber(record?.sourceImageWidth),
     sourceImageHeight: normalizeNumber(record?.sourceImageHeight),

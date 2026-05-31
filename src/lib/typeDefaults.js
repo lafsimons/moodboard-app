@@ -55,6 +55,7 @@ export const emptyForm = {
   sourceNamespace: "",
   sourceRelativePath: "",
   sourceOriginalFilename: "",
+  sourceFilenameAliases: [],
   sourceFileSize: 0,
   sourceImageWidth: 0,
   sourceImageHeight: 0,

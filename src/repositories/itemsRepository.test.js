@@ -568,6 +568,8 @@ test("rename plus tag edit preserves resolved blob-backed preview media for impo
         itemUuid: "uuid-imported",
         name: "Before",
         tags: [],
+        sourceOriginalFilename: "imported.png",
+        sourceFilenameAliases: ["camera-roll.png", "CAMERA-ROLL.png"],
         originalFilename: "imported.webp",
         images: {
           preview: {
@@ -612,6 +614,8 @@ test("rename plus tag edit preserves resolved blob-backed preview media for impo
 
   assert.equal(metadataOnlyItem.id, "item-imported");
   assert.equal(metadataOnlyItem.itemUuid, "uuid-imported");
+  assert.equal(metadataOnlyItem.sourceOriginalFilename, "imported.png");
+  assert.deepEqual(metadataOnlyItem.sourceFilenameAliases, ["camera-roll.png", "imported.webp"]);
   assert.equal(metadataOnlyItem.originalFilename, "imported.webp");
   assert.deepEqual(metadataOnlyItem.tags, ["archive"]);
   assert.equal(runtimeItem.name, "After");
