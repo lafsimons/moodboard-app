@@ -6,8 +6,12 @@ import {
   createMetadataOnlyBackupData,
   createLightweightBackupData,
   getDefaultData,
+  loadLatestMetadataSnapshotInfo,
+  markFullBackupExported,
+  markMetadataChanged,
   prepareBackupImport,
   prepareBackupPackageImportFromDirectory,
+  requestMetadataSnapshot,
   replaceWithPreparedBackupPackage,
   replaceWithPreparedBackup,
   resetToDefaults
@@ -129,9 +133,12 @@ import {
   applySavedLibraryViewToMetadataFilters,
   createSavedLibraryViewSnapshot,
   deleteSavedLibraryView,
+  formatImportSourceFormatLabel,
   markBackupExported,
   markBackupImported,
   markLibraryEdited,
+  markMetadataExported,
+  normalizeLocalSafetyState,
   normalizeLibraryProvenance,
   doesSavedLibraryViewMatchMetadataState,
   doesSavedLibraryViewMatchState,
@@ -703,21 +710,6 @@ function formatCreatedAt(value) {
 
 function formatLibraryProvenanceValue(value) {
   return formatCreatedAt(value) || "Never";
-}
-
-function formatBackupSchemaLabel(provenance) {
-  const source = typeof provenance?.lastImportedBackupSource === "string" ? provenance.lastImportedBackupSource.trim() : "";
-  const version = typeof provenance?.lastImportedBackupSchemaVersion === "string" ? provenance.lastImportedBackupSchemaVersion.trim() : "";
-
-  if (source && version) {
-    return `${source} v${version}`;
-  }
-
-  if (version) {
-    return `v${version}`;
-  }
-
-  return "";
 }
 
 function normalizeFileMetadataText(value) {
@@ -3643,6 +3635,15 @@ function isLikelyJsonBackupFile(file) {
   return !fileType || fileType.includes("json") || fileName.endsWith(".json");
 }
 
+function buildSnapshotTrackedAppStateSignature(appState) {
+  if (!appState || typeof appState !== "object" || Array.isArray(appState)) {
+    return "{}";
+  }
+
+  const { provenance, localSafety, recentOutfits, ...rest } = appState;
+  return JSON.stringify(rest);
+}
+
 const emptyWeatherSettings = {
   locationName: "",
   latitude: null,
@@ -3815,8 +3816,12 @@ export default function App() {
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
   const currentPersistedAppStateRef = useRef(null);
+  const previousSnapshotTrackedAppStateRef = useRef(null);
+  const localSafetyRef = useRef(normalizeLocalSafetyState());
   const pendingAppStateSaveRef = useRef(null);
   const appStateSaveInFlightRef = useRef(false);
+  const appStateSavePromiseRef = useRef(Promise.resolve());
+  const importCommitInFlightRef = useRef(false);
   const pendingPersistenceReadyRef = useRef(false);
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
@@ -3893,6 +3898,7 @@ export default function App() {
   const [wardrobeAddOpen, setWardrobeAddOpen] = useState(false);
   const [savedLibraryViews, setSavedLibraryViews] = useState([]);
   const [provenance, setProvenance] = useState(() => normalizeLibraryProvenance());
+  const [localSafety, setLocalSafety] = useState(() => normalizeLocalSafetyState());
   const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
@@ -5743,6 +5749,7 @@ export default function App() {
       setWardrobeSort(normalizeWardrobeSort(defaultState.wardrobeSort));
       setSavedLibraryViews(normalizeSavedLibraryViews(defaultState.savedLibraryViews));
       setProvenance(normalizedProvenance);
+      setLocalSafety(normalizeLocalSafetyState(defaultState.localSafety));
       setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
       setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
       const normalizedLibraryUiState = normalizeLibraryUiState(defaultState.libraryUiState);
@@ -5760,10 +5767,15 @@ export default function App() {
       let fallbackItems = [];
 
       try {
-        const [storedAppState, startupItems] = await Promise.all([
+        const [storedAppState, startupItems, latestMetadataSnapshotInfoResult] = await Promise.all([
           loadStartupAppState(),
-          loadStartupItemMetadata()
+          loadStartupItemMetadata(),
+          loadLatestMetadataSnapshotInfo().catch((error) => {
+            console.warn("Failed to load metadata snapshot status during bootstrap.", error);
+            return null;
+          })
         ]);
+        const latestMetadataSnapshotInfo = latestMetadataSnapshotInfoResult;
         const effectiveItems = startupItems.length
           ? startupItems.map((item) => normalizeItem(item))
           : [];
@@ -5789,6 +5801,15 @@ export default function App() {
           const normalizedRecentOutfits = normalizeRecentOutfits(storedAppState.recentOutfits);
           const normalizedProvenance = normalizeLibraryProvenance(storedAppState.provenance, {
             itemCountSnapshot: effectiveItems.length
+          });
+          const normalizedLocalSafety = normalizeLocalSafetyState({
+            ...storedAppState.localSafety,
+            ...(latestMetadataSnapshotInfo
+              ? {
+                  lastMetadataSnapshotAt: latestMetadataSnapshotInfo.createdAt,
+                  lastMetadataSnapshotReason: latestMetadataSnapshotInfo.reason
+                }
+              : {})
           });
           setLayering(Boolean(storedAppState.layering));
           setAccessoriesEnabled(storedAppState.accessoriesEnabled ?? true);
@@ -5837,6 +5858,7 @@ export default function App() {
           setWardrobeSort(normalizedWardrobeSort);
           setSavedLibraryViews(normalizeSavedLibraryViews(storedAppState.savedLibraryViews));
           setProvenance(normalizedProvenance);
+          setLocalSafety(normalizedLocalSafety);
           setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
           setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
           setActivePanel(normalizedLibraryUiState.libraryOpen ? "wardrobe" : null);
@@ -5870,6 +5892,7 @@ export default function App() {
 
         console.error("Failed to restore library state. Falling back to defaults.", error);
         applyDefaultBootstrapState(fallbackItems);
+        setLocalSafety(normalizeLocalSafetyState());
       }
 
       if (!cancelled) {
@@ -5942,6 +5965,7 @@ export default function App() {
       provenance: normalizeLibraryProvenance(provenance, {
         itemCountSnapshot: items.length
       }),
+      localSafety: normalizeLocalSafetyState(localSafety),
       libraryUiState: {
         libraryOpen: activePanel === "wardrobe",
         wardrobeFiltersOpen,
@@ -5978,6 +6002,7 @@ export default function App() {
       wardrobeSort,
       savedLibraryViews,
       provenance,
+      localSafety,
       activePanel,
       wardrobeFiltersOpen,
       wardrobeSavedOpen,
@@ -5994,6 +6019,26 @@ export default function App() {
   useEffect(() => {
     currentPersistedAppStateRef.current = currentPersistedAppState;
   }, [currentPersistedAppState]);
+
+  useEffect(() => {
+    localSafetyRef.current = normalizeLocalSafetyState(localSafety);
+  }, [localSafety]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    const nextSignature = buildSnapshotTrackedAppStateSignature(currentPersistedAppState);
+    const previousSignature = previousSnapshotTrackedAppStateRef.current;
+    previousSnapshotTrackedAppStateRef.current = nextSignature;
+
+    if (previousSignature === null || previousSignature === nextSignature) {
+      return;
+    }
+
+    markMetadataDirty();
+  }, [currentPersistedAppState, loading]);
 
   useEffect(() => {
     if (!loading && !persistenceReady && pendingPersistenceReadyRef.current) {
@@ -6081,6 +6126,45 @@ export default function App() {
   }, [loading, persistenceReady]);
 
   useEffect(() => {
+    if (loading || !persistenceReady || !localSafety.metadataDirtySinceSnapshot) {
+      return undefined;
+    }
+
+    const timerId = window.setTimeout(() => {
+      void runMetadataSnapshot("autosnapshot", {
+        priority: "background",
+        changedItemIds: localSafety.changedItemIdsSinceSnapshot
+      });
+    }, 20 * 60 * 1000);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [loading, localSafety.changedItemIdsSinceSnapshot, localSafety.metadataDirtySinceSnapshot, persistenceReady]);
+
+  useEffect(() => {
+    if (loading || !persistenceReady) {
+      return undefined;
+    }
+
+    function handleVisibilityHiddenSnapshot() {
+      if (document.visibilityState !== "hidden" || !localSafety.metadataDirtySinceSnapshot) {
+        return;
+      }
+
+      void runMetadataSnapshot("visibility-hidden", {
+        priority: "background",
+        changedItemIds: localSafety.changedItemIdsSinceSnapshot
+      });
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityHiddenSnapshot);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityHiddenSnapshot);
+    };
+  }, [loading, localSafety.changedItemIdsSinceSnapshot, localSafety.metadataDirtySinceSnapshot, persistenceReady]);
+
+  useEffect(() => {
     if (loading || !persistenceReady) {
       return;
     }
@@ -6096,7 +6180,7 @@ export default function App() {
     pendingAppStateSaveRef.current = nextState;
 
     if (appStateSaveInFlightRef.current) {
-      return Promise.resolve();
+      return appStateSavePromiseRef.current;
     }
 
     appStateSaveInFlightRef.current = true;
@@ -6117,7 +6201,18 @@ export default function App() {
       }
     };
 
-    return flushQueuedState();
+    appStateSavePromiseRef.current = flushQueuedState();
+    return appStateSavePromiseRef.current;
+  }
+
+  async function drainAppStatePersistenceQueue() {
+    while (appStateSaveInFlightRef.current || pendingAppStateSaveRef.current) {
+      await appStateSavePromiseRef.current;
+    }
+  }
+
+  function dropPendingAppStatePersistence() {
+    pendingAppStateSaveRef.current = null;
   }
 
   function applyProvenanceUpdate(buildNextProvenance, options = {}) {
@@ -6155,6 +6250,61 @@ export default function App() {
         itemCountSnapshot
       })
     };
+  }
+
+  function applyLocalSafetyUpdate(buildNextLocalSafety) {
+    const nextLocalSafety = normalizeLocalSafetyState(buildNextLocalSafety(localSafetyRef.current));
+    localSafetyRef.current = nextLocalSafety;
+    setLocalSafety(nextLocalSafety);
+
+    if (!loading && persistenceReady && !importCommitInFlightRef.current) {
+      const nextAppState = {
+        ...(currentPersistedAppStateRef.current ?? currentPersistedAppState),
+        localSafety: nextLocalSafety
+      };
+      void enqueueAppStateSave(nextAppState, "localSafety");
+    }
+
+    return nextLocalSafety;
+  }
+
+  function markMetadataDirty(changedItemIds = []) {
+    applyLocalSafetyUpdate((currentLocalSafety) =>
+      markMetadataChanged(currentLocalSafety, {
+        changedItemIds
+      })
+    );
+  }
+
+  async function runMetadataSnapshot(reason, options = {}) {
+    const snapshotState = {
+      ...(options.appState ?? currentPersistedAppStateRef.current ?? currentPersistedAppState),
+      localSafety: normalizeLocalSafetyState(options.localSafety ?? localSafety)
+    };
+
+    try {
+      const result = await requestMetadataSnapshot({
+        reason,
+        items: options.items ?? items,
+        appState: snapshotState,
+        changedItemIds: options.changedItemIds,
+        appVersion: APP_BUILD_VERSION,
+        appBuildTime: APP_BUILD_TIME,
+        priority: options.priority === "blocking" ? "blocking" : "background"
+      });
+
+      setLocalSafety(result?.localSafety ?? normalizeLocalSafetyState());
+      return result;
+    } catch (error) {
+      console.error(`Metadata snapshot failed for ${reason}.`, error);
+      setLocalSafety((current) =>
+        normalizeLocalSafetyState({
+          ...current,
+          lastMetadataSnapshotError: error?.message || "Metadata snapshot failed."
+        })
+      );
+      return null;
+    }
   }
 
   useEffect(() => {
@@ -6765,6 +6915,7 @@ export default function App() {
     setProvenance(normalizeLibraryProvenance(nextAppState?.provenance, {
       itemCountSnapshot: effectiveItems.length
     }));
+    setLocalSafety(normalizeLocalSafetyState(nextAppState?.localSafety));
     setSideEditorWidth(normalizedPanelLayoutState.sideEditorWidth);
     setLibraryAddWidth(normalizedPanelLayoutState.libraryAddWidth);
     setOutfitFilters(normalizedOutfitFilters);
@@ -6791,7 +6942,51 @@ export default function App() {
     setWardrobeManageOpen(false);
   }
 
-async function handleExportBackup() {
+  async function verifyImportedPersistence(expectedItemCount, expectedAppState) {
+    const [persistedItems, persistedAppState] = await Promise.all([
+      loadStartupItemMetadata(),
+      loadStartupAppState()
+    ]);
+
+    if ((persistedItems?.length ?? 0) !== expectedItemCount) {
+      throw new Error(`Imported library persistence verification failed: expected ${expectedItemCount} items but found ${persistedItems?.length ?? 0}.`);
+    }
+
+    if (!persistedAppState) {
+      throw new Error("Imported library persistence verification failed: app state is missing.");
+    }
+
+    const warnings = [];
+    const expectedProvenance = normalizeLibraryProvenance(expectedAppState?.provenance, {
+      itemCountSnapshot: expectedItemCount
+    });
+    const persistedProvenance = normalizeLibraryProvenance(persistedAppState?.provenance, {
+      itemCountSnapshot: persistedItems.length
+    });
+
+    if (expectedProvenance.lastImportedBackupName && persistedProvenance.lastImportedBackupName !== expectedProvenance.lastImportedBackupName) {
+      warnings.push("Imported backup name did not persist.");
+    }
+
+    if (expectedProvenance.lastImportedBackupSource && persistedProvenance.lastImportedBackupSource !== expectedProvenance.lastImportedBackupSource) {
+      warnings.push("Imported backup source did not persist.");
+    }
+
+    if (
+      expectedProvenance.lastImportedBackupSchemaVersion
+      && persistedProvenance.lastImportedBackupSchemaVersion !== expectedProvenance.lastImportedBackupSchemaVersion
+    ) {
+      warnings.push("Imported backup schema version did not persist.");
+    }
+
+    return {
+      items: persistedItems,
+      appState: persistedAppState,
+      warnings
+    };
+  }
+
+  async function handleExportBackup() {
     try {
       const backup = await buildFullBackupExportData(items, currentPersistedAppState);
       const blob = createBackupExportBlob(backup);
@@ -6821,6 +7016,15 @@ async function handleExportBackup() {
       }
 
       if (downloadStatus === "saved") {
+        applyProvenanceUpdate(
+          (current) => markBackupExported(current, { itemCountSnapshot: items.length }),
+          {
+            itemCountSnapshot: items.length,
+            immediate: true,
+            reason: "backupExport"
+          }
+        );
+        applyLocalSafetyUpdate((currentLocalSafety) => markFullBackupExported(currentLocalSafety));
         setBackupExportStatus(blob.size >= BACKUP_EXPORT_WARN_BYTES ? `Full backup saved (${formattedSize}).` : "Backup saved.");
         return;
       }
@@ -6830,6 +7034,15 @@ async function handleExportBackup() {
           ? `Full backup download attempted (${formattedSize}).`
           : "Backup download attempted."
       );
+      applyProvenanceUpdate(
+        (current) => markBackupExported(current, { itemCountSnapshot: items.length }),
+        {
+          itemCountSnapshot: items.length,
+          immediate: true,
+          reason: "backupExport"
+        }
+      );
+      applyLocalSafetyUpdate((currentLocalSafety) => markFullBackupExported(currentLocalSafety));
     } catch {
       const fallbackBackup = buildMetadataOnlyBackupExportData(items, currentPersistedAppState);
       const copied = await copyTextToClipboard(JSON.stringify({
@@ -6862,10 +7075,26 @@ async function handleExportBackup() {
       }
 
       if (downloadStatus === "saved") {
+        applyProvenanceUpdate(
+          (current) => markMetadataExported(current, { itemCountSnapshot: items.length }),
+          {
+            itemCountSnapshot: items.length,
+            immediate: true,
+            reason: "metadataBackupExport"
+          }
+        );
         setBackupExportStatus("Metadata backup saved.");
         return;
       }
 
+      applyProvenanceUpdate(
+        (current) => markMetadataExported(current, { itemCountSnapshot: items.length }),
+        {
+          itemCountSnapshot: items.length,
+          immediate: true,
+          reason: "metadataBackupExport"
+        }
+      );
       setBackupExportStatus("Metadata backup download attempted.");
     } catch {
       setBackupExportStatus("Metadata backup export failed in this browser.");
@@ -6907,6 +7136,7 @@ async function handleExportBackup() {
           reason: "backupPackageExport"
         }
       );
+      applyLocalSafetyUpdate((currentLocalSafety) => markFullBackupExported(currentLocalSafety));
 
       clearBackupPackageExportProgress();
       if (result.warningCount > 0) {
@@ -6988,13 +7218,26 @@ async function handleExportBackup() {
         completed: preparedPackage.items.length,
         total: preparedPackage.items.length
       });
+      importCommitInFlightRef.current = true;
+      await drainAppStatePersistenceQueue();
+      dropPendingAppStatePersistence();
+      await runMetadataSnapshot("before-import", {
+        priority: "blocking",
+        changedItemIds: localSafety.changedItemIdsSinceSnapshot
+      });
       await replaceWithPreparedBackupPackage({
         ...preparedPackage,
         appState: importedAppState
       });
-      await applyLoadedData(preparedPackage.items, importedAppState);
+      const verifiedImport = await verifyImportedPersistence(preparedPackage.items.length, importedAppState);
+      await applyLoadedData(verifiedImport.items, verifiedImport.appState);
       clearBackupPackageImportProgress();
-      setBackupExportStatus("Scalable backup package imported.");
+      if (verifiedImport.warnings.length) {
+        console.warn("Scalable backup package import completed with provenance warnings.", verifiedImport.warnings);
+        setBackupExportStatus(`Scalable backup package imported with warnings: ${verifiedImport.warnings.join(" ")}`);
+      } else {
+        setBackupExportStatus("Scalable backup package imported.");
+      }
     } catch (error) {
       clearBackupPackageImportProgress();
 
@@ -7005,6 +7248,7 @@ async function handleExportBackup() {
 
       window.alert(error?.message || "This scalable backup package could not be imported.");
     } finally {
+      importCommitInFlightRef.current = false;
       setIsBackupPackageImporting(false);
     }
   }
@@ -7083,14 +7327,27 @@ async function handleExportBackup() {
     }
 
     try {
+      importCommitInFlightRef.current = true;
+      await drainAppStatePersistenceQueue();
+      dropPendingAppStatePersistence();
+      await runMetadataSnapshot("before-import", {
+        priority: "blocking",
+        changedItemIds: localSafety.changedItemIdsSinceSnapshot
+      });
       await replaceWithPreparedBackup({
         ...preparedBackup,
         appState: importedAppState
       });
-      await applyLoadedData(preparedBackup.items, importedAppState);
-      window.alert("Backup imported.");
+      const verifiedImport = await verifyImportedPersistence(preparedBackup.items.length, importedAppState);
+      await applyLoadedData(verifiedImport.items, verifiedImport.appState);
+      if (verifiedImport.warnings.length) {
+        console.warn("Backup import completed with provenance warnings.", verifiedImport.warnings);
+      }
+      window.alert(verifiedImport.warnings.length ? `Backup imported with warnings: ${verifiedImport.warnings.join(" ")}` : "Backup imported.");
     } catch (error) {
       window.alert(error?.message || "This backup could not be imported.");
+    } finally {
+      importCommitInFlightRef.current = false;
     }
   }
 
@@ -7930,10 +8187,15 @@ async function handleExportBackup() {
       return;
     }
 
+    await runMetadataSnapshot("before-bulk-edit", {
+      priority: "blocking",
+      changedItemIds: updatedItems.map((item) => item.id)
+    });
     await saveItems(updatedItems);
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
     setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+    markMetadataDirty(updatedItems.map((item) => item.id));
     applyProvenanceUpdate(
       (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
       { itemCountSnapshot: items.length }
@@ -7958,10 +8220,15 @@ async function handleExportBackup() {
       return 0;
     }
 
+    await runMetadataSnapshot("before-bulk-edit", {
+      priority: "blocking",
+      changedItemIds: updatedItems.map((item) => item.id)
+    });
     await saveItems(updatedItems);
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
     setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+    markMetadataDirty(updatedItems.map((item) => item.id));
     applyProvenanceUpdate(
       (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
       { itemCountSnapshot: items.length }
@@ -8693,6 +8960,7 @@ async function handleExportBackup() {
       clone[existingIndex] = mergeItemImageState(clone[existingIndex], persistedItem);
       return clone;
     });
+    markMetadataDirty([persistedItem.id]);
     applyProvenanceUpdate(
       (current) => markLibraryEdited(current, { itemCountSnapshot: nextItemCount }),
       { itemCountSnapshot: nextItemCount }
@@ -8794,6 +9062,10 @@ async function handleExportBackup() {
         ignored: 0,
         currentFile: ""
       });
+      await runMetadataSnapshot("before-import", {
+        priority: "blocking",
+        changedItemIds: localSafety.changedItemIdsSinceSnapshot
+      });
       const result = await importReferenceFiles(selectedFiles, items, {
         bakeItemImagePresentation,
         createOriginalImageAsset,
@@ -8821,6 +9093,7 @@ async function handleExportBackup() {
       if (result.successfulItems.length) {
         const nextItemCount = items.length + result.successfulItems.length;
         setItems((current) => [...current, ...result.successfulItems]);
+        markMetadataDirty(result.successfulItems.map((item) => item.id));
         applyProvenanceUpdate(
           (current) => markLibraryEdited(current, { itemCountSnapshot: nextItemCount }),
           { itemCountSnapshot: nextItemCount }
@@ -9049,6 +9322,7 @@ async function handleExportBackup() {
     setDraft(mergedDraft);
     setItems((current) => current.map((item) => item.id === mergedDraft.id ? mergeItemImageState(item, mergedDraft) : item));
     setReferencePreview((current) => current?.id === mergedDraft.id ? mergeItemImageState(current, mergedDraft) : current);
+    markMetadataDirty([mergedDraft.id]);
     void saveItem(persistedDraft).then((savedDraft) => {
       const nextSavedDraft = mergeItemImageState(currentItem, savedDraft ?? persistedDraft);
       setDraft((current) => current?.id === nextSavedDraft.id ? mergeItemImageState(current, nextSavedDraft) : current);
@@ -9281,8 +9555,13 @@ async function handleExportBackup() {
     const deletedReferenceIdSet = new Set(uniqueReferenceIds);
     const nextItemCount = items.filter((item) => !deletedReferenceIdSet.has(item.id)).length;
 
+    await runMetadataSnapshot("before-delete", {
+      priority: "blocking",
+      changedItemIds: uniqueReferenceIds
+    });
     await deleteItems(uniqueReferenceIds);
     setItems((current) => current.filter((item) => !deletedReferenceIdSet.has(item.id)));
+    markMetadataDirty(uniqueReferenceIds);
     applyProvenanceUpdate(
       (current) => markLibraryEdited(current, { itemCountSnapshot: nextItemCount }),
       { itemCountSnapshot: nextItemCount }
@@ -10893,7 +11172,8 @@ async function handleExportBackup() {
   const normalizedProvenance = normalizeLibraryProvenance(provenance, {
     itemCountSnapshot: items.length
   });
-  const packageSchemaLabel = formatBackupSchemaLabel(normalizedProvenance);
+  const normalizedLocalSafety = normalizeLocalSafetyState(localSafety);
+  const lastImportSourceFormatLabel = formatImportSourceFormatLabel(normalizedProvenance);
   const lastBackupImportLabel = normalizedProvenance.lastImportedBackupName
     ? `${formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt)} (${normalizedProvenance.lastImportedBackupName})`
     : formatLibraryProvenanceValue(normalizedProvenance.lastBackupImportAt);
@@ -10901,10 +11181,17 @@ async function handleExportBackup() {
     ["Build", appBuildLabel],
     ["File System Access", fileSystemAccessDebugLabel],
     ["Library updated", formatLibraryProvenanceValue(normalizedProvenance.lastLibraryEditAt)],
+    ["Last metadata snapshot", formatLibraryProvenanceValue(normalizedLocalSafety.lastMetadataSnapshotAt)],
+    ["Metadata snapshot reason", normalizedLocalSafety.lastMetadataSnapshotReason || "None"],
     ["Last backup export", formatLibraryProvenanceValue(normalizedProvenance.lastBackupExportAt)],
+    ["Last metadata export", formatLibraryProvenanceValue(normalizedProvenance.lastMetadataExportAt)],
+    ["Changed since snapshot", normalizedLocalSafety.metadataDirtySinceSnapshot ? "Yes" : "No"],
+    ["Changed since full backup", normalizedLocalSafety.metadataDirtySinceFullBackup ? "Yes" : "No"],
+    ["Changed items since backup", String(normalizedLocalSafety.changedItemIdsSinceFullBackup.length)],
+    ["Snapshot status", normalizedLocalSafety.lastMetadataSnapshotError || "Healthy"],
     ["Last backup import", lastBackupImportLabel],
     ["Items", String(normalizedProvenance.itemCountSnapshot || items.length || 0)],
-    ["Package schema", packageSchemaLabel || "Unknown"]
+    ["Last import source/format", lastImportSourceFormatLabel || "Unknown"]
   ];
   const mediaIntegritySummaryEntries = mediaIntegrityReport
     ? [
@@ -11419,6 +11706,7 @@ async function handleExportBackup() {
       )
     );
     setReferencePreview(persistedReferencePreview);
+    markMetadataDirty([persistedReferencePreview.id]);
     applyProvenanceUpdate(
       (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
       { itemCountSnapshot: items.length }

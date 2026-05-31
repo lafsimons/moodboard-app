@@ -8,21 +8,28 @@ import {
   backfillLocalSyncMetadata,
   clearSyncMetadata,
   createMetadataOnlyBackupData,
+  createMetadataSnapshot,
   createLightweightBackupData,
   deleteOriginalImageBlob,
   deleteItems,
   exportBackup,
   getOrCreateDeviceId,
+  loadLatestMetadataSnapshotInfo,
+  loadMetadataSnapshots,
   getSyncMetadata,
   hasOriginalImageBlob,
   loadAppState,
   loadItemMediaAssetById,
   loadItems,
+  markFullBackupExported,
+  markMetadataChanged,
   loadOriginalImageBlob,
   loadOriginalImageBlobEntry,
   loadStartupAppState,
   loadStartupItemMetadata,
   prepareBackupImport,
+  pruneMetadataSnapshots,
+  requestMetadataSnapshot,
   replaceWithBackup,
   replaceWithPreparedBackupPackage,
   replaceWithPreparedBackup,
@@ -39,6 +46,11 @@ import {
   pruneOutfitForDeletedReferences,
   pruneSavedOutfitsForDeletedReferences
 } from "./deleteStatePruning.js";
+import {
+  formatImportSourceFormatLabel,
+  markBackupExported,
+  markMetadataExported
+} from "./appStateModel.js";
 import defaultWardrobe from "../data/defaultWardrobe.js";
 
 class FakeIDBRequest {
@@ -216,6 +228,18 @@ function seedStore(indexedDb, databaseName, storeName, keyPath, records) {
   });
 }
 
+function seedDatabase(indexedDb, databaseName, version = 2) {
+  const database = indexedDb.getDatabase(databaseName) ?? new FakeDatabase(version);
+
+  if (!indexedDb.getDatabase(databaseName)) {
+    indexedDb.databases.set(databaseName, database);
+  } else {
+    database.version = version;
+  }
+
+  return database;
+}
+
 function getStoreStats(indexedDb, storeName) {
   return indexedDb.getDatabase(INDEXED_DB_NAME)?.stores.get(storeName) ?? null;
 }
@@ -371,6 +395,247 @@ test("createMetadataOnlyBackupData strips embedded media while preserving metada
   assert.equal("imageUrl" in backup.appState.board.images[0], false);
   assert.equal("embeddedItem" in backup.appState.savedOutfits[0].board.images[0], false);
   assert.equal("recentOutfits" in backup.appState, false);
+  assert.equal("localSafety" in backup.appState, false);
+});
+
+test("createMetadataSnapshot stores a complete metadata-only state using the metadata backup serialization path", async () => {
+  installFakeIndexedDb();
+
+  const appState = {
+    savedOutfits: [],
+    board: {
+      id: "board-1",
+      boardUuid: "board-uuid-1",
+      images: [
+        {
+          id: "board-image-1",
+          referenceId: "item-1"
+        }
+      ]
+    },
+    localSafety: {
+      metadataDirtySinceSnapshot: true,
+      metadataDirtySinceFullBackup: true,
+      changedItemIdsSinceSnapshot: ["item-1"],
+      changedItemIdsSinceFullBackup: ["item-1"]
+    }
+  };
+  const items = [
+    {
+      id: "item-1",
+      itemUuid: "uuid-1",
+      imageUrl: "data:image/webp;base64,preview",
+      imageWidth: 1400,
+      imageHeight: 933,
+      mimeType: "image/webp",
+      fileSize: 1500,
+      originalFilename: "look.jpg",
+      images: {
+        original: {
+          src: "data:image/jpeg;base64,original",
+          mimeType: "image/jpeg",
+          width: 3000,
+          height: 2000,
+          fileSize: 9000,
+          originalFilename: "look.jpg"
+        },
+        preview: {
+          src: "data:image/webp;base64,preview",
+          mimeType: "image/webp",
+          width: 1400,
+          height: 933,
+          fileSize: 1500,
+          originalFilename: "look.jpg"
+        },
+        thumbnail: {
+          src: "data:image/webp;base64,thumb",
+          mimeType: "image/webp",
+          width: 520,
+          height: 346,
+          fileSize: 300,
+          originalFilename: "look.jpg"
+        }
+      },
+      tags: ["archive/look"]
+    }
+  ];
+
+  const metadataBackup = createMetadataOnlyBackupData(items, appState);
+  const result = await createMetadataSnapshot({
+    reason: "before-import",
+    items,
+    appState,
+    appVersion: "test-build",
+    changedItemIds: ["item-1"]
+  });
+
+  assert.deepEqual(result.snapshot.items, metadataBackup.items);
+  assert.deepEqual(result.snapshot.appState, metadataBackup.appState);
+  assert.equal(result.snapshot.reason, "before-import");
+  assert.equal(result.snapshot.itemCount, 1);
+  assert.equal(result.snapshot.boardCount, 1);
+  assert.equal(result.snapshot.changedItemCount, 1);
+  assert.equal(result.snapshot.items[0].images.preview.src, "");
+  assert.equal(result.snapshot.items[0].images.original.src, "");
+  assert.equal(result.localSafety.metadataDirtySinceSnapshot, false);
+  assert.deepEqual(result.localSafety.changedItemIdsSinceSnapshot, []);
+});
+
+test("metadata snapshot retention pruning keeps the most recent snapshots deterministically", async () => {
+  installFakeIndexedDb();
+
+  for (let index = 0; index < 45; index += 1) {
+    await createMetadataSnapshot({
+      reason: "autosnapshot",
+      createdAt: `2026-05-31T10:${String(index).padStart(2, "0")}:00.000Z`,
+      items: [],
+      appState: {
+        savedOutfits: [],
+        localSafety: {
+          metadataDirtySinceSnapshot: true
+        }
+      }
+    });
+  }
+
+  const snapshots = await loadMetadataSnapshots();
+  assert.equal(snapshots.length, 40);
+  assert.equal(snapshots[0].createdAt, "2026-05-31T10:44:00.000Z");
+  assert.equal(snapshots.at(-1)?.createdAt, "2026-05-31T10:05:00.000Z");
+
+  const pruneResult = await pruneMetadataSnapshots({ retainCount: 10 });
+  assert.equal(pruneResult.deletedCount, 30);
+  assert.equal((await loadMetadataSnapshots()).length, 10);
+});
+
+test("metadata dirty tracking updates and full backup reset is separated from snapshot reset", () => {
+  const changedLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-1", "item-2"]
+  });
+
+  assert.equal(changedLocalSafety.metadataDirtySinceSnapshot, true);
+  assert.equal(changedLocalSafety.metadataDirtySinceFullBackup, true);
+  assert.deepEqual(changedLocalSafety.changedItemIdsSinceSnapshot, ["item-1", "item-2"]);
+  assert.deepEqual(changedLocalSafety.changedItemIdsSinceFullBackup, ["item-1", "item-2"]);
+
+  const resetForFullBackup = markFullBackupExported(changedLocalSafety);
+  assert.equal(resetForFullBackup.metadataDirtySinceSnapshot, true);
+  assert.equal(resetForFullBackup.metadataDirtySinceFullBackup, false);
+  assert.deepEqual(resetForFullBackup.changedItemIdsSinceSnapshot, ["item-1", "item-2"]);
+  assert.deepEqual(resetForFullBackup.changedItemIdsSinceFullBackup, []);
+});
+
+test("metadata-only export updates metadata export provenance without clearing the full-backup dirty baseline", () => {
+  const changedLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-1"]
+  });
+  const nextProvenance = markMetadataExported(undefined, {
+    exportedAt: "2026-05-31T12:00:00.000Z",
+    itemCountSnapshot: 1
+  });
+
+  assert.equal(nextProvenance.lastMetadataExportAt, "2026-05-31T12:00:00.000Z");
+  assert.equal(nextProvenance.lastBackupExportAt, "");
+  assert.equal(changedLocalSafety.metadataDirtySinceFullBackup, true);
+  assert.deepEqual(changedLocalSafety.changedItemIdsSinceFullBackup, ["item-1"]);
+});
+
+test("full JSON backup export clears the full-backup dirty baseline and updates last backup export provenance", () => {
+  const changedLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-1", "item-2"]
+  });
+  const nextProvenance = markBackupExported(undefined, {
+    exportedAt: "2026-05-31T13:00:00.000Z",
+    itemCountSnapshot: 2
+  });
+  const nextLocalSafety = markFullBackupExported(changedLocalSafety);
+
+  assert.equal(nextProvenance.lastBackupExportAt, "2026-05-31T13:00:00.000Z");
+  assert.equal(nextProvenance.lastMetadataExportAt, "");
+  assert.equal(nextLocalSafety.metadataDirtySinceFullBackup, false);
+  assert.deepEqual(nextLocalSafety.changedItemIdsSinceFullBackup, []);
+});
+
+test("scalable package export uses the same full-backup provenance and dirty-baseline reset semantics", () => {
+  const changedLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-9"]
+  });
+  const nextProvenance = markBackupExported(undefined, {
+    exportedAt: "2026-05-31T14:00:00.000Z",
+    itemCountSnapshot: 1
+  });
+  const nextLocalSafety = markFullBackupExported(changedLocalSafety);
+
+  assert.equal(nextProvenance.lastBackupExportAt, "2026-05-31T14:00:00.000Z");
+  assert.equal(nextLocalSafety.metadataDirtySinceFullBackup, false);
+  assert.deepEqual(nextLocalSafety.changedItemIdsSinceFullBackup, []);
+});
+
+test("requestMetadataSnapshot serializes overlapping autosnapshot requests into at most one follow-up write", async () => {
+  installFakeIndexedDb();
+
+  const appState = {
+    savedOutfits: [],
+    localSafety: {
+      metadataDirtySinceSnapshot: true,
+      changedItemIdsSinceSnapshot: ["item-1"]
+    }
+  };
+
+  await Promise.all([
+    requestMetadataSnapshot({
+      reason: "autosnapshot",
+      items: [{ id: "item-1", itemUuid: "uuid-1" }],
+      appState,
+      changedItemIds: ["item-1"]
+    }),
+    requestMetadataSnapshot({
+      reason: "autosnapshot",
+      items: [{ id: "item-2", itemUuid: "uuid-2" }],
+      appState,
+      changedItemIds: ["item-2"]
+    }),
+    requestMetadataSnapshot({
+      reason: "autosnapshot",
+      items: [{ id: "item-3", itemUuid: "uuid-3" }],
+      appState,
+      changedItemIds: ["item-3"]
+    })
+  ]);
+
+  const snapshots = await loadMetadataSnapshots();
+  assert.equal(snapshots.length, 2);
+  assert.deepEqual(snapshots[0].changedItemIds, ["item-2", "item-3"]);
+});
+
+test("loadLatestMetadataSnapshotInfo returns the latest snapshot summary", async () => {
+  installFakeIndexedDb();
+
+  await createMetadataSnapshot({
+    reason: "before-delete",
+    createdAt: "2026-05-31T10:00:00.000Z",
+    items: [{ id: "item-1", itemUuid: "uuid-1" }],
+    appState: { savedOutfits: [] },
+    changedItemIds: ["item-1"]
+  });
+  await createMetadataSnapshot({
+    reason: "before-import",
+    createdAt: "2026-05-31T11:00:00.000Z",
+    items: [{ id: "item-2", itemUuid: "uuid-2" }],
+    appState: { savedOutfits: [] },
+    changedItemIds: ["item-2"]
+  });
+
+  assert.deepEqual(await loadLatestMetadataSnapshotInfo(), {
+    id: (await loadMetadataSnapshots({ limit: 1 }))[0].id,
+    createdAt: "2026-05-31T11:00:00.000Z",
+    reason: "before-import",
+    appVersion: "",
+    appBuildTime: "",
+    itemCount: 1,
+    boardCount: 0,
+    changedItemCount: 1
+  });
 });
 
 test("default wardrobe demo references point at bundled working image assets", () => {
@@ -399,10 +664,81 @@ test("db upgrade creates sync stores", async () => {
   await getOrCreateDeviceId();
 
   const database = indexedDb.getDatabase("moodboard-app-db");
-  assert.equal(database.version, 4);
+  assert.equal(database.version, 6);
   assert.equal(database.stores.has("itemMediaAssets"), true);
   assert.equal(database.stores.has("syncState"), true);
   assert.equal(database.stores.has("syncMetadata"), true);
+  assert.equal(database.stores.has("metadataSnapshots"), true);
+});
+
+test("startup loaders upgrade an older database and create metadataSnapshots without losing stored library data", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 4);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.stores.get("items").records.set("item-1", {
+    id: "item-1",
+    itemUuid: "uuid-1",
+    title: "Imported item"
+  });
+  database.stores.get("appState").records.set("state", {
+    key: "state",
+    value: {
+      savedOutfits: [],
+      provenance: {
+        source: "backup-import",
+        importedAt: "2026-05-31T10:00:00.000Z"
+      }
+    }
+  });
+
+  const [appState, items, snapshotInfo] = await Promise.all([
+    loadStartupAppState(),
+    loadStartupItemMetadata(),
+    loadLatestMetadataSnapshotInfo()
+  ]);
+
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).version, 6);
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).stores.has("metadataSnapshots"), true);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "Imported item");
+  assert.equal(appState?.provenance?.source, "backup-import");
+  assert.equal(snapshotInfo, null);
+});
+
+test("missing metadataSnapshots store returns empty snapshot info without breaking persisted startup library loads", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 6);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.stores.get("items").records.set("item-1", {
+    id: "item-1",
+    itemUuid: "uuid-1",
+    title: "Persisted item"
+  });
+  database.stores.get("appState").records.set("state", {
+    key: "state",
+    value: {
+      savedOutfits: [],
+      localSafety: {
+        metadataDirtySinceSnapshot: true,
+        changedItemIdsSinceSnapshot: ["item-1"]
+      }
+    }
+  });
+
+  const snapshotInfo = await loadLatestMetadataSnapshotInfo();
+  const [items, appState] = await Promise.all([loadStartupItemMetadata(), loadStartupAppState()]);
+
+  assert.equal(snapshotInfo, null);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "Persisted item");
+  assert.equal(appState?.localSafety?.metadataDirtySinceSnapshot, true);
+  assert.deepEqual(appState?.localSafety?.changedItemIdsSinceSnapshot, ["item-1"]);
 });
 
 test("getOrCreateDeviceId creates and reuses a stable local device id", async () => {
@@ -1360,12 +1696,22 @@ test("saveAppState skips oversized persisted payloads", async () => {
     provenance: {
       lastLibraryEditAt: "",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "",
       lastImportedBackupSource: "",
       lastImportedBackupSchemaVersion: "",
       itemCountSnapshot: 0,
       appVersion: ""
+    },
+    localSafety: {
+      lastMetadataSnapshotAt: "",
+      lastMetadataSnapshotReason: "",
+      lastMetadataSnapshotError: "",
+      metadataDirtySinceSnapshot: false,
+      metadataDirtySinceFullBackup: false,
+      changedItemIdsSinceSnapshot: [],
+      changedItemIdsSinceFullBackup: []
     },
     outfit: {},
     board: null
@@ -1383,6 +1729,42 @@ test("loadStartupAppState bypasses migration gating and returns persisted state"
   const appState = await loadStartupAppState();
 
   assert.equal(appState.librarySearch, "coat");
+});
+
+test("localSafety persists through local app-state save and startup load", async () => {
+  installFakeIndexedDb();
+
+  const nextLocalSafety = markMetadataChanged(undefined, {
+    changedItemIds: ["item-1"]
+  });
+
+  await saveAppState({
+    savedOutfits: [],
+    localSafety: nextLocalSafety
+  });
+
+  const loadedAppState = await loadAppState();
+  const startupAppState = await loadStartupAppState();
+
+  assert.equal(loadedAppState.localSafety.metadataDirtySinceSnapshot, true);
+  assert.equal(loadedAppState.localSafety.metadataDirtySinceFullBackup, true);
+  assert.deepEqual(loadedAppState.localSafety.changedItemIdsSinceSnapshot, ["item-1"]);
+  assert.deepEqual(loadedAppState.localSafety.changedItemIdsSinceFullBackup, ["item-1"]);
+  assert.deepEqual(startupAppState.localSafety, loadedAppState.localSafety);
+});
+
+test("portable backup export excludes localSafety while local persistence keeps it", () => {
+  const backup = createLightweightBackupData([], {
+    savedOutfits: [],
+    localSafety: {
+      metadataDirtySinceSnapshot: true,
+      metadataDirtySinceFullBackup: true,
+      changedItemIdsSinceSnapshot: ["item-1"],
+      changedItemIdsSinceFullBackup: ["item-1"]
+    }
+  });
+
+  assert.equal("localSafety" in backup.appState, false);
 });
 
 test("saveAppState and startup load preserve saved library views through local app-state persistence", async () => {
@@ -1987,6 +2369,7 @@ test("prepareBackupImport normalizes legacy backups and fills source identity de
     provenance: {
       lastLibraryEditAt: "",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "",
       lastImportedBackupSource: "",
@@ -2029,6 +2412,7 @@ test("prepareBackupImport accepts moodboard-app backups", () => {
     provenance: {
       lastLibraryEditAt: "",
       lastBackupExportAt: "",
+      lastMetadataExportAt: "",
       lastBackupImportAt: "",
       lastImportedBackupName: "",
       lastImportedBackupSource: "",
@@ -2664,6 +3048,299 @@ test("replaceWithPreparedBackupPackage stores preview media, clears originals, a
   assert.equal(await getSyncMetadata("mba:reference:stale-uuid"), null);
 });
 
+test("replaceWithPreparedBackup persists imported items and app state across startup reloads", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackup({
+    items: [
+      {
+        id: "item-1",
+        itemUuid: "uuid-1",
+        imageUrl: "data:image/webp;base64,preview-1",
+        imageWidth: 1200,
+        imageHeight: 800,
+        mimeType: "image/webp",
+        fileSize: 1111,
+        originalFilename: "ref-1.webp"
+      },
+      {
+        id: "item-2",
+        itemUuid: "uuid-2",
+        imageUrl: "data:image/webp;base64,preview-2",
+        imageWidth: 900,
+        imageHeight: 600,
+        mimeType: "image/webp",
+        fileSize: 999,
+        originalFilename: "ref-2.webp"
+      }
+    ],
+    appState: {
+      savedOutfits: [
+        {
+          id: "saved-1",
+          board: {
+            id: "board-1",
+            boardUuid: "board-uuid-1",
+            images: [{ id: "board-image-1", referenceId: "item-1" }]
+          }
+        }
+      ],
+      librarySearch: "imported-library",
+      provenance: {
+        lastImportedBackupName: "backup.json",
+        lastImportedBackupSource: "moodboard-app",
+        lastImportedBackupSchemaVersion: 2,
+        itemCountSnapshot: 2
+      }
+    }
+  });
+
+  const startupItems = await loadStartupItemMetadata();
+  const loadedItems = await loadItems();
+  const startupAppState = await loadStartupAppState();
+
+  assert.equal(startupItems.length, 2);
+  assert.equal(loadedItems.length, 2);
+  assert.equal(startupAppState.librarySearch, "imported-library");
+  assert.equal(startupAppState.savedOutfits.length, 1);
+  assert.equal(startupAppState.provenance.lastImportedBackupName, "backup.json");
+  assert.equal(formatImportSourceFormatLabel(startupAppState.provenance), "moodboard-app v2");
+});
+
+test("imported items remain present after subsequent localSafety persistence", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    items: [
+      {
+        id: "item-a",
+        itemUuid: "uuid-a",
+        originalPreserved: false,
+        images: {
+          original: { src: "", mimeType: "", width: 0, height: 0 },
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 600,
+            height: 400,
+            fileSize: 321,
+            originalFilename: "preview-a.webp"
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "image/webp",
+            width: 300,
+            height: 200
+          }
+        }
+      },
+      {
+        id: "item-b",
+        itemUuid: "uuid-b",
+        originalPreserved: false,
+        images: {
+          original: { src: "", mimeType: "", width: 0, height: 0 },
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 500,
+            height: 500,
+            fileSize: 222,
+            originalFilename: "preview-b.webp"
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "image/webp",
+            width: 250,
+            height: 250
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      librarySearch: "package-import",
+      provenance: {
+        lastImportedBackupName: "package-dir",
+        lastImportedBackupSource: "moodboard-app-package",
+        lastImportedBackupSchemaVersion: 1,
+        itemCountSnapshot: 2
+      }
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-a",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 600,
+          height: 400,
+          originalFilename: "preview-a.webp",
+          blob: new Blob(["preview-a"], { type: "image/webp" })
+        }
+      },
+      {
+        itemId: "item-b",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 500,
+          height: 500,
+          originalFilename: "preview-b.webp",
+          blob: new Blob(["preview-b"], { type: "image/webp" })
+        }
+      }
+    ]
+  });
+
+  const persistedAfterImport = await loadAppState();
+  const nextLocalSafety = markMetadataChanged(persistedAfterImport.localSafety, {
+    changedItemIds: ["item-a"]
+  });
+
+  await saveAppState({
+    ...persistedAfterImport,
+    localSafety: nextLocalSafety
+  });
+
+  const startupItems = await loadStartupItemMetadata();
+  const startupAppState = await loadStartupAppState();
+
+  assert.equal(startupItems.length, 2);
+  assert.equal(startupAppState.librarySearch, "package-import");
+  assert.equal(startupAppState.provenance.lastImportedBackupName, "package-dir");
+  assert.equal(startupAppState.provenance.lastImportedBackupSource, "moodboard-app-package");
+  assert.equal(startupAppState.provenance.lastImportedBackupSchemaVersion, "1");
+  assert.equal(formatImportSourceFormatLabel(startupAppState.provenance), "moodboard-app-package v1");
+  assert.equal(startupAppState.localSafety.metadataDirtySinceSnapshot, true);
+  assert.deepEqual(startupAppState.localSafety.changedItemIdsSinceSnapshot, ["item-a"]);
+});
+
+test("replaceWithPreparedBackupPackage preserves provenance through startup reload when present", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    items: [
+      {
+        id: "item-provenance",
+        itemUuid: "uuid-provenance",
+        originalPreserved: false,
+        images: {
+          original: { src: "", mimeType: "", width: 0, height: 0 },
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            originalFilename: "preview.webp"
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      provenance: {
+        lastImportedBackupName: "package-dir",
+        lastImportedBackupSource: "moodboard-app-package",
+        lastImportedBackupSchemaVersion: 1,
+        itemCountSnapshot: 1
+      }
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-provenance",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          originalFilename: "preview.webp",
+          blob: new Blob(["preview-provenance"], { type: "image/webp" })
+        }
+      }
+    ]
+  });
+
+  const startupAppState = await loadStartupAppState();
+
+  assert.equal(startupAppState.provenance.lastImportedBackupName, "package-dir");
+  assert.equal(startupAppState.provenance.lastImportedBackupSource, "moodboard-app-package");
+  assert.equal(startupAppState.provenance.lastImportedBackupSchemaVersion, "1");
+});
+
+test("replaceWithPreparedBackupPackage does not require provenance to persist imported items", async () => {
+  installFakeIndexedDb();
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    items: [
+      {
+        id: "item-no-provenance",
+        itemUuid: "uuid-no-provenance",
+        originalPreserved: false,
+        images: {
+          original: { src: "", mimeType: "", width: 0, height: 0 },
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 500,
+            height: 300,
+            originalFilename: "preview.webp"
+          },
+          thumbnail: {
+            src: "",
+            mimeType: "",
+            width: 0,
+            height: 0
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: [],
+      librarySearch: "no-provenance"
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-no-provenance",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 500,
+          height: 300,
+          originalFilename: "preview.webp",
+          blob: new Blob(["preview-no-provenance"], { type: "image/webp" })
+        }
+      }
+    ]
+  });
+
+  const startupItems = await loadStartupItemMetadata();
+  const startupAppState = await loadStartupAppState();
+
+  assert.equal(startupItems.length, 1);
+  assert.equal(startupAppState.librarySearch, "no-provenance");
+  assert.equal(startupAppState.provenance.lastImportedBackupName, "");
+});
+
 test("resetToDefaults clears stale sync metadata and rebuilds metadata for default references", async () => {
   installFakeIndexedDb();
 
@@ -2834,6 +3511,7 @@ test("saveAppState persists provenance metadata and loadStartupAppState returns 
     provenance: {
       lastLibraryEditAt: "2026-05-26T11:00:00.000Z",
       lastBackupExportAt: "2026-05-26T12:00:00.000Z",
+      lastMetadataExportAt: "2026-05-26T12:30:00.000Z",
       lastBackupImportAt: "2026-05-26T13:00:00.000Z",
       lastImportedBackupName: "mba-package",
       lastImportedBackupSource: "moodboard-app-package",
@@ -2848,6 +3526,7 @@ test("saveAppState persists provenance metadata and loadStartupAppState returns 
   assert.deepEqual(loaded.provenance, {
     lastLibraryEditAt: "2026-05-26T11:00:00.000Z",
     lastBackupExportAt: "2026-05-26T12:00:00.000Z",
+    lastMetadataExportAt: "2026-05-26T12:30:00.000Z",
     lastBackupImportAt: "2026-05-26T13:00:00.000Z",
     lastImportedBackupName: "mba-package",
     lastImportedBackupSource: "moodboard-app-package",
@@ -2900,6 +3579,7 @@ test("replaceWithPreparedBackup preserves imported provenance metadata and old a
   assert.deepEqual(oldState.provenance, {
     lastLibraryEditAt: "",
     lastBackupExportAt: "",
+    lastMetadataExportAt: "",
     lastBackupImportAt: "",
     lastImportedBackupName: "",
     lastImportedBackupSource: "",

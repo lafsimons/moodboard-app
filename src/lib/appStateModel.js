@@ -21,12 +21,35 @@ export const emptySavedLibraryViews = [];
 export const emptyLibraryProvenance = {
   lastLibraryEditAt: "",
   lastBackupExportAt: "",
+  lastMetadataExportAt: "",
   lastBackupImportAt: "",
   lastImportedBackupName: "",
   lastImportedBackupSource: "",
   lastImportedBackupSchemaVersion: "",
   itemCountSnapshot: 0,
   appVersion: ""
+};
+
+export const metadataSnapshotReasons = [
+  "autosnapshot",
+  "visibility-hidden",
+  "before-import",
+  "before-bulk-edit",
+  "before-delete",
+  "before-migration",
+  "before-repair",
+  "before-dedupe",
+  "manual"
+];
+
+export const emptyLocalSafetyState = {
+  lastMetadataSnapshotAt: "",
+  lastMetadataSnapshotReason: "",
+  lastMetadataSnapshotError: "",
+  metadataDirtySinceSnapshot: false,
+  metadataDirtySinceFullBackup: false,
+  changedItemIdsSinceSnapshot: [],
+  changedItemIdsSinceFullBackup: []
 };
 
 function normalizeLibraryProvenanceText(value) {
@@ -57,6 +80,50 @@ function normalizeLibraryProvenanceCount(value, fallback = 0) {
   return Number.isFinite(parsedValue) && parsedValue >= 0 ? Math.round(parsedValue) : fallback;
 }
 
+function normalizeLocalSafetyBoolean(value) {
+  return Boolean(value);
+}
+
+function normalizeLocalSafetyIdList(value) {
+  const seenIds = new Set();
+
+  return (Array.isArray(value) ? value : [])
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => {
+      if (!entry || seenIds.has(entry)) {
+        return false;
+      }
+
+      seenIds.add(entry);
+      return true;
+    });
+}
+
+export function normalizeMetadataSnapshotReason(value) {
+  const normalizedValue = typeof value === "string" ? value.trim() : "";
+  return metadataSnapshotReasons.includes(normalizedValue) ? normalizedValue : "";
+}
+
+export function normalizeLocalSafetyState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      ...emptyLocalSafetyState
+    };
+  }
+
+  return {
+    ...emptyLocalSafetyState,
+    ...value,
+    lastMetadataSnapshotAt: normalizeLibraryProvenanceTimestamp(value.lastMetadataSnapshotAt),
+    lastMetadataSnapshotReason: normalizeMetadataSnapshotReason(value.lastMetadataSnapshotReason),
+    lastMetadataSnapshotError: normalizeLibraryProvenanceText(value.lastMetadataSnapshotError),
+    metadataDirtySinceSnapshot: normalizeLocalSafetyBoolean(value.metadataDirtySinceSnapshot),
+    metadataDirtySinceFullBackup: normalizeLocalSafetyBoolean(value.metadataDirtySinceFullBackup),
+    changedItemIdsSinceSnapshot: normalizeLocalSafetyIdList(value.changedItemIdsSinceSnapshot),
+    changedItemIdsSinceFullBackup: normalizeLocalSafetyIdList(value.changedItemIdsSinceFullBackup)
+  };
+}
+
 export function normalizeLibraryProvenance(value, options = {}) {
   const fallbackItemCount = normalizeLibraryProvenanceCount(options.itemCountSnapshot, 0);
 
@@ -72,6 +139,7 @@ export function normalizeLibraryProvenance(value, options = {}) {
     ...value,
     lastLibraryEditAt: normalizeLibraryProvenanceTimestamp(value.lastLibraryEditAt),
     lastBackupExportAt: normalizeLibraryProvenanceTimestamp(value.lastBackupExportAt),
+    lastMetadataExportAt: normalizeLibraryProvenanceTimestamp(value.lastMetadataExportAt),
     lastBackupImportAt: normalizeLibraryProvenanceTimestamp(value.lastBackupImportAt),
     lastImportedBackupName: normalizeLibraryProvenanceText(value.lastImportedBackupName),
     lastImportedBackupSource: normalizeLibraryProvenanceText(value.lastImportedBackupSource),
@@ -105,6 +173,16 @@ export function markBackupExported(provenance, options = {}) {
   }, options);
 }
 
+export function markMetadataExported(provenance, options = {}) {
+  const normalizedTimestamp = getLibraryProvenanceTimestamp(options.exportedAt);
+
+  return normalizeLibraryProvenance({
+    ...normalizeLibraryProvenance(provenance, options),
+    lastMetadataExportAt: normalizedTimestamp,
+    itemCountSnapshot: options.itemCountSnapshot
+  }, options);
+}
+
 export function markBackupImported(provenance, options = {}) {
   const normalizedTimestamp = getLibraryProvenanceTimestamp(options.importedAt);
 
@@ -117,6 +195,26 @@ export function markBackupImported(provenance, options = {}) {
     lastImportedBackupSchemaVersion: normalizeLibraryProvenanceVersion(options.lastImportedBackupSchemaVersion),
     itemCountSnapshot: options.itemCountSnapshot
   }, options);
+}
+
+export function formatImportSourceFormatLabel(provenance) {
+  const normalizedProvenance = normalizeLibraryProvenance(provenance);
+  const source = normalizedProvenance.lastImportedBackupSource;
+  const version = normalizedProvenance.lastImportedBackupSchemaVersion;
+
+  if (source && version) {
+    return `${source} v${version}`;
+  }
+
+  if (source) {
+    return source;
+  }
+
+  if (version) {
+    return `v${version}`;
+  }
+
+  return "";
 }
 
 export function normalizeMetadataFilterState(filters) {
