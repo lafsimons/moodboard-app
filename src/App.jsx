@@ -220,6 +220,7 @@ import {
   scanOriginalRecoveryDirectoryWithFileSystemAccess
 } from "./lib/originalRecoveryFileSystemAdapter.js";
 import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
+import { createLegacyProvenanceBackfillReport } from "./lib/legacyProvenanceBackfill.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
   eager: true,
@@ -3965,6 +3966,9 @@ export default function App() {
   const [originalRecoveryScanProgress, setOriginalRecoveryScanProgress] = useState("");
   const [originalRecoveryRuntimeSessionId, setOriginalRecoveryRuntimeSessionId] = useState("");
   const [originalRecoveryCandidateEntriesById, setOriginalRecoveryCandidateEntriesById] = useState({});
+  const [legacyProvenanceBackfillReport, setLegacyProvenanceBackfillReport] = useState(null);
+  const [legacyProvenanceBackfillFeedback, setLegacyProvenanceBackfillFeedback] = useState("");
+  const [isLegacyProvenanceBackfillApplying, setIsLegacyProvenanceBackfillApplying] = useState(false);
   const [selectedReferenceSelection, setSelectedReferenceSelection] = useState({
     ids: {},
     anchorId: null
@@ -5327,6 +5331,101 @@ export default function App() {
       showOriginalOperationFeedback(item.id, "Original marked as missing.");
     } catch (error) {
       showOriginalOperationFeedback(item.id, formatErrorMessage(error, "Failed to mark original as missing."), "error");
+    }
+  }
+
+  function formatLegacyProvenanceBackfillReason(reason) {
+    switch (reason) {
+      case "no_supported_folder_tag":
+        return "No supported folder/* tag";
+      case "conflicting_folder_tags":
+        return "Conflicting folder tags";
+      case "existing_namespace_conflict":
+        return "Existing source namespace conflicts";
+      case "existing_relative_path_conflict":
+        return "Existing source relative path conflicts";
+      case "no_legacy_numbered_filename":
+        return "No legacy images-NNN filename";
+      case "already_backfilled":
+        return "Already backfilled";
+      default:
+        return "Skipped";
+    }
+  }
+
+  async function handleLegacyProvenanceBackfillDryRun() {
+    const report = createLegacyProvenanceBackfillReport(items, { exampleLimit: 3 });
+    setLegacyProvenanceBackfillReport(report);
+
+    if (!report.affectedCount) {
+      setLegacyProvenanceBackfillFeedback(
+        `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts.`
+      );
+      return;
+    }
+
+    setLegacyProvenanceBackfillFeedback(
+      `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts.`
+    );
+  }
+
+  async function handleLegacyProvenanceBackfillApply() {
+    if (!legacyProvenanceBackfillReport?.affectedCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply legacy provenance backfill?",
+      message: `Affects ${legacyProvenanceBackfillReport.affectedCount} references, skips ${legacyProvenanceBackfillReport.skippedCount}, and leaves ${legacyProvenanceBackfillReport.conflictCount} conflicts untouched. Apply the dry-run changes now?`,
+      confirmLabel: "Apply backfill"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsLegacyProvenanceBackfillApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: legacyProvenanceBackfillReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with legacy provenance backfill anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const updatedItems = legacyProvenanceBackfillReport.affectedItems;
+      await saveItems(updatedItems);
+
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      markMetadataDirty(updatedItems.map((item) => item.id));
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+      setLegacyProvenanceBackfillReport(createLegacyProvenanceBackfillReport(nextItems, { exampleLimit: 3 }));
+      setLegacyProvenanceBackfillFeedback(
+        `Backfilled ${updatedItems.length} references. ${legacyProvenanceBackfillReport.skippedCount} were skipped and ${legacyProvenanceBackfillReport.conflictCount} remained conflicted in the dry run.`
+      );
+    } catch (error) {
+      setLegacyProvenanceBackfillFeedback(formatErrorMessage(error, "Legacy provenance backfill failed."));
+    } finally {
+      setIsLegacyProvenanceBackfillApplying(false);
     }
   }
 
@@ -13758,6 +13857,66 @@ export default function App() {
                           >
                             Original recovery
                           </button>
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleLegacyProvenanceBackfillDryRun()}
+                            disabled={isLegacyProvenanceBackfillApplying}
+                          >
+                            {isLegacyProvenanceBackfillApplying ? "Applying legacy provenance backfill..." : "Dry run legacy provenance backfill"}
+                          </button>
+                          {legacyProvenanceBackfillReport ? (
+                            <section className="media-integrity-report" aria-label="Legacy provenance backfill report">
+                              <p className="media-integrity-status">
+                                {legacyProvenanceBackfillReport.affectedCount} affected · {legacyProvenanceBackfillReport.skippedCount} skipped · {legacyProvenanceBackfillReport.conflictCount} conflicts
+                              </p>
+                              {legacyProvenanceBackfillFeedback ? (
+                                <p className="form-success tag-manager-feedback">{legacyProvenanceBackfillFeedback}</p>
+                              ) : null}
+                              {legacyProvenanceBackfillReport.examples.byNamespace.vintage.length
+                                || legacyProvenanceBackfillReport.examples.byNamespace.moodboard.length
+                                || legacyProvenanceBackfillReport.examples.byNamespace.wishlist.length ? (
+                                <div className="media-integrity-summary">
+                                  {["vintage", "moodboard", "wishlist"].map((namespace) => (
+                                    legacyProvenanceBackfillReport.examples.byNamespace[namespace].map((example) => (
+                                      <p key={`affected-${namespace}-${example.itemId}`} className="media-integrity-summary-row">
+                                        <span>{example.itemName || example.itemId}</span>
+                                        <strong>{example.sourceRelativePath || example.sourceFilenameAliases[0] || namespace}</strong>
+                                      </p>
+                                    ))
+                                  ))}
+                                </div>
+                              ) : null}
+                              {legacyProvenanceBackfillReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {legacyProvenanceBackfillReport.examples.skipped.map((example) => (
+                                    <p key={`skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatLegacyProvenanceBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {legacyProvenanceBackfillReport.examples.conflicts.length ? (
+                                <div className="media-integrity-issues">
+                                  {legacyProvenanceBackfillReport.examples.conflicts.map((example) => (
+                                    <p key={`conflict-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatLegacyProvenanceBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleLegacyProvenanceBackfillApply()}
+                                disabled={!legacyProvenanceBackfillReport.affectedCount || isLegacyProvenanceBackfillApplying}
+                              >
+                                Apply legacy provenance backfill
+                              </button>
+                            </section>
+                          ) : null}
                           <button
                             type="button"
                             className="ghost-button wardrobe-manage-action"
