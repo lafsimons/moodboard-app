@@ -194,6 +194,179 @@ test("buildOriginalRecoverySession does not auto-select legacy numbers without n
   assert.equal(session.matches[0].selectedCandidateId, "");
 });
 
+test("buildOriginalRecoverySession auto-approves safe moodboard legacy possible_single matches", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceRelativePath: "moodboard/images-002.png",
+        sourceOriginalFilename: "images-002.png",
+        sourceFilenameAliases: ["moodboard-images-002.png"],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/png",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "moodboard/moodboard-images-002.png",
+        fileName: "moodboard-images-002.png",
+        sourceFileSize: 1111,
+        sourceImageWidth: 222,
+        sourceImageHeight: 333,
+        sourceLastModified: 4444,
+        mimeType: "image/png"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "possible_single");
+  assert.equal(session.matches[0].decision, "accepted");
+  assert.equal(session.matches[0].selectedCandidateId, "candidate-1");
+  assert.equal(session.summary.approvedCount, 1);
+});
+
+test("buildOriginalRecoverySession auto-approves safe wishlist legacy possible_single matches", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceRelativePath: "wishlist/images-168.png",
+        sourceOriginalFilename: "images-168.png",
+        sourceFilenameAliases: ["wishlist-images-168.png"],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/png",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "wishlist/wishlist-images-168.png",
+        fileName: "wishlist-images-168.png",
+        sourceFileSize: 1111,
+        sourceImageWidth: 222,
+        sourceImageHeight: 333,
+        sourceLastModified: 4444,
+        mimeType: "image/png"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "possible_single");
+  assert.equal(session.matches[0].decision, "accepted");
+  assert.equal(session.matches[0].selectedCandidateId, "candidate-1");
+  assert.equal(session.summary.approvedCount, 1);
+});
+
+test("buildOriginalRecoverySession keeps generic filename-only possible_single matches in manual review", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceOriginalFilename: "image4.jpg",
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/jpeg",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "Discord/image4.jpg",
+        fileName: "image4.jpg",
+        sourceFileSize: 2463876,
+        sourceImageWidth: 3024,
+        sourceImageHeight: 4032,
+        sourceLastModified: 1755594906000,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "possible_single");
+  assert.equal(session.matches[0].decision, "undecided");
+});
+
+test("buildOriginalRecoverySession keeps generic fashion filename-only possible_single matches in manual review", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceOriginalFilename: "IMG_0190.PNG",
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/png",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "Fashion/Patrick Stangby/IMG_0190.PNG",
+        fileName: "IMG_0190.PNG",
+        sourceFileSize: 2463876,
+        sourceImageWidth: 3024,
+        sourceImageHeight: 4032,
+        sourceLastModified: 1755594906000,
+        mimeType: "image/png"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "possible_single");
+  assert.equal(session.matches[0].decision, "undecided");
+});
+
+test("buildOriginalRecoverySession keeps weak-only matches manual", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceOriginalFilename: "missing-name.jpg",
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "archive/missing-name.jpg",
+        fileName: "missing-name.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/png"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "weak_only");
+  assert.equal(session.matches[0].decision, "undecided");
+});
+
 test("buildOriginalRecoverySession preserves prior accepted decisions only when selected candidate still exists", () => {
   const previousSession = {
     id: "session-1",

@@ -53,7 +53,11 @@ function getBucketForMatch(match) {
     return "excluded";
   }
 
-  if (match.outcome === "exact_single" || match.outcome === "strong_single") {
+  if (
+    match.outcome === "exact_single"
+    || match.outcome === "strong_single"
+    || (match.outcome === "possible_single" && match.decision === "accepted")
+  ) {
     return "ready";
   }
 

@@ -5634,7 +5634,9 @@ export default function App() {
         matches: (originalRecoverySession.matches ?? []).map((match) => {
           const matchBucket = match.outcome === "excluded"
             ? "excluded"
-            : match.outcome === "exact_single" || match.outcome === "strong_single"
+            : match.outcome === "exact_single"
+                || match.outcome === "strong_single"
+                || (match.outcome === "possible_single" && match.decision === "accepted")
               ? "ready"
               : match.outcome === "possible_single"
                 ? "review"

@@ -11,6 +11,8 @@ const MATCH_PRIORITY = {
   strong: 3,
   exact: 4
 };
+const LEGACY_SOURCE_NAMESPACES = new Set(["vintage", "moodboard", "wishlist"]);
+const LEGACY_NUMBERED_FILENAME_PATTERN = /^images-\d+(\.[a-z0-9]+)?$/i;
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -34,6 +36,79 @@ function normalizeStringArray(value) {
       seen.add(entry);
       return true;
     });
+}
+
+function normalizeComparableValue(value) {
+  return normalizeText(value).replace(/\\/g, "/").toLowerCase();
+}
+
+function getPathSegments(value) {
+  return normalizeComparableValue(value)
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function getPathNamespace(value) {
+  const namespace = getPathSegments(value)[0] ?? "";
+  return LEGACY_SOURCE_NAMESPACES.has(namespace) ? namespace : "";
+}
+
+function getPathBasename(value) {
+  const segments = getPathSegments(value);
+  return segments[segments.length - 1] ?? "";
+}
+
+function parseLegacyRelativePath(value) {
+  const segments = getPathSegments(value);
+
+  if (segments.length < 2) {
+    return null;
+  }
+
+  const namespace = segments[0];
+  const basename = segments[segments.length - 1];
+
+  if (!LEGACY_SOURCE_NAMESPACES.has(namespace) || !LEGACY_NUMBERED_FILENAME_PATTERN.test(basename)) {
+    return null;
+  }
+
+  return {
+    namespace,
+    basename
+  };
+}
+
+function isSafeLegacyReadyPossibleSingle(item, candidateMatches, outcome) {
+  if (outcome !== "possible_single" || candidateMatches.length !== 1) {
+    return false;
+  }
+
+  const sourceRelativePath = normalizeText(item?.sourceRelativePath);
+  const sourceAliases = normalizeStringArray(item?.sourceFilenameAliases).map(normalizeComparableValue);
+  const relativePathDetails = parseLegacyRelativePath(sourceRelativePath);
+
+  if (!relativePathDetails || !sourceAliases.length) {
+    return false;
+  }
+
+  const expectedArchiveBasename = `${relativePathDetails.namespace}-${relativePathDetails.basename}`;
+
+  if (!sourceAliases.includes(expectedArchiveBasename)) {
+    return false;
+  }
+
+  const candidate = candidateMatches[0];
+
+  if (!candidate?.match?.filenameMatch) {
+    return false;
+  }
+
+  const candidateNamespace = getPathNamespace(candidate.relativePath);
+  const candidateBasename = getPathBasename(candidate.relativePath) || normalizeComparableValue(candidate.fileName);
+
+  return candidateNamespace === relativePathDetails.namespace
+    && candidateBasename === expectedArchiveBasename;
 }
 
 function buildComparableCandidate(candidate) {
@@ -347,7 +422,7 @@ function selectDefaultCandidate(nextCandidates, outcome) {
   return "";
 }
 
-function deriveNextDecision(previousMatch, outcome, selectedCandidateId) {
+function deriveNextDecision(previousMatch, item, candidateMatches, outcome, selectedCandidateId) {
   const previousDecision = normalizeText(previousMatch?.decision);
   const candidateStillExists = Boolean(selectedCandidateId);
 
@@ -364,6 +439,10 @@ function deriveNextDecision(previousMatch, outcome, selectedCandidateId) {
   }
 
   if ((outcome === "exact_single" || outcome === "strong_single") && selectedCandidateId) {
+    return "accepted";
+  }
+
+  if (selectedCandidateId && isSafeLegacyReadyPossibleSingle(item, candidateMatches, outcome)) {
     return "accepted";
   }
 
@@ -460,7 +539,7 @@ function createMatchRecord(item, candidates, previousMatch = null) {
   const outcome = createOutcomeFromRank(topClassification, topRankCandidates.length);
   const selectedCandidateId =
     selectPreviousCandidate(previousMatch, candidateMatches) || selectDefaultCandidate(candidateMatches, outcome);
-  const decision = deriveNextDecision(previousMatch, outcome, selectedCandidateId);
+  const decision = deriveNextDecision(previousMatch, item, candidateMatches, outcome, selectedCandidateId);
 
   return {
     itemId: normalizeText(item?.id),
@@ -497,7 +576,7 @@ function createIndexedMatchRecord(item, preparedItem, candidateIndex, previousMa
   const outcome = createOutcomeFromRank(topClassification, topRankCandidates.length);
   const selectedCandidateId =
     selectPreviousCandidate(previousMatch, candidateMatches) || selectDefaultCandidate(candidateMatches, outcome);
-  const decision = deriveNextDecision(previousMatch, outcome, selectedCandidateId);
+  const decision = deriveNextDecision(previousMatch, item, candidateMatches, outcome, selectedCandidateId);
 
   return {
     itemId: normalizeText(item?.id),
