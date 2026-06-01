@@ -11,13 +11,112 @@ function normalizeMimeType(value) {
   return normalizeText(value).toLowerCase();
 }
 
+const LEGACY_SOURCE_NAMESPACES = new Set(["vintage", "moodboard", "wishlist"]);
+const LEGACY_NUMBERED_IMAGE_PATTERN = /^images-(\d+)(\.[a-z0-9]+)?$/i;
+
 export function normalizeComparableFilename(value) {
-  return normalizeText(value).toLowerCase();
+  return normalizeText(value).replace(/\\/g, "/").toLowerCase();
+}
+
+function getPathSegments(value) {
+  return normalizeComparableFilename(value)
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function getBasename(value) {
+  const segments = getPathSegments(value);
+  return segments[segments.length - 1] ?? "";
+}
+
+function parseLegacyNamespacedFilename(value) {
+  const basename = getBasename(value);
+  const match = basename.match(/^(vintage|moodboard|wishlist)-images-(\d+)(\.[a-z0-9]+)?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    namespace: match[1].toLowerCase(),
+    number: match[2],
+    extension: match[3] || ""
+  };
+}
+
+function parseLegacyNumberedFilename(value) {
+  const basename = getBasename(value);
+  const match = basename.match(LEGACY_NUMBERED_IMAGE_PATTERN);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    number: match[1],
+    extension: match[2] || ""
+  };
+}
+
+function collectSourceNamespaces(record = {}) {
+  const namespaces = new Set();
+  const pushNamespace = (value) => {
+    const normalizedValue = normalizeComparableFilename(value);
+
+    if (LEGACY_SOURCE_NAMESPACES.has(normalizedValue)) {
+      namespaces.add(normalizedValue);
+    }
+  };
+  const pushFromValue = (value) => {
+    const segments = getPathSegments(value);
+
+    segments.forEach((segment) => {
+      pushNamespace(segment);
+      const namespacedFilename = parseLegacyNamespacedFilename(segment);
+
+      if (namespacedFilename?.namespace) {
+        pushNamespace(namespacedFilename.namespace);
+      }
+    });
+  };
+
+  pushFromValue(record?.sourceRelativePath);
+  pushFromValue(record?.relativePath);
+  pushFromValue(record?.sourceOriginalFilename);
+  pushFromValue(record?.originalFilename);
+  pushFromValue(record?.images?.preview?.originalFilename);
+  (Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : []).forEach(pushFromValue);
+
+  return namespaces;
+}
+
+function buildLegacyNamespaceAliases(value, namespaces) {
+  const numberedFilename = parseLegacyNumberedFilename(value);
+
+  if (!numberedFilename || !namespaces.size) {
+    return [];
+  }
+
+  const basename = `images-${numberedFilename.number}${numberedFilename.extension}`;
+
+  return [...namespaces].flatMap((namespace) => [`${namespace}/${basename}`, `${namespace}-${basename}`]);
+}
+
+function hasSharedNamespace(leftNamespaces, rightNamespaces) {
+  for (const namespace of leftNamespaces) {
+    if (rightNamespaces.has(namespace)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function collectSourceFilenameCandidates(record = {}) {
   const seen = new Set();
   const candidates = [];
+  const namespaces = collectSourceNamespaces(record);
   const pushCandidate = (value) => {
     const normalizedValue = normalizeText(value);
     const candidateKey = normalizeComparableFilename(normalizedValue);
@@ -29,11 +128,17 @@ export function collectSourceFilenameCandidates(record = {}) {
     seen.add(candidateKey);
     candidates.push(normalizedValue);
   };
+  const pushWithLegacyAliases = (value) => {
+    pushCandidate(value);
+    buildLegacyNamespaceAliases(value, namespaces).forEach(pushCandidate);
+  };
 
-  pushCandidate(record?.sourceOriginalFilename);
-  pushCandidate(record?.originalFilename);
-  pushCandidate(record?.images?.preview?.originalFilename);
-  (Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : []).forEach(pushCandidate);
+  pushWithLegacyAliases(record?.sourceOriginalFilename);
+  pushWithLegacyAliases(record?.originalFilename);
+  pushWithLegacyAliases(record?.images?.preview?.originalFilename);
+  pushCandidate(record?.sourceRelativePath);
+  pushCandidate(record?.relativePath);
+  (Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : []).forEach(pushWithLegacyAliases);
 
   return candidates;
 }
@@ -45,9 +150,19 @@ function collectComparableFilenameKeys(record = {}) {
 function hasSharedFilename(record, candidate) {
   const left = collectComparableFilenameKeys(record);
   const right = collectComparableFilenameKeys(candidate);
+  const leftNamespaces = collectSourceNamespaces(record);
+  const rightNamespaces = collectSourceNamespaces(candidate);
 
   for (const entry of left) {
-    if (right.has(entry)) {
+    if (!right.has(entry)) {
+      continue;
+    }
+
+    if (!LEGACY_NUMBERED_IMAGE_PATTERN.test(getBasename(entry))) {
+      return true;
+    }
+
+    if (leftNamespaces.size && rightNamespaces.size && hasSharedNamespace(leftNamespaces, rightNamespaces)) {
       return true;
     }
   }

@@ -97,6 +97,87 @@ test("buildOriginalRecoverySession marks ambiguous top-rank matches as undecided
   assert.equal(session.matches[0].decision, "undecided");
 });
 
+test("buildOriginalRecoverySession prefers namespace-aligned legacy archive aliases", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceRelativePath: "vintage/images-050.jpg",
+        sourceOriginalFilename: "images-050.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "archives/vintage-images-050.jpg",
+        fileName: "vintage-images-050.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        mimeType: "image/jpeg"
+      },
+      {
+        id: "candidate-2",
+        relativePath: "archives/moodboard-images-050.jpg",
+        fileName: "moodboard-images-050.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "strong_single");
+  assert.equal(session.matches[0].decision, "accepted");
+  assert.equal(session.matches[0].selectedCandidateId, "candidate-1");
+});
+
+test("buildOriginalRecoverySession does not auto-select legacy numbers without namespace certainty", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceOriginalFilename: "images-050.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "vintage/images-050.jpg",
+        fileName: "images-050.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        mimeType: "image/jpeg"
+      },
+      {
+        id: "candidate-2",
+        relativePath: "moodboard/images-050.jpg",
+        fileName: "images-050.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "ambiguous_multiple");
+  assert.equal(session.matches[0].decision, "undecided");
+  assert.equal(session.matches[0].selectedCandidateId, "");
+});
+
 test("buildOriginalRecoverySession preserves prior accepted decisions only when selected candidate still exists", () => {
   const previousSession = {
     id: "session-1",

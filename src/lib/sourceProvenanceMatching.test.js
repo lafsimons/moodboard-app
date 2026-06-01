@@ -43,6 +43,17 @@ test("collectSourceFilenameCandidates deduplicates canonical, compatibility, and
   );
 });
 
+test("collectSourceFilenameCandidates adds namespace-aware aliases for legacy numbered imports", () => {
+  assert.deepEqual(
+    collectSourceFilenameCandidates({
+      sourceRelativePath: "vintage/images-050.jpg",
+      sourceOriginalFilename: "images-050.jpg",
+      sourceFilenameAliases: []
+    }),
+    ["images-050.jpg", "vintage/images-050.jpg", "vintage-images-050.jpg"]
+  );
+});
+
 test("classifySourceProvenanceMatch returns exact for canonical filename with full source metadata alignment", () => {
   assert.equal(
     classifySourceProvenanceMatch(
@@ -101,6 +112,49 @@ test("classifySourceProvenanceMatch returns possible for alias plus one supporti
       }
     ),
     "possible"
+  );
+});
+
+test("classifySourceProvenanceMatch treats namespaced legacy archive filenames as strong matches", () => {
+  assert.equal(
+    classifySourceProvenanceMatch(
+      {
+        sourceRelativePath: "vintage/images-050.jpg",
+        sourceOriginalFilename: "images-050.jpg",
+        sourceFileSize: 2048,
+        sourceImageWidth: 1600,
+        sourceImageHeight: 1200
+      },
+      {
+        sourceOriginalFilename: "vintage-images-050.jpg",
+        sourceFileSize: 2048,
+        sourceImageWidth: 1600,
+        sourceImageHeight: 1200
+      }
+    ),
+    "strong"
+  );
+});
+
+test("classifySourceProvenanceMatch blocks cross-namespace legacy number matches from becoming strong", () => {
+  assert.equal(
+    classifySourceProvenanceMatch(
+      {
+        sourceRelativePath: "vintage/images-050.jpg",
+        sourceOriginalFilename: "images-050.jpg",
+        sourceFileSize: 2048,
+        sourceImageWidth: 1600,
+        sourceImageHeight: 1200
+      },
+      {
+        relativePath: "moodboard/images-050.jpg",
+        sourceOriginalFilename: "images-050.jpg",
+        sourceFileSize: 2048,
+        sourceImageWidth: 1600,
+        sourceImageHeight: 1200
+      }
+    ),
+    "weak"
   );
 });
 

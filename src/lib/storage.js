@@ -2246,6 +2246,7 @@ function normalizeOriginalRecoveryMatchRecord(record = {}) {
     exclusionReason: normalizeOriginalRecoveryText(record.exclusionReason),
     relinkStatus: normalizeOriginalRecoveryText(record.relinkStatus),
     selectedCandidateId: normalizeOriginalRecoveryText(record.selectedCandidateId),
+    sourceRelativePath: normalizeOriginalRecoveryText(record.sourceRelativePath),
     sourceOriginalFilename: normalizeOriginalRecoveryText(record.sourceOriginalFilename),
     sourceFilenameAliases: normalizeReasonableStringArray(record.sourceFilenameAliases),
     sourceFileSize: normalizeOriginalRecoveryCount(record.sourceFileSize),

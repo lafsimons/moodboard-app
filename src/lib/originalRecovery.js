@@ -35,6 +35,7 @@ function normalizeStringArray(value) {
 function buildComparableCandidate(candidate) {
   return {
     sourceOriginalFilename: normalizeText(candidate.fileName),
+    sourceRelativePath: normalizeText(candidate.relativePath),
     sourceFilenameAliases: [],
     sourceFileSize: normalizeNumber(candidate.sourceFileSize),
     sourceImageWidth: normalizeNumber(candidate.sourceImageWidth),
@@ -75,12 +76,12 @@ function createOutcomeFromRank(topClassification, candidateCountAtTopRank) {
     return "no_match";
   }
 
-  if (topClassification === "weak") {
-    return "weak_only";
-  }
-
   if (candidateCountAtTopRank > 1) {
     return "ambiguous_multiple";
+  }
+
+  if (topClassification === "weak") {
+    return "weak_only";
   }
 
   if (topClassification === "exact") {
@@ -272,6 +273,7 @@ function createExcludedMatchRecord(item) {
     exclusionReason: item?.originalPreserved ? "already_linked" : "ineligible",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId: "",
+    sourceRelativePath: normalizeText(item?.sourceRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
@@ -308,6 +310,7 @@ function createMatchRecord(item, candidates, previousMatch = null) {
     exclusionReason: "",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId,
+    sourceRelativePath: normalizeText(item?.sourceRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
