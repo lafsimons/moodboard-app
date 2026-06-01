@@ -58,3 +58,26 @@ export async function scanOriginalRecoveryDirectoryWithFileSystemAccess(options 
     entries
   };
 }
+
+export async function getOriginalRecoveryEntryFileWithFileSystemAccess(entry) {
+  if (entry?.file) {
+    return entry.file;
+  }
+
+  if (entry?.handle && typeof entry.handle.getFile === "function") {
+    return entry.handle.getFile();
+  }
+
+  throw new Error("Original recovery entry could not be materialized as a file.");
+}
+
+export async function getOriginalRecoveryEntryMetadataWithFileSystemAccess(entry) {
+  const file = await getOriginalRecoveryEntryFileWithFileSystemAccess(entry);
+
+  return {
+    name: file?.name,
+    size: file?.size,
+    type: file?.type,
+    lastModified: file?.lastModified
+  };
+}

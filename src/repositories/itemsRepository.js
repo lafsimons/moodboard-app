@@ -322,7 +322,8 @@ export async function reconnectOriginalForItem(itemId, file, expectedMatchContex
   const item = await loadItemById(normalizedItemId);
   const {
     createOriginalImageAsset,
-    now = () => new Date().toISOString()
+    now = () => new Date().toISOString(),
+    onProgress = null
   } = options;
 
   if (!normalizedItemId || !item?.id) {
@@ -337,7 +338,19 @@ export async function reconnectOriginalForItem(itemId, file, expectedMatchContex
     throw new Error("Selected file is not an image.");
   }
 
+  onProgress?.({
+    phase: "file-read",
+    itemId: normalizedItemId,
+    fileName: file?.name ?? ""
+  });
   const originalAsset = await createOriginalImageAsset(file);
+  onProgress?.({
+    phase: "decoded",
+    itemId: normalizedItemId,
+    fileName: file?.name ?? "",
+    width: originalAsset?.width ?? 0,
+    height: originalAsset?.height ?? 0
+  });
   const review = buildOriginalReconnectionReview(item, file, originalAsset);
   const expectedClassification = typeof expectedMatchContext?.classification === "string"
     ? expectedMatchContext.classification
@@ -373,10 +386,25 @@ export async function reconnectOriginalForItem(itemId, file, expectedMatchContex
     mediaUpdateIntent: "replace"
   };
 
+  onProgress?.({
+    phase: "blob-write",
+    itemId: normalizedItemId,
+    fileName: file?.name ?? ""
+  });
   await saveOriginalImageBlob(item.itemUuid, originalBlob, originalAsset);
 
   try {
+    onProgress?.({
+      phase: "item-save",
+      itemId: normalizedItemId,
+      fileName: file?.name ?? ""
+    });
     const savedItem = await saveStoredItem(nextItem);
+    onProgress?.({
+      phase: "completed",
+      itemId: normalizedItemId,
+      fileName: file?.name ?? ""
+    });
     return {
       item: savedItem ?? nextItem,
       review,

@@ -214,6 +214,8 @@ import {
   updateOriginalRecoveryDecision
 } from "./repositories/originalRecoveryRepository.js";
 import {
+  getOriginalRecoveryEntryFileWithFileSystemAccess,
+  getOriginalRecoveryEntryMetadataWithFileSystemAccess,
   isOriginalRecoveryFileSystemAdapterSupported,
   scanOriginalRecoveryDirectoryWithFileSystemAccess
 } from "./lib/originalRecoveryFileSystemAdapter.js";
@@ -3962,7 +3964,7 @@ export default function App() {
   const [isOriginalRecoveryApplying, setIsOriginalRecoveryApplying] = useState(false);
   const [originalRecoveryScanProgress, setOriginalRecoveryScanProgress] = useState("");
   const [originalRecoveryRuntimeSessionId, setOriginalRecoveryRuntimeSessionId] = useState("");
-  const [originalRecoveryCandidateFilesById, setOriginalRecoveryCandidateFilesById] = useState({});
+  const [originalRecoveryCandidateEntriesById, setOriginalRecoveryCandidateEntriesById] = useState({});
   const [selectedReferenceSelection, setSelectedReferenceSelection] = useState({
     ids: {},
     anchorId: null
@@ -5316,7 +5318,7 @@ export default function App() {
       const latestSession = await loadLatestOriginalRecoverySession();
       setOriginalRecoverySession(latestSession);
       setOriginalRecoveryRuntimeSessionId("");
-      setOriginalRecoveryCandidateFilesById({});
+      setOriginalRecoveryCandidateEntriesById({});
     } catch (error) {
       setOriginalRecoveryError(formatErrorMessage(error, "Failed to load original recovery report."));
     }
@@ -5343,6 +5345,35 @@ export default function App() {
     setOriginalRecoveryFeedback("");
     setOriginalRecoveryScanProgress("");
     setIsOriginalRecoveryScanning(true);
+    let lastProgressUpdateAt = 0;
+    let lastProgressPhase = "";
+    let lastProgressCompleted = -1;
+
+    const publishOriginalRecoveryProgress = (phase, completed, total, currentPath = "") => {
+      const nowMs = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+      const shouldUpdate =
+        phase !== lastProgressPhase
+        || total <= 0
+        || completed === total
+        || completed === 0
+        || completed - lastProgressCompleted >= 25
+        || nowMs - lastProgressUpdateAt >= 120;
+
+      if (!shouldUpdate) {
+        return;
+      }
+
+      lastProgressUpdateAt = nowMs;
+      lastProgressPhase = phase;
+      lastProgressCompleted = completed;
+      setOriginalRecoveryScanProgress(
+        currentPath
+          ? `${phase}... ${total > 0 ? `${completed}/${total}` : completed} ${currentPath}`
+          : `${phase}... ${total > 0 ? `${completed}/${total}` : completed}`
+      );
+    };
 
     try {
       const result = await scanOriginalRecoverySource({
@@ -5351,17 +5382,13 @@ export default function App() {
             target: window,
             ...adapterOptions,
             onProgress: ({ phase, traversedFileCount, currentPath }) => {
-              setOriginalRecoveryScanProgress(
-                phase === "traversal"
-                  ? (
-                    currentPath
-                      ? `Traversed ${traversedFileCount} files... ${currentPath}`
-                      : `Traversed ${traversedFileCount} files...`
-                  )
-                  : originalRecoveryScanProgress
-              );
+              if (phase === "traversal") {
+                publishOriginalRecoveryProgress("Traversing", traversedFileCount, 0, currentPath);
+              }
             }
-          })
+          }),
+          getFile: getOriginalRecoveryEntryFileWithFileSystemAccess,
+          getFileMetadata: getOriginalRecoveryEntryMetadataWithFileSystemAccess
         },
         createOriginalImageAsset,
         app: "mba",
@@ -5371,32 +5398,29 @@ export default function App() {
             return;
           }
 
-          const countLabel = total > 0 ? `${completed}/${total}` : `${completed}`;
-          const phaseLabel = phase === "metadata"
-            ? "Collecting file metadata"
-            : phase === "decode"
-              ? "Decoding plausible candidates"
-              : phase === "matching"
-                ? "Matching originals"
-                : phase === "saving"
-                  ? "Saving recovery report"
-                  : "Processing";
+          const phaseLabel = phase === "matching-filenames"
+            ? "Matching filenames"
+            : phase === "reading-candidate-metadata"
+              ? "Reading candidate metadata"
+              : phase === "decoding-candidate-images"
+                ? "Decoding candidate images"
+                : phase === "final-scoring"
+                  ? "Final scoring"
+                  : phase === "saving"
+                    ? "Saving report"
+                    : "Processing";
 
-          setOriginalRecoveryScanProgress(
-            currentPath
-              ? `${phaseLabel}... ${countLabel} ${currentPath}`
-              : `${phaseLabel}... ${countLabel}`
-          );
+          publishOriginalRecoveryProgress(phaseLabel, completed, total, currentPath);
         }
       });
 
       setOriginalRecoverySession(result.session);
       setOriginalRecoveryRuntimeSessionId(result.session.id);
-      setOriginalRecoveryCandidateFilesById(result.candidateFilesById);
+      setOriginalRecoveryCandidateEntriesById(result.candidateEntriesById);
       setOriginalRecoveryBucket("all");
       setOriginalRecoveryFeedback(result.persisted
-        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover.`
-        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload.`
+        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
       );
       setOriginalRecoveryScanProgress("");
     } catch (error) {
@@ -5559,15 +5583,27 @@ export default function App() {
 
     setOriginalRecoveryError("");
     setOriginalRecoveryFeedback("");
+    setOriginalRecoveryScanProgress("Preparing metadata autosnapshot...");
     setIsOriginalRecoveryApplying(true);
 
     try {
+      const autosnapshotStartedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
       const snapshotResult = await runMetadataSnapshot("before-repair", {
         changedItemIds: (originalRecoverySession.matches ?? [])
           .filter((match) => match.decision === "accepted")
           .map((match) => match.itemId),
         priority: "blocking"
       });
+      const autosnapshotMs = Math.max(
+        0,
+        Math.round(
+          ((typeof performance !== "undefined" && typeof performance.now === "function"
+            ? performance.now()
+            : Date.now()) - autosnapshotStartedAt) * 100
+        ) / 100
+      );
 
       if (!snapshotResult) {
         const continueWithoutSnapshot = await requestConfirmation({
@@ -5584,8 +5620,101 @@ export default function App() {
 
       const result = await applyOriginalRecoverySession(originalRecoverySession.id, {
         currentSession: originalRecoverySession,
-        candidateFilesById: originalRecoveryCandidateFilesById,
-        createOriginalImageAsset
+        candidateEntriesById: originalRecoveryCandidateEntriesById,
+        adapter: {
+          getFile: getOriginalRecoveryEntryFileWithFileSystemAccess
+        },
+        createOriginalImageAsset,
+        onProgress: ({ phase, completed, total, itemName, fileName, error: progressError }) => {
+          const itemLabel = itemName || fileName || "";
+          const countLabel = total > 0 ? `${Math.min(completed, total)}/${total}` : `${completed}`;
+
+          if (phase === "apply-start") {
+            setOriginalRecoveryScanProgress(`Applying approved recoveries... ${countLabel}`);
+            return;
+          }
+
+          if (phase === "candidate-lookup") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Preparing candidate file... ${countLabel} ${itemLabel}`
+                : `Preparing candidate file... ${countLabel}`
+            );
+            return;
+          }
+
+          if (phase === "file-read") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Reading source file... ${countLabel} ${itemLabel}`
+                : `Reading source file... ${countLabel}`
+            );
+            return;
+          }
+
+          if (phase === "decoded") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Decoding original... ${countLabel} ${itemLabel}`
+                : `Decoding original... ${countLabel}`
+            );
+            return;
+          }
+
+          if (phase === "blob-write") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Writing original blob... ${countLabel} ${itemLabel}`
+                : `Writing original blob... ${countLabel}`
+            );
+            return;
+          }
+
+          if (phase === "item-save") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Saving item metadata... ${countLabel} ${itemLabel}`
+                : `Saving item metadata... ${countLabel}`
+            );
+            return;
+          }
+
+          if (phase === "candidate-missing") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Candidate missing, marking for re-scan... ${countLabel} ${itemLabel}`
+                : `Candidate missing, marking for re-scan... ${countLabel}`
+            );
+            return;
+          }
+
+          if (phase === "item-failed") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Recovery failed, continuing... ${countLabel} ${itemLabel}${progressError ? ` (${progressError})` : ""}`
+                : `Recovery failed, continuing... ${countLabel}${progressError ? ` (${progressError})` : ""}`
+            );
+            return;
+          }
+
+          if (phase === "item-recovered") {
+            setOriginalRecoveryScanProgress(
+              itemLabel
+                ? `Recovered original... ${countLabel} ${itemLabel}`
+                : `Recovered original... ${countLabel}`
+            );
+            return;
+          }
+
+          if (phase === "report-persistence") {
+            setOriginalRecoveryScanProgress("Saving recovery report...");
+            return;
+          }
+
+          if (phase === "apply-complete") {
+            setOriginalRecoveryScanProgress("Apply complete.");
+          }
+        }
       });
 
       result.recoveredItems.forEach((savedItem) => {
@@ -5601,8 +5730,8 @@ export default function App() {
       }
       setOriginalRecoverySession(result.session);
       setOriginalRecoveryFeedback(result.persisted
-        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed.`
-        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload.`
+        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
+        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
       );
     } catch (error) {
       setOriginalRecoveryError(formatErrorMessage(error, "Original recovery apply failed."));
@@ -11792,7 +11921,7 @@ export default function App() {
   const hasLiveOriginalRecoveryCandidates = Boolean(
     originalRecoverySession?.id
     && originalRecoveryRuntimeSessionId === originalRecoverySession.id
-    && Object.keys(originalRecoveryCandidateFilesById).length
+    && Object.keys(originalRecoveryCandidateEntriesById).length
   );
   const fileSystemAccessDebug = typeof window !== "undefined"
     ? getFileSystemAccessDebugSnapshot(window)

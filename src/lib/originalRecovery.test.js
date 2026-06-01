@@ -222,7 +222,7 @@ test("buildOriginalRecoverySession preserves prior accepted decisions only when 
   assert.equal(session.matches[0].decision, "needs_rescan");
 });
 
-test("indexed recovery matcher returns the same results as the exhaustive matcher on representative fixtures", () => {
+test("indexed recovery matcher returns the same results as the exhaustive matcher for filename-driven fixtures", () => {
   const fixture = {
     app: "mba",
     sourceLabel: "Archive",
@@ -237,17 +237,6 @@ test("indexed recovery matcher returns the same results as the exhaustive matche
         sourceImageHeight: 50,
         sourceLastModified: 1234,
         mimeType: "image/jpeg",
-        originalPreserved: false
-      },
-      {
-        id: "support-only-weak",
-        itemUuid: "uuid-support-only-weak",
-        name: "Support only",
-        sourceOriginalFilename: "missing-name.jpg",
-        sourceFileSize: 2000,
-        sourceImageWidth: 200,
-        sourceImageHeight: 100,
-        mimeType: "image/png",
         originalPreserved: false
       },
       {
@@ -295,15 +284,6 @@ test("indexed recovery matcher returns the same results as the exhaustive matche
         sourceImageHeight: 50,
         sourceLastModified: 1234,
         mimeType: "image/jpeg"
-      },
-      {
-        id: "candidate-support-only",
-        relativePath: "archive/not-the-same-name.png",
-        fileName: "not-the-same-name.png",
-        sourceFileSize: 2000,
-        sourceImageWidth: 200,
-        sourceImageHeight: 100,
-        mimeType: "image/png"
       },
       {
         id: "candidate-moodboard-050",
@@ -415,6 +395,38 @@ test("indexed recovery matcher returns no_match when no indexed candidates exist
   assert.equal(session.matches[0].outcome, "no_match");
   assert.equal(session.matches[0].decision, "undecided");
   assert.deepEqual(session.matches[0].candidates, []);
+});
+
+test("filename-first recovery leaves no-filename items as no_match in normal mode", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceOriginalFilename: "",
+        sourceFilenameAliases: [],
+        sourceFileSize: 1111,
+        sourceImageWidth: 222,
+        sourceImageHeight: 111,
+        mimeType: "image/jpeg",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "archive/another-file.jpg",
+        fileName: "another-file.jpg",
+        sourceFileSize: 1111,
+        sourceImageWidth: 222,
+        sourceImageHeight: 111,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "no_match");
+  assert.equal(session.matches[0].decision, "undecided");
 });
 
 test("mergeOriginalRecoveryApplyResults updates summary counts", () => {

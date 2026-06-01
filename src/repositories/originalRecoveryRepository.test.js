@@ -221,6 +221,11 @@ test("scanOriginalRecoverySource persists a report and skips non-image files", a
   assert.equal(result.session.summary.scannedFileCount, 1);
   assert.equal(result.session.summary.eligibleItemCount, 1);
   assert.equal(result.session.summary.excludedItemCount, 1);
+  assert.equal(result.instrumentation.descriptorCount, 1);
+  assert.equal(result.instrumentation.fileObjectsRetainedCount, 0);
+  assert.equal(result.instrumentation.plausibleCandidateCount, 1);
+  assert.equal(result.instrumentation.decodedCandidateCount, 1);
+  assert.equal(result.instrumentation.getFileCallCount, 2);
   assert.equal(result.session.matches.find((match) => match.itemId === "item-1").decision, "accepted");
 
   const latestSession = await loadLatestOriginalRecoverySession();
@@ -304,12 +309,95 @@ test("scanOriginalRecoverySource separates traversal metadata and decode phases 
 
   assert.deepEqual(decodedFiles, ["camel-coat.jpg"]);
   assert.equal(result.session.summary.scannedFileCount, 2);
+  assert.equal(result.instrumentation.descriptorCount, 2);
+  assert.equal(result.instrumentation.fileObjectsRetainedCount, 0);
+  assert.equal(result.instrumentation.plausibleCandidateCount, 1);
+  assert.equal(result.instrumentation.decodedCandidateCount, 1);
+  assert.equal(result.instrumentation.getFileCallCount, 2);
   assert.equal(result.session.matches.find((match) => match.itemId === "item-1").selectedCandidateId, "candidate-1");
   assert.equal(phases.includes("traversal"), true);
-  assert.equal(phases.includes("metadata"), true);
-  assert.equal(phases.includes("decode"), true);
-  assert.equal(phases.includes("matching"), true);
+  assert.equal(phases.includes("matching-filenames"), true);
+  assert.equal(phases.includes("reading-candidate-metadata"), true);
+  assert.equal(phases.includes("decoding-candidate-images"), true);
+  assert.equal(phases.includes("final-scoring"), true);
   assert.equal(phases.includes("saving"), true);
+});
+
+test("scanOriginalRecoverySource does not call getFile during traversal and skips getFile for non-plausible candidates", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-1",
+    name: "Camel Coat",
+    sourceOriginalFilename: "camel-coat.jpg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-1",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  let getFileCount = 0;
+  let decodeCount = 0;
+  const createEntry = (id, relativePath) => ({
+    id,
+    sourceLabel: "Archive",
+    relativePath,
+    fileName: relativePath.split("/").at(-1),
+    handle: {
+      async getFile() {
+        getFileCount += 1;
+        return new File(["1234567890"], relativePath.split("/").at(-1), {
+          type: "image/jpeg",
+          lastModified: 1717236000000
+        });
+      }
+    }
+  });
+
+  const result = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async (options = {}) => {
+        options.onProgress?.({ phase: "traversal", traversedFileCount: 1, currentPath: "archive/camel-coat.jpg" });
+        assert.equal(getFileCount, 0);
+        options.onProgress?.({ phase: "traversal", traversedFileCount: 2, currentPath: "archive/other.jpg" });
+        assert.equal(getFileCount, 0);
+
+        return {
+          sourceLabel: "Archive",
+          entries: [
+            createEntry("candidate-1", "archive/camel-coat.jpg"),
+            createEntry("candidate-2", "archive/other.jpg")
+          ]
+        };
+      },
+      getFile(entry) {
+        return entry.handle.getFile();
+      }
+    },
+    createOriginalImageAsset: async (file) => {
+      decodeCount += 1;
+      return {
+        src: `data:${file.type};base64,ZmFrZQ==`,
+        mimeType: file.type,
+        width: 100,
+        height: 50,
+        fileSize: file.size,
+        originalFilename: file.name
+      };
+    }
+  });
+
+  assert.equal(result.instrumentation.descriptorCount, 2);
+  assert.equal(result.instrumentation.plausibleCandidateCount, 1);
+  assert.equal(result.instrumentation.getFileCallCount, 2);
+  assert.equal(result.instrumentation.decodedCandidateCount, 1);
+  assert.equal(decodeCount, 1);
+  assert.equal(getFileCount, 2);
 });
 
 test("applyOriginalRecoverySession preserves partial progress and marks missing runtime files for re-scan", async () => {
@@ -384,8 +472,8 @@ test("applyOriginalRecoverySession preserves partial progress and marks missing 
   });
 
   const applyResult = await applyOriginalRecoverySession(scanResult.session.id, {
-    candidateFilesById: {
-      "candidate-good": goodFile
+    candidateEntriesById: {
+      "candidate-good": { file: goodFile }
     },
     createOriginalImageAsset: async (file) => {
       if (file.name === "bad.jpg") {
@@ -411,6 +499,83 @@ test("applyOriginalRecoverySession preserves partial progress and marks missing 
     applyResult.session.matches.find((match) => match.itemId === "item-bad").decision,
     "needs_rescan"
   );
+});
+
+test("applyOriginalRecoverySession reports per-item progress stages and report persistence", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-1",
+    name: "Camel Coat",
+    sourceOriginalFilename: "camel-coat.jpg",
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-1",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  const file = new File(["1234567890"], "camel-coat.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const scanResult = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async () => ({
+        sourceLabel: "Archive",
+        entries: [
+          { id: "candidate-1", sourceLabel: "Archive", relativePath: "archive/camel-coat.jpg", file }
+        ]
+      })
+    },
+    createOriginalImageAsset: async (selectedFile) => ({
+      src: `data:${selectedFile.type};base64,ZmFrZQ==`,
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      originalFilename: selectedFile.name
+    }),
+    now: () => "2026-06-01T12:00:00.000Z"
+  });
+  const phases = [];
+
+  const applyResult = await applyOriginalRecoverySession(scanResult.session.id, {
+    currentSession: scanResult.session,
+    candidateEntriesById: scanResult.candidateEntriesById,
+    createOriginalImageAsset: async (selectedFile) => ({
+      src: `data:${selectedFile.type};base64,ZmFrZQ==`,
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      originalFilename: selectedFile.name
+    }),
+    onProgress: (event) => {
+      phases.push(event.phase);
+    },
+    now: () => "2026-06-01T12:34:56.000Z"
+  });
+
+  assert.equal(applyResult.session.summary.recoveredCount, 1);
+  assert.equal(phases.includes("apply-start"), true);
+  assert.equal(phases.includes("candidate-lookup"), true);
+  assert.equal(phases.includes("file-read"), true);
+  assert.equal(phases.includes("decoded"), true);
+  assert.equal(phases.includes("blob-write"), true);
+  assert.equal(phases.includes("item-save"), true);
+  assert.equal(phases.includes("item-recovered"), true);
+  assert.equal(phases.includes("report-persistence"), true);
+  assert.equal(phases.includes("apply-complete"), true);
 });
 
 test("scan approve and apply still work with in-memory session when persistence is unavailable", async () => {
@@ -480,7 +645,7 @@ test("scan approve and apply still work with in-memory session when persistence 
 
   const applyResult = await applyOriginalRecoverySession(scanResult.session.id, {
     currentSession: approvedResult.session,
-    candidateFilesById: scanResult.candidateFilesById,
+    candidateEntriesById: scanResult.candidateEntriesById,
     createOriginalImageAsset: async (file) => ({
       src: `data:${file.type};base64,ZmFrZQ==`,
       mimeType: file.type,
@@ -545,7 +710,7 @@ test("persisted session missing but current in-memory session exists still appli
 
   const applyResult = await applyOriginalRecoverySession("missing-session-id", {
     currentSession: scanResult.session,
-    candidateFilesById: scanResult.candidateFilesById,
+    candidateEntriesById: scanResult.candidateEntriesById,
     createOriginalImageAsset: async (selectedFile) => ({
       src: `data:${selectedFile.type};base64,ZmFrZQ==`,
       mimeType: selectedFile.type,
@@ -565,7 +730,7 @@ test("persisted session missing and no current in-memory session requires rescan
 
   await assert.rejects(
     applyOriginalRecoverySession("missing-session-id", {
-      candidateFilesById: {},
+      candidateEntriesById: {},
       createOriginalImageAsset: async () => ({
         src: "",
         mimeType: "image/jpeg",
@@ -634,7 +799,7 @@ test("after recovery-store availability save load and apply from persisted sessi
   assert.equal(latestSession.id, scanResult.session.id);
 
   const applyResult = await applyOriginalRecoverySession(scanResult.session.id, {
-    candidateFilesById: scanResult.candidateFilesById,
+    candidateEntriesById: scanResult.candidateEntriesById,
     createOriginalImageAsset: async (selectedFile) => ({
       src: `data:${selectedFile.type};base64,ZmFrZQ==`,
       mimeType: selectedFile.type,

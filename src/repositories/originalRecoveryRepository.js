@@ -20,8 +20,53 @@ function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+const SUPPORTED_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".bmp", ".tif", ".tiff"]);
+
+function inferImageMimeTypeFromName(fileName = "") {
+  const normalizedFileName = normalizeText(fileName).toLowerCase();
+
+  if (normalizedFileName.endsWith(".jpg") || normalizedFileName.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+
+  if (normalizedFileName.endsWith(".png")) {
+    return "image/png";
+  }
+
+  if (normalizedFileName.endsWith(".webp")) {
+    return "image/webp";
+  }
+
+  if (normalizedFileName.endsWith(".gif")) {
+    return "image/gif";
+  }
+
+  if (normalizedFileName.endsWith(".avif")) {
+    return "image/avif";
+  }
+
+  if (normalizedFileName.endsWith(".bmp")) {
+    return "image/bmp";
+  }
+
+  if (normalizedFileName.endsWith(".tif") || normalizedFileName.endsWith(".tiff")) {
+    return "image/tiff";
+  }
+
+  return "";
+}
+
+function hasSupportedImageExtension(fileName = "") {
+  const normalizedFileName = normalizeText(fileName).toLowerCase();
+  return [...SUPPORTED_IMAGE_EXTENSIONS].some((extension) => normalizedFileName.endsWith(extension));
+}
+
 function isSupportedImageFile(file) {
-  return Boolean(file?.type?.startsWith?.("image/"));
+  return Boolean(file?.type?.startsWith?.("image/") || hasSupportedImageExtension(file?.name));
+}
+
+function isSupportedImageScanEntry(entry) {
+  return hasSupportedImageExtension(entry?.fileName || entry?.relativePath);
 }
 
 function normalizeNumber(value) {
@@ -50,6 +95,24 @@ function createScanTimingSummary() {
   };
 }
 
+function createApplyTimingSummary() {
+  return {
+    autosnapshotMs: 0,
+    applyLoopMs: 0,
+    reportPersistenceMs: 0
+  };
+}
+
+function createRecoveryScanInstrumentation() {
+  return {
+    descriptorCount: 0,
+    fileObjectsRetainedCount: 0,
+    plausibleCandidateCount: 0,
+    decodedCandidateCount: 0,
+    getFileCallCount: 0
+  };
+}
+
 function createLightweightCandidateRecord(entry, fileMetadata = {}) {
   return {
     id: normalizeText(entry?.id),
@@ -60,7 +123,7 @@ function createLightweightCandidateRecord(entry, fileMetadata = {}) {
     sourceImageWidth: 0,
     sourceImageHeight: 0,
     sourceLastModified: normalizeNumber(fileMetadata?.lastModified),
-    mimeType: normalizeText(fileMetadata?.type),
+    mimeType: normalizeText(fileMetadata?.type) || inferImageMimeTypeFromName(entry?.fileName || fileMetadata?.name),
     fingerprint: ""
   };
 }
@@ -98,6 +161,16 @@ async function resolveScanEntryMetadata(adapter, entry) {
     type: file?.type,
     lastModified: file?.lastModified
   };
+}
+
+function createTraversalCandidateRecord(entry) {
+  const relativePath = normalizeText(entry?.relativePath);
+  const derivedFileName = relativePath.split("/").filter(Boolean).at(-1) ?? "";
+
+  return createLightweightCandidateRecord({
+    ...entry,
+    fileName: normalizeText(entry?.fileName) || derivedFileName
+  });
 }
 
 async function persistRecoverySession(session) {
@@ -178,6 +251,7 @@ export async function scanOriginalRecoverySource({
   }
 
   const timings = createScanTimingSummary();
+  const instrumentation = createRecoveryScanInstrumentation();
   const traversalStartedAtMs = getNowMs();
   const [items, scanResult] = await Promise.all([
     loadItems(),
@@ -186,21 +260,18 @@ export async function scanOriginalRecoverySource({
     })
   ]);
   timings.traversalMs = buildPhaseTiming(traversalStartedAtMs);
-  const candidateFilesById = {};
+  const candidateEntriesById = {};
   const lightweightCandidates = [];
   const scanEntriesById = new Map();
   const metadataEntries = Array.isArray(scanResult?.entries) ? scanResult.entries : [];
-  const metadataStartedAtMs = getNowMs();
-
   for (let index = 0; index < metadataEntries.length; index += 1) {
     const entry = metadataEntries[index];
-    const fileMetadata = await resolveScanEntryMetadata(adapter, entry);
 
-    if (!isSupportedImageFile(fileMetadata)) {
+    if (!isSupportedImageScanEntry(entry)) {
       continue;
     }
 
-    const candidate = createLightweightCandidateRecord(entry, fileMetadata);
+    const candidate = createTraversalCandidateRecord(entry);
 
     if (!candidate.id) {
       continue;
@@ -208,45 +279,74 @@ export async function scanOriginalRecoverySource({
 
     lightweightCandidates.push(candidate);
     scanEntriesById.set(candidate.id, entry);
-    onProgress?.({
-      phase: "metadata",
-      completed: index + 1,
-      total: metadataEntries.length,
-      currentPath: candidate.relativePath
-    });
+    candidateEntriesById[candidate.id] = entry;
   }
-  timings.metadataMs = buildPhaseTiming(metadataStartedAtMs);
+  timings.metadataMs = 0;
+  instrumentation.descriptorCount = lightweightCandidates.length;
+  instrumentation.fileObjectsRetainedCount = 0;
 
+  onProgress?.({
+    phase: "matching-filenames",
+    completed: 0,
+    total: items.length
+  });
   const indexBuildStartedAtMs = getNowMs();
   const plausibleCandidateIds = collectOriginalRecoveryPlausibleCandidateIds(items, lightweightCandidates);
   timings.indexBuildMs = buildPhaseTiming(indexBuildStartedAtMs);
 
   const decodedCandidates = [];
   const plausibleCandidateList = lightweightCandidates.filter((candidate) => plausibleCandidateIds.has(candidate.id));
+  instrumentation.plausibleCandidateCount = plausibleCandidateList.length;
+  const candidateMetadataStartedAtMs = getNowMs();
+
+  for (let index = 0; index < plausibleCandidateList.length; index += 1) {
+    const lightweightCandidate = plausibleCandidateList[index];
+    const entry = scanEntriesById.get(lightweightCandidate.id);
+    const fileMetadata = await resolveScanEntryMetadata(adapter, entry);
+
+    if (!isSupportedImageFile(fileMetadata)) {
+      continue;
+    }
+
+    lightweightCandidate.sourceFileSize = normalizeNumber(fileMetadata?.size);
+    lightweightCandidate.sourceLastModified = normalizeNumber(fileMetadata?.lastModified);
+    lightweightCandidate.mimeType = normalizeText(fileMetadata?.type) || lightweightCandidate.mimeType;
+    instrumentation.fileObjectsRetainedCount = 0;
+    instrumentation.getFileCallCount = (instrumentation.getFileCallCount ?? 0) + 1;
+    onProgress?.({
+      phase: "reading-candidate-metadata",
+      completed: index + 1,
+      total: plausibleCandidateList.length,
+      currentPath: lightweightCandidate.relativePath
+    });
+  }
+  timings.metadataMs = buildPhaseTiming(candidateMetadataStartedAtMs);
+
   const decodeStartedAtMs = getNowMs();
 
   for (let index = 0; index < plausibleCandidateList.length; index += 1) {
     const lightweightCandidate = plausibleCandidateList[index];
     const entry = scanEntriesById.get(lightweightCandidate.id);
     const file = await resolveScanEntryFile(adapter, entry);
+    instrumentation.getFileCallCount = (instrumentation.getFileCallCount ?? 0) + 1;
     const originalAsset = await createOriginalImageAsset(file);
     const candidate = createOriginalRecoveryCandidateRecord({
       ...entry,
       file
     }, originalAsset);
     decodedCandidates.push(candidate);
-    candidateFilesById[candidate.id] = file;
     onProgress?.({
-      phase: "decode",
+      phase: "decoding-candidate-images",
       completed: index + 1,
       total: plausibleCandidateList.length,
       currentPath: candidate.relativePath
     });
   }
   timings.decodeMs = buildPhaseTiming(decodeStartedAtMs);
+  instrumentation.decodedCandidateCount = decodedCandidates.length;
 
   onProgress?.({
-    phase: "matching",
+    phase: "final-scoring",
     completed: 0,
     total: items.length
   });
@@ -274,8 +374,9 @@ export async function scanOriginalRecoverySource({
 
   return {
     ...saveResult,
-    candidateFilesById,
-    timings
+    candidateEntriesById,
+    timings,
+    instrumentation
   };
 }
 
@@ -290,20 +391,39 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
     throw new Error("Original recovery apply requires an original image asset decoder.");
   }
 
-  const candidateFilesById = options.candidateFilesById && typeof options.candidateFilesById === "object"
-    ? options.candidateFilesById
+  const candidateEntriesById = options.candidateEntriesById && typeof options.candidateEntriesById === "object"
+    ? options.candidateEntriesById
     : {};
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
   const approvedMatches = getApprovedOriginalRecoveryMatches(session);
   const applyResults = [];
   const recoveredItems = [];
   const appliedAt = typeof options.now === "function" ? options.now() : new Date().toISOString();
+  const timings = createApplyTimingSummary();
+  const applyLoopStartedAtMs = getNowMs();
 
-  for (const match of approvedMatches) {
+  onProgress?.({
+    phase: "apply-start",
+    completed: 0,
+    total: approvedMatches.length
+  });
+
+  for (let index = 0; index < approvedMatches.length; index += 1) {
+    const match = approvedMatches[index];
     const selectedCandidateId = normalizeText(match.selectedCandidateId);
     const selectedCandidate = (Array.isArray(match.candidates) ? match.candidates : []).find(
       (candidate) => candidate.id === selectedCandidateId
     );
-    const file = selectedCandidateId ? candidateFilesById[selectedCandidateId] : null;
+    onProgress?.({
+      phase: "candidate-lookup",
+      completed: index,
+      total: approvedMatches.length,
+      itemId: match.itemId,
+      itemName: match.itemName || match.itemId,
+      fileName: selectedCandidate?.fileName || ""
+    });
+    const entry = selectedCandidateId ? candidateEntriesById[selectedCandidateId] : null;
+    const file = entry ? await resolveScanEntryFile(options.adapter ?? null, entry) : null;
 
     if (!selectedCandidateId || !selectedCandidate || !file) {
       applyResults.push({
@@ -312,6 +432,14 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
         message: "Selected candidate is no longer available. Re-scan before applying.",
         appliedAt,
         decision: "needs_rescan"
+      });
+      onProgress?.({
+        phase: "candidate-missing",
+        completed: index + 1,
+        total: approvedMatches.length,
+        itemId: match.itemId,
+        itemName: match.itemName || match.itemId,
+        fileName: selectedCandidate?.fileName || ""
       });
       continue;
     }
@@ -327,7 +455,15 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
         },
         {
           createOriginalImageAsset: options.createOriginalImageAsset,
-          now: options.now
+          now: options.now,
+          onProgress: (event) => {
+            onProgress?.({
+              ...event,
+              completed: index,
+              total: approvedMatches.length,
+              itemName: match.itemName || match.itemId
+            });
+          }
         }
       );
       recoveredItems.push(result.item);
@@ -338,6 +474,14 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
         appliedAt,
         decision: "accepted"
       });
+      onProgress?.({
+        phase: "item-recovered",
+        completed: index + 1,
+        total: approvedMatches.length,
+        itemId: match.itemId,
+        itemName: match.itemName || match.itemId,
+        fileName: selectedCandidate.fileName || ""
+      });
     } catch (error) {
       applyResults.push({
         itemId: match.itemId,
@@ -346,18 +490,41 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
         appliedAt,
         decision: "accepted"
       });
+      onProgress?.({
+        phase: "item-failed",
+        completed: index + 1,
+        total: approvedMatches.length,
+        itemId: match.itemId,
+        itemName: match.itemName || match.itemId,
+        fileName: selectedCandidate.fileName || "",
+        error: typeof error?.message === "string" ? error.message : "Original recovery failed."
+      });
     }
   }
+  timings.applyLoopMs = buildPhaseTiming(applyLoopStartedAtMs);
 
   const nextSession = mergeOriginalRecoveryApplyResults(session, applyResults, {
     updatedAt: appliedAt
   });
+  onProgress?.({
+    phase: "report-persistence",
+    completed: approvedMatches.length,
+    total: approvedMatches.length
+  });
+  const persistenceStartedAtMs = getNowMs();
   const saveResult = await persistRecoverySession(nextSession);
+  timings.reportPersistenceMs = buildPhaseTiming(persistenceStartedAtMs);
+  onProgress?.({
+    phase: "apply-complete",
+    completed: approvedMatches.length,
+    total: approvedMatches.length
+  });
 
   return {
     ...saveResult,
     recoveredItems,
-    applyResults
+    applyResults,
+    timings
   };
 }
 
