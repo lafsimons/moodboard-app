@@ -15,7 +15,9 @@ import {
   exportBackup,
   getOrCreateDeviceId,
   loadLatestMetadataSnapshotInfo,
+  loadIndexedDbDebugInfo,
   loadMetadataSnapshots,
+  loadLatestOriginalRecoverySession,
   getSyncMetadata,
   hasOriginalImageBlob,
   loadAppState,
@@ -36,6 +38,7 @@ import {
   resetToDefaults,
   saveAppState,
   saveItem,
+  saveOriginalRecoverySession,
   saveOriginalImageBlob,
   deleteItem,
   upsertSyncMetadata
@@ -670,11 +673,12 @@ test("db upgrade creates sync stores", async () => {
   await getOrCreateDeviceId();
 
   const database = indexedDb.getDatabase("moodboard-app-db");
-  assert.equal(database.version, 6);
+  assert.equal(database.version, 8);
   assert.equal(database.stores.has("itemMediaAssets"), true);
   assert.equal(database.stores.has("syncState"), true);
   assert.equal(database.stores.has("syncMetadata"), true);
   assert.equal(database.stores.has("metadataSnapshots"), true);
+  assert.equal(database.stores.has("originalRecoverySessions"), true);
 });
 
 test("startup loaders upgrade an older database and create metadataSnapshots without losing stored library data", async () => {
@@ -706,7 +710,7 @@ test("startup loaders upgrade an older database and create metadataSnapshots wit
     loadLatestMetadataSnapshotInfo()
   ]);
 
-  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).version, 6);
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).version, 8);
   assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).stores.has("metadataSnapshots"), true);
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "Imported item");
@@ -745,6 +749,118 @@ test("missing metadataSnapshots store returns empty snapshot info without breaki
   assert.equal(items[0].title, "Persisted item");
   assert.equal(appState?.localSafety?.metadataDirtySinceSnapshot, true);
   assert.deepEqual(appState?.localSafety?.changedItemIdsSinceSnapshot, ["item-1"]);
+});
+
+test("startup loaders upgrade an older database and create originalRecoverySessions without losing stored library data", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 7);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.createObjectStore("itemMediaAssets", { keyPath: "key" });
+  database.createObjectStore("syncState", { keyPath: "key" });
+  database.createObjectStore("syncMetadata", { keyPath: "key" });
+  database.createObjectStore("metadataSnapshots", { keyPath: "id" });
+  database.stores.get("items").records.set("item-1", {
+    id: "item-1",
+    itemUuid: "uuid-1",
+    title: "Persisted item"
+  });
+  database.stores.get("appState").records.set("state", {
+    key: "state",
+    value: {
+      savedOutfits: []
+    }
+  });
+
+  const [items, latestRecoverySession] = await Promise.all([
+    loadStartupItemMetadata(),
+    loadLatestOriginalRecoverySession()
+  ]);
+
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).version, 8);
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).stores.has("originalRecoverySessions"), true);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "Persisted item");
+  assert.equal(latestRecoverySession, null);
+});
+
+test("missing originalRecoverySessions store returns empty recovery state and does not fail saves", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 8);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.createObjectStore("itemMediaAssets", { keyPath: "key" });
+  database.createObjectStore("syncState", { keyPath: "key" });
+  database.createObjectStore("syncMetadata", { keyPath: "key" });
+  database.createObjectStore("metadataSnapshots", { keyPath: "id" });
+
+  const latestRecoverySessionBeforeSave = await loadLatestOriginalRecoverySession();
+  const savedRecoverySession = await saveOriginalRecoverySession({
+    id: "session-1",
+    app: "mba",
+    status: "scanned",
+    sourceLabel: "Archive",
+    summary: {
+      scannedFileCount: 5
+    },
+    matches: []
+  });
+  const latestRecoverySessionAfterSave = await loadLatestOriginalRecoverySession();
+
+  assert.equal(latestRecoverySessionBeforeSave, null);
+  assert.equal(savedRecoverySession.id, "session-1");
+  assert.equal(savedRecoverySession.summary.scannedFileCount, 5);
+  assert.equal(latestRecoverySessionAfterSave, null);
+});
+
+test("loadIndexedDbDebugInfo reports upgraded version and originalRecoverySessions store", async () => {
+  installFakeIndexedDb();
+
+  await getOrCreateDeviceId();
+
+  const debugInfo = await loadIndexedDbDebugInfo();
+
+  assert.equal(debugInfo.name, INDEXED_DB_NAME);
+  assert.equal(debugInfo.version, 8);
+  assert.equal(debugInfo.stores.includes("originalRecoverySessions"), true);
+});
+
+test("upgrading a version-7 database missing originalRecoverySessions allows save load and refresh recovery session flow", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 7);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.createObjectStore("itemMediaAssets", { keyPath: "key" });
+  database.createObjectStore("syncState", { keyPath: "key" });
+  database.createObjectStore("syncMetadata", { keyPath: "key" });
+  database.createObjectStore("metadataSnapshots", { keyPath: "id" });
+
+  const debugInfoAfterUpgrade = await loadIndexedDbDebugInfo();
+  const savedSession = await saveOriginalRecoverySession({
+    id: "session-upgraded",
+    app: "mba",
+    status: "scanned",
+    sourceLabel: "Archive",
+    summary: {
+      scannedFileCount: 7
+    },
+    matches: []
+  });
+  const latestRecoverySession = await loadLatestOriginalRecoverySession();
+  const debugInfoAfterSave = await loadIndexedDbDebugInfo();
+
+  assert.equal(debugInfoAfterUpgrade.version, 8);
+  assert.equal(debugInfoAfterUpgrade.stores.includes("originalRecoverySessions"), true);
+  assert.equal(savedSession.id, "session-upgraded");
+  assert.equal(latestRecoverySession?.id, "session-upgraded");
+  assert.equal(latestRecoverySession?.summary?.scannedFileCount, 7);
+  assert.equal(debugInfoAfterSave.stores.includes("originalRecoverySessions"), true);
 });
 
 test("getOrCreateDeviceId creates and reuses a stable local device id", async () => {

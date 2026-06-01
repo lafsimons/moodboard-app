@@ -104,6 +104,7 @@ import {
 import { normalizeItemSourceIdentity, normalizeSourceFilenameAliases } from "./lib/itemIdentity";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
 import TagInput from "./components/TagInput";
+import OriginalRecoveryDialog from "./components/OriginalRecoveryDialog.jsx";
 import {
   getAllTags,
   migrateReferenceMetadataToTags,
@@ -203,6 +204,20 @@ import {
 } from "./repositories/itemsRepository.js";
 import { loadStartupAppState, saveAppState } from "./repositories/appStateRepository.js";
 import { backfillLocalSyncMetadata } from "./repositories/syncRepository.js";
+import {
+  applyOriginalRecoverySession,
+  exportOriginalRecoveryReport,
+  loadLatestOriginalRecoverySession,
+  scanOriginalRecoverySource,
+  saveOriginalRecoverySession,
+  updateOriginalRecoveryCandidateSelection,
+  updateOriginalRecoveryDecision
+} from "./repositories/originalRecoveryRepository.js";
+import {
+  isOriginalRecoveryFileSystemAdapterSupported,
+  scanOriginalRecoveryDirectoryWithFileSystemAccess
+} from "./lib/originalRecoveryFileSystemAdapter.js";
+import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
   eager: true,
@@ -3938,6 +3953,16 @@ export default function App() {
   const [confirmation, setConfirmation] = useState(null);
   const [originalReconnectionDialog, setOriginalReconnectionDialog] = useState(null);
   const [originalReconnectionFeedback, setOriginalReconnectionFeedback] = useState("");
+  const [originalRecoveryDialogOpen, setOriginalRecoveryDialogOpen] = useState(false);
+  const [originalRecoverySession, setOriginalRecoverySession] = useState(null);
+  const [originalRecoveryBucket, setOriginalRecoveryBucket] = useState("all");
+  const [originalRecoveryFeedback, setOriginalRecoveryFeedback] = useState("");
+  const [originalRecoveryError, setOriginalRecoveryError] = useState("");
+  const [isOriginalRecoveryScanning, setIsOriginalRecoveryScanning] = useState(false);
+  const [isOriginalRecoveryApplying, setIsOriginalRecoveryApplying] = useState(false);
+  const [originalRecoveryScanProgress, setOriginalRecoveryScanProgress] = useState("");
+  const [originalRecoveryRuntimeSessionId, setOriginalRecoveryRuntimeSessionId] = useState("");
+  const [originalRecoveryCandidateFilesById, setOriginalRecoveryCandidateFilesById] = useState({});
   const [selectedReferenceSelection, setSelectedReferenceSelection] = useState({
     ids: {},
     anchorId: null
@@ -5278,6 +5303,284 @@ export default function App() {
       showOriginalOperationFeedback(item.id, "Original marked as missing.");
     } catch (error) {
       showOriginalOperationFeedback(item.id, formatErrorMessage(error, "Failed to mark original as missing."), "error");
+    }
+  }
+
+  async function openOriginalRecoveryWorkflow() {
+    setOriginalRecoveryDialogOpen(true);
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryError("");
+    setOriginalRecoveryScanProgress("");
+
+    try {
+      const latestSession = await loadLatestOriginalRecoverySession();
+      setOriginalRecoverySession(latestSession);
+      setOriginalRecoveryRuntimeSessionId("");
+      setOriginalRecoveryCandidateFilesById({});
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to load original recovery report."));
+    }
+  }
+
+  function closeOriginalRecoveryWorkflow() {
+    if (isOriginalRecoveryScanning || isOriginalRecoveryApplying) {
+      return;
+    }
+
+    setOriginalRecoveryDialogOpen(false);
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryError("");
+    setOriginalRecoveryScanProgress("");
+  }
+
+  async function handleOriginalRecoveryScan() {
+    if (!isOriginalRecoveryFileSystemAdapterSupported(window)) {
+      setOriginalRecoveryError("Original recovery folder scanning requires File System Access API support.");
+      return;
+    }
+
+    setOriginalRecoveryError("");
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryScanProgress("");
+    setIsOriginalRecoveryScanning(true);
+
+    try {
+      const result = await scanOriginalRecoverySource({
+        adapter: {
+          scan: () => scanOriginalRecoveryDirectoryWithFileSystemAccess({
+            target: window,
+            onProgress: ({ scannedFileCount, currentPath }) => {
+              setOriginalRecoveryScanProgress(
+                currentPath
+                  ? `Scanned ${scannedFileCount} files... ${currentPath}`
+                  : `Scanned ${scannedFileCount} files...`
+              );
+            }
+          })
+        },
+        createOriginalImageAsset,
+        app: "mba",
+        previousSession: originalRecoverySession
+      });
+
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryRuntimeSessionId(result.session.id);
+      setOriginalRecoveryCandidateFilesById(result.candidateFilesById);
+      setOriginalRecoveryBucket("all");
+      setOriginalRecoveryFeedback(result.persisted
+        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover.`
+        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload.`
+      );
+      setOriginalRecoveryScanProgress("");
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setOriginalRecoveryFeedback("Original recovery scan canceled.");
+      } else {
+        setOriginalRecoveryError(formatErrorMessage(error, "Original recovery scan failed."));
+      }
+    } finally {
+      setIsOriginalRecoveryScanning(false);
+    }
+  }
+
+  async function handleOriginalRecoveryDecisionChange(itemId, decision) {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const result = await updateOriginalRecoveryDecision(originalRecoverySession.id, itemId, decision, {
+        currentSession: originalRecoverySession
+      });
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryError("");
+      if (!result.persisted) {
+        setOriginalRecoveryFeedback("Recovery report could not be saved; this session cannot be resumed after reload.");
+      }
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to update recovery decision."));
+    }
+  }
+
+  async function handleOriginalRecoveryCandidateSelection(itemId, candidateId) {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const result = await updateOriginalRecoveryCandidateSelection(originalRecoverySession.id, itemId, candidateId, {
+        currentSession: originalRecoverySession
+      });
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryError("");
+      if (!result.persisted) {
+        setOriginalRecoveryFeedback("Recovery report could not be saved; this session cannot be resumed after reload.");
+      }
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to select recovery candidate."));
+    }
+  }
+
+  async function handleApproveReadyOriginalRecoveryMatches() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const nextSession = refreshOriginalRecoverySession({
+        ...originalRecoverySession,
+        matches: (originalRecoverySession.matches ?? []).map((match) => (
+          match.outcome === "exact_single" || match.outcome === "strong_single"
+            ? {
+                ...match,
+                decision: match.selectedCandidateId ? "accepted" : match.decision
+              }
+            : match
+        ))
+      }, {
+        status: "reviewed"
+      });
+      const result = await saveOriginalRecoverySession(nextSession);
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryFeedback(result.persisted
+        ? "Ready matches approved."
+        : "Ready matches approved. Recovery report could not be saved; this session cannot be resumed after reload."
+      );
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to approve ready recovery matches."));
+    }
+  }
+
+  async function handleResetVisibleOriginalRecoveryMatches() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const nextSession = refreshOriginalRecoverySession({
+        ...originalRecoverySession,
+        matches: (originalRecoverySession.matches ?? []).map((match) => {
+          const matchBucket = match.outcome === "excluded"
+            ? "excluded"
+            : match.outcome === "exact_single" || match.outcome === "strong_single"
+              ? "ready"
+              : match.outcome === "possible_single"
+                ? "review"
+                : match.outcome === "ambiguous_multiple"
+                  ? "ambiguous"
+                  : "no_match";
+
+          if (originalRecoveryBucket !== "all" && matchBucket !== originalRecoveryBucket) {
+            return match;
+          }
+
+          if (match.outcome === "excluded") {
+            return match;
+          }
+
+          return {
+            ...match,
+            decision: "undecided"
+          };
+        })
+      }, {
+        status: "reviewed"
+      });
+      const result = await saveOriginalRecoverySession(nextSession);
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryFeedback(result.persisted
+        ? "Visible recovery decisions reset to undecided."
+        : "Visible recovery decisions reset to undecided. Recovery report could not be saved; this session cannot be resumed after reload."
+      );
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to reset visible recovery decisions."));
+    }
+  }
+
+  async function handleExportOriginalRecoveryReport() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const report = await exportOriginalRecoveryReport(originalRecoverySession.id, {
+        currentSession: originalRecoverySession
+      });
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+      const date = new Date().toISOString().slice(0, 10);
+      const exportResult = await downloadBlobFile(blob, `moodboard-original-recovery-${date}.json`, {
+        mimeType: "application/json"
+      });
+
+      if (exportResult !== "cancelled") {
+        setOriginalRecoveryFeedback("Original recovery report exported.");
+      }
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to export original recovery report."));
+    }
+  }
+
+  async function handleApplyOriginalRecovery() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    if (originalRecoveryRuntimeSessionId !== originalRecoverySession.id) {
+      setOriginalRecoveryError("Re-scan the source before applying approved recoveries.");
+      return;
+    }
+
+    setOriginalRecoveryError("");
+    setOriginalRecoveryFeedback("");
+    setIsOriginalRecoveryApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        changedItemIds: (originalRecoverySession.matches ?? [])
+          .filter((match) => match.decision === "accepted")
+          .map((match) => match.itemId),
+        priority: "blocking"
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with original recovery anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          setIsOriginalRecoveryApplying(false);
+          return;
+        }
+      }
+
+      const result = await applyOriginalRecoverySession(originalRecoverySession.id, {
+        currentSession: originalRecoverySession,
+        candidateFilesById: originalRecoveryCandidateFilesById,
+        createOriginalImageAsset
+      });
+
+      result.recoveredItems.forEach((savedItem) => {
+        applyPersistedOriginalMutation(savedItem);
+      });
+      if (result.recoveredItems.length) {
+        const changedItemIds = result.recoveredItems.map((item) => item.id).filter(Boolean);
+        markMetadataDirty(changedItemIds);
+        applyProvenanceUpdate(
+          (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+          { itemCountSnapshot: items.length }
+        );
+      }
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryFeedback(result.persisted
+        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed.`
+        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload.`
+      );
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Original recovery apply failed."));
+    } finally {
+      setIsOriginalRecoveryApplying(false);
     }
   }
   const visibleWardrobeItems = useMemo(() => {
@@ -11456,6 +11759,14 @@ export default function App() {
   const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
   const backupPackageImportProgressLabel = getBackupPackageImportProgressLabel(backupPackageImportProgress);
   const appBuildLabel = formatAppBuildLabel();
+  const canUseOriginalRecoveryScan = typeof window !== "undefined"
+    ? isOriginalRecoveryFileSystemAdapterSupported(window)
+    : isOriginalRecoveryFileSystemAdapterSupported();
+  const hasLiveOriginalRecoveryCandidates = Boolean(
+    originalRecoverySession?.id
+    && originalRecoveryRuntimeSessionId === originalRecoverySession.id
+    && Object.keys(originalRecoveryCandidateFilesById).length
+  );
   const fileSystemAccessDebug = typeof window !== "undefined"
     ? getFileSystemAccessDebugSnapshot(window)
     : getFileSystemAccessDebugSnapshot();
@@ -13217,6 +13528,13 @@ export default function App() {
                           <button
                             type="button"
                             className="ghost-button wardrobe-manage-action"
+                            onClick={() => void openOriginalRecoveryWorkflow()}
+                          >
+                            Original recovery
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
                             onClick={handleRunMediaIntegrityCheck}
                             disabled={isMediaIntegrityChecking}
                           >
@@ -13923,6 +14241,28 @@ export default function App() {
             ) : null}
           </div>
         ) : null}
+
+        <OriginalRecoveryDialog
+          isOpen={originalRecoveryDialogOpen}
+          session={originalRecoverySession}
+          scanning={isOriginalRecoveryScanning}
+          scanProgress={originalRecoveryScanProgress}
+          applying={isOriginalRecoveryApplying}
+          feedback={originalRecoveryFeedback}
+          error={originalRecoveryError}
+          canScan={canUseOriginalRecoveryScan}
+          hasLiveCandidates={hasLiveOriginalRecoveryCandidates}
+          bucketFilter={originalRecoveryBucket}
+          onClose={closeOriginalRecoveryWorkflow}
+          onScan={() => void handleOriginalRecoveryScan()}
+          onApplyApproved={() => void handleApplyOriginalRecovery()}
+          onExportReport={() => void handleExportOriginalRecoveryReport()}
+          onBucketFilterChange={setOriginalRecoveryBucket}
+          onApproveReady={() => void handleApproveReadyOriginalRecoveryMatches()}
+          onResetVisible={() => void handleResetVisibleOriginalRecoveryMatches()}
+          onSelectCandidate={(itemId, candidateId) => void handleOriginalRecoveryCandidateSelection(itemId, candidateId)}
+          onDecisionChange={(itemId, decision) => void handleOriginalRecoveryDecisionChange(itemId, decision)}
+        />
 
         {originalReconnectionDialog ? (
           <div className="floating-backdrop confirm-backdrop" onClick={() => {
