@@ -6,6 +6,7 @@ import {
 } from "../lib/storage.js";
 import {
   buildOriginalRecoverySession,
+  collectOriginalRecoveryPlausibleCandidateIds,
   createOriginalRecoveryCandidateRecord,
   createOriginalRecoveryReport,
   getApprovedOriginalRecoveryMatches,
@@ -21,6 +22,82 @@ function normalizeText(value) {
 
 function isSupportedImageFile(file) {
   return Boolean(file?.type?.startsWith?.("image/"));
+}
+
+function normalizeNumber(value) {
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) && parsedValue > 0 ? Math.round(parsedValue) : 0;
+}
+
+function getNowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function buildPhaseTiming(startedAtMs) {
+  return Math.max(0, Math.round((getNowMs() - startedAtMs) * 100) / 100);
+}
+
+function createScanTimingSummary() {
+  return {
+    traversalMs: 0,
+    metadataMs: 0,
+    decodeMs: 0,
+    indexBuildMs: 0,
+    matchSessionMs: 0,
+    persistenceMs: 0
+  };
+}
+
+function createLightweightCandidateRecord(entry, fileMetadata = {}) {
+  return {
+    id: normalizeText(entry?.id),
+    sourceLabel: normalizeText(entry?.sourceLabel),
+    relativePath: normalizeText(entry?.relativePath),
+    fileName: normalizeText(entry?.fileName) || normalizeText(fileMetadata?.name),
+    sourceFileSize: normalizeNumber(fileMetadata?.size),
+    sourceImageWidth: 0,
+    sourceImageHeight: 0,
+    sourceLastModified: normalizeNumber(fileMetadata?.lastModified),
+    mimeType: normalizeText(fileMetadata?.type),
+    fingerprint: ""
+  };
+}
+
+async function resolveScanEntryFile(adapter, entry) {
+  if (entry?.file) {
+    return entry.file;
+  }
+
+  if (typeof adapter?.getFile === "function") {
+    return adapter.getFile(entry);
+  }
+
+  if (entry?.handle && typeof entry.handle.getFile === "function") {
+    return entry.handle.getFile();
+  }
+
+  throw new Error("Original recovery scan entry could not be materialized as a file.");
+}
+
+async function resolveScanEntryMetadata(adapter, entry) {
+  if (typeof adapter?.getFileMetadata === "function") {
+    const metadata = await adapter.getFileMetadata(entry);
+
+    if (metadata) {
+      return metadata;
+    }
+  }
+
+  const file = await resolveScanEntryFile(adapter, entry);
+
+  return {
+    name: file?.name,
+    size: file?.size,
+    type: file?.type,
+    lastModified: file?.lastModified
+  };
 }
 
 async function persistRecoverySession(session) {
@@ -89,7 +166,8 @@ export async function scanOriginalRecoverySource({
   createOriginalImageAsset,
   app = "mba",
   previousSession = null,
-  now = () => new Date().toISOString()
+  now = () => new Date().toISOString(),
+  onProgress = null
 } = {}) {
   if (!adapter || typeof adapter.scan !== "function") {
     throw new Error("Original recovery scanning requires a scan adapter.");
@@ -99,38 +177,105 @@ export async function scanOriginalRecoverySource({
     throw new Error("Original recovery scanning requires an original image asset decoder.");
   }
 
+  const timings = createScanTimingSummary();
+  const traversalStartedAtMs = getNowMs();
   const [items, scanResult] = await Promise.all([
     loadItems(),
-    adapter.scan()
+    adapter.scan({
+      onProgress: typeof onProgress === "function" ? onProgress : undefined
+    })
   ]);
+  timings.traversalMs = buildPhaseTiming(traversalStartedAtMs);
   const candidateFilesById = {};
-  const candidates = [];
+  const lightweightCandidates = [];
+  const scanEntriesById = new Map();
+  const metadataEntries = Array.isArray(scanResult?.entries) ? scanResult.entries : [];
+  const metadataStartedAtMs = getNowMs();
 
-  for (const entry of Array.isArray(scanResult?.entries) ? scanResult.entries : []) {
-    if (!isSupportedImageFile(entry?.file)) {
+  for (let index = 0; index < metadataEntries.length; index += 1) {
+    const entry = metadataEntries[index];
+    const fileMetadata = await resolveScanEntryMetadata(adapter, entry);
+
+    if (!isSupportedImageFile(fileMetadata)) {
       continue;
     }
 
-    const originalAsset = await createOriginalImageAsset(entry.file);
-    const candidate = createOriginalRecoveryCandidateRecord(entry, originalAsset);
-    candidates.push(candidate);
-    candidateFilesById[candidate.id] = entry.file;
-  }
+    const candidate = createLightweightCandidateRecord(entry, fileMetadata);
 
+    if (!candidate.id) {
+      continue;
+    }
+
+    lightweightCandidates.push(candidate);
+    scanEntriesById.set(candidate.id, entry);
+    onProgress?.({
+      phase: "metadata",
+      completed: index + 1,
+      total: metadataEntries.length,
+      currentPath: candidate.relativePath
+    });
+  }
+  timings.metadataMs = buildPhaseTiming(metadataStartedAtMs);
+
+  const indexBuildStartedAtMs = getNowMs();
+  const plausibleCandidateIds = collectOriginalRecoveryPlausibleCandidateIds(items, lightweightCandidates);
+  timings.indexBuildMs = buildPhaseTiming(indexBuildStartedAtMs);
+
+  const decodedCandidates = [];
+  const plausibleCandidateList = lightweightCandidates.filter((candidate) => plausibleCandidateIds.has(candidate.id));
+  const decodeStartedAtMs = getNowMs();
+
+  for (let index = 0; index < plausibleCandidateList.length; index += 1) {
+    const lightweightCandidate = plausibleCandidateList[index];
+    const entry = scanEntriesById.get(lightweightCandidate.id);
+    const file = await resolveScanEntryFile(adapter, entry);
+    const originalAsset = await createOriginalImageAsset(file);
+    const candidate = createOriginalRecoveryCandidateRecord({
+      ...entry,
+      file
+    }, originalAsset);
+    decodedCandidates.push(candidate);
+    candidateFilesById[candidate.id] = file;
+    onProgress?.({
+      phase: "decode",
+      completed: index + 1,
+      total: plausibleCandidateList.length,
+      currentPath: candidate.relativePath
+    });
+  }
+  timings.decodeMs = buildPhaseTiming(decodeStartedAtMs);
+
+  onProgress?.({
+    phase: "matching",
+    completed: 0,
+    total: items.length
+  });
+  const matchSessionStartedAtMs = getNowMs();
   const session = buildOriginalRecoverySession({
     sessionId: previousSession?.id,
     app,
     sourceLabel: scanResult?.sourceLabel,
     items,
-    candidates,
+    candidates: decodedCandidates,
+    scannedFileCount: lightweightCandidates.length,
     previousSession,
     now: typeof now === "function" ? now() : new Date().toISOString()
   });
+  timings.matchSessionMs = buildPhaseTiming(matchSessionStartedAtMs);
+
+  onProgress?.({
+    phase: "saving",
+    completed: 0,
+    total: 1
+  });
+  const persistenceStartedAtMs = getNowMs();
   const saveResult = await persistRecoverySession(session);
+  timings.persistenceMs = buildPhaseTiming(persistenceStartedAtMs);
 
   return {
     ...saveResult,
-    candidateFilesById
+    candidateFilesById,
+    timings
   };
 }
 

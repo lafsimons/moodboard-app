@@ -227,6 +227,91 @@ test("scanOriginalRecoverySource persists a report and skips non-image files", a
   assert.equal(latestSession.id, result.session.id);
 });
 
+test("scanOriginalRecoverySource separates traversal metadata and decode phases and only decodes plausible candidates", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-1",
+    itemUuid: "uuid-1",
+    name: "Camel Coat",
+    sourceOriginalFilename: "camel-coat.jpg",
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-1",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  const matchingFile = new File(["1234567890"], "camel-coat.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const unrelatedFile = new File(["1234"], "totally-unrelated.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const phases = [];
+  const decodedFiles = [];
+
+  const result = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async (options = {}) => {
+        options.onProgress?.({
+          phase: "traversal",
+          traversedFileCount: 1,
+          currentPath: "archive/camel-coat.jpg"
+        });
+        options.onProgress?.({
+          phase: "traversal",
+          traversedFileCount: 2,
+          currentPath: "archive/totally-unrelated.jpg"
+        });
+
+        return {
+          sourceLabel: "Archive",
+          entries: [
+            { id: "candidate-1", sourceLabel: "Archive", relativePath: "archive/camel-coat.jpg", file: matchingFile },
+            { id: "candidate-2", sourceLabel: "Archive", relativePath: "archive/totally-unrelated.jpg", file: unrelatedFile }
+          ]
+        };
+      }
+    },
+    createOriginalImageAsset: async (file) => {
+      decodedFiles.push(file.name);
+
+      return {
+        src: `data:${file.type};base64,ZmFrZQ==`,
+        mimeType: file.type,
+        width: 100,
+        height: 50,
+        fileSize: file.size,
+        originalFilename: file.name
+      };
+    },
+    onProgress: (event) => {
+      phases.push(event.phase);
+    },
+    now: () => "2026-06-01T12:00:00.000Z"
+  });
+
+  assert.deepEqual(decodedFiles, ["camel-coat.jpg"]);
+  assert.equal(result.session.summary.scannedFileCount, 2);
+  assert.equal(result.session.matches.find((match) => match.itemId === "item-1").selectedCandidateId, "candidate-1");
+  assert.equal(phases.includes("traversal"), true);
+  assert.equal(phases.includes("metadata"), true);
+  assert.equal(phases.includes("decode"), true);
+  assert.equal(phases.includes("matching"), true);
+  assert.equal(phases.includes("saving"), true);
+});
+
 test("applyOriginalRecoverySession preserves partial progress and marks missing runtime files for re-scan", async () => {
   installFakeIndexedDb();
   await saveItem({

@@ -3,8 +3,24 @@ import assert from "node:assert/strict";
 
 import {
   buildOriginalRecoverySession,
+  buildOriginalRecoverySessionExhaustive,
   mergeOriginalRecoveryApplyResults
 } from "./originalRecovery.js";
+
+function summarizeSessionForComparison(session) {
+  return {
+    summary: session.summary,
+    matches: session.matches.map((match) => ({
+      itemId: match.itemId,
+      outcome: match.outcome,
+      decision: match.decision,
+      selectedCandidateId: match.selectedCandidateId,
+      candidateIds: match.candidates.map((candidate) => candidate.id),
+      candidateClassifications: match.candidates.map((candidate) => [candidate.id, candidate.match.classification]),
+      candidateReasons: match.candidates.map((candidate) => [candidate.id, candidate.reasons])
+    }))
+  };
+}
 
 test("buildOriginalRecoverySession auto-approves exact matches and excludes already linked items", () => {
   const session = buildOriginalRecoverySession({
@@ -204,6 +220,201 @@ test("buildOriginalRecoverySession preserves prior accepted decisions only when 
   });
 
   assert.equal(session.matches[0].decision, "needs_rescan");
+});
+
+test("indexed recovery matcher returns the same results as the exhaustive matcher on representative fixtures", () => {
+  const fixture = {
+    app: "mba",
+    sourceLabel: "Archive",
+    items: [
+      {
+        id: "exact-1",
+        itemUuid: "uuid-exact-1",
+        name: "Exact",
+        sourceOriginalFilename: "camel-coat.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        sourceLastModified: 1234,
+        mimeType: "image/jpeg",
+        originalPreserved: false
+      },
+      {
+        id: "support-only-weak",
+        itemUuid: "uuid-support-only-weak",
+        name: "Support only",
+        sourceOriginalFilename: "missing-name.jpg",
+        sourceFileSize: 2000,
+        sourceImageWidth: 200,
+        sourceImageHeight: 100,
+        mimeType: "image/png",
+        originalPreserved: false
+      },
+      {
+        id: "legacy-namespace",
+        itemUuid: "uuid-legacy-namespace",
+        name: "Legacy namespace",
+        sourceRelativePath: "moodboard/images-050.jpg",
+        sourceOriginalFilename: "images-050.jpg",
+        sourceFileSize: 3000,
+        sourceImageWidth: 300,
+        sourceImageHeight: 150,
+        mimeType: "image/jpeg",
+        originalPreserved: false
+      },
+      {
+        id: "cross-namespace",
+        itemUuid: "uuid-cross-namespace",
+        name: "Cross namespace",
+        sourceOriginalFilename: "images-051.jpg",
+        sourceFileSize: 3500,
+        sourceImageWidth: 350,
+        sourceImageHeight: 175,
+        mimeType: "image/jpeg",
+        originalPreserved: false
+      },
+      {
+        id: "no-match",
+        itemUuid: "uuid-no-match",
+        name: "No match",
+        sourceOriginalFilename: "totally-missing.jpg",
+        sourceFileSize: 9000,
+        sourceImageWidth: 900,
+        sourceImageHeight: 450,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-exact",
+        relativePath: "archive/camel-coat.jpg",
+        fileName: "camel-coat.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        sourceLastModified: 1234,
+        mimeType: "image/jpeg"
+      },
+      {
+        id: "candidate-support-only",
+        relativePath: "archive/not-the-same-name.png",
+        fileName: "not-the-same-name.png",
+        sourceFileSize: 2000,
+        sourceImageWidth: 200,
+        sourceImageHeight: 100,
+        mimeType: "image/png"
+      },
+      {
+        id: "candidate-moodboard-050",
+        relativePath: "moodboard/moodboard-images-050.jpg",
+        fileName: "moodboard-images-050.jpg",
+        sourceFileSize: 3000,
+        sourceImageWidth: 300,
+        sourceImageHeight: 150,
+        mimeType: "image/jpeg"
+      },
+      {
+        id: "candidate-vintage-051",
+        relativePath: "vintage/vintage-images-051.jpg",
+        fileName: "vintage-images-051.jpg",
+        sourceFileSize: 3500,
+        sourceImageWidth: 350,
+        sourceImageHeight: 175,
+        mimeType: "image/jpeg"
+      },
+      {
+        id: "candidate-moodboard-051",
+        relativePath: "moodboard/moodboard-images-051.jpg",
+        fileName: "moodboard-images-051.jpg",
+        sourceFileSize: 3500,
+        sourceImageWidth: 350,
+        sourceImageHeight: 175,
+        mimeType: "image/jpeg"
+      }
+    ]
+  };
+
+  const indexedSession = buildOriginalRecoverySession(fixture);
+  const exhaustiveSession = buildOriginalRecoverySessionExhaustive(fixture);
+
+  assert.deepEqual(
+    summarizeSessionForComparison(indexedSession),
+    summarizeSessionForComparison(exhaustiveSession)
+  );
+});
+
+test("indexed recovery matcher keeps cross-namespace legacy collisions ambiguous and not auto-selected", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceOriginalFilename: "images-168.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        mimeType: "image/jpeg",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "vintage/vintage-images-168.jpg",
+        fileName: "vintage-images-168.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        mimeType: "image/jpeg"
+      },
+      {
+        id: "candidate-2",
+        relativePath: "wishlist/wishlist-images-168.jpg",
+        fileName: "wishlist-images-168.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "ambiguous_multiple");
+  assert.equal(session.matches[0].decision, "undecided");
+  assert.equal(session.matches[0].selectedCandidateId, "");
+});
+
+test("indexed recovery matcher returns no_match when no indexed candidates exist", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-1",
+        itemUuid: "uuid-missing-1",
+        sourceOriginalFilename: "totally-missing.jpg",
+        sourceFileSize: 1111,
+        sourceImageWidth: 222,
+        sourceImageHeight: 111,
+        mimeType: "image/jpeg",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-1",
+        relativePath: "archive/another-file.png",
+        fileName: "another-file.png",
+        sourceFileSize: 9999,
+        sourceImageWidth: 333,
+        sourceImageHeight: 222,
+        mimeType: "image/png"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "no_match");
+  assert.equal(session.matches[0].decision, "undecided");
+  assert.deepEqual(session.matches[0].candidates, []);
 });
 
 test("mergeOriginalRecoveryApplyResults updates summary counts", () => {

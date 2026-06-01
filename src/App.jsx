@@ -5347,20 +5347,47 @@ export default function App() {
     try {
       const result = await scanOriginalRecoverySource({
         adapter: {
-          scan: () => scanOriginalRecoveryDirectoryWithFileSystemAccess({
+          scan: (adapterOptions = {}) => scanOriginalRecoveryDirectoryWithFileSystemAccess({
             target: window,
-            onProgress: ({ scannedFileCount, currentPath }) => {
+            ...adapterOptions,
+            onProgress: ({ phase, traversedFileCount, currentPath }) => {
               setOriginalRecoveryScanProgress(
-                currentPath
-                  ? `Scanned ${scannedFileCount} files... ${currentPath}`
-                  : `Scanned ${scannedFileCount} files...`
+                phase === "traversal"
+                  ? (
+                    currentPath
+                      ? `Traversed ${traversedFileCount} files... ${currentPath}`
+                      : `Traversed ${traversedFileCount} files...`
+                  )
+                  : originalRecoveryScanProgress
               );
             }
           })
         },
         createOriginalImageAsset,
         app: "mba",
-        previousSession: originalRecoverySession
+        previousSession: originalRecoverySession,
+        onProgress: ({ phase, completed, total, currentPath }) => {
+          if (phase === "traversal") {
+            return;
+          }
+
+          const countLabel = total > 0 ? `${completed}/${total}` : `${completed}`;
+          const phaseLabel = phase === "metadata"
+            ? "Collecting file metadata"
+            : phase === "decode"
+              ? "Decoding plausible candidates"
+              : phase === "matching"
+                ? "Matching originals"
+                : phase === "saving"
+                  ? "Saving recovery report"
+                  : "Processing";
+
+          setOriginalRecoveryScanProgress(
+            currentPath
+              ? `${phaseLabel}... ${countLabel} ${currentPath}`
+              : `${phaseLabel}... ${countLabel}`
+          );
+        }
       });
 
       setOriginalRecoverySession(result.session);

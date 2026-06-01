@@ -18,7 +18,7 @@ export async function scanOriginalRecoveryDirectoryWithFileSystemAccess(options 
   const directoryHandle = await target.showDirectoryPicker();
   const sourceLabel = normalizeText(directoryHandle?.name) || "Selected folder";
   const entries = [];
-  let candidateCount = 0;
+  let traversedFileCount = 0;
 
   async function walkDirectory(handle, prefix = "") {
     // Keep adapter-specific directory traversal outside the recovery engine.
@@ -34,17 +34,18 @@ export async function scanOriginalRecoveryDirectoryWithFileSystemAccess(options 
         continue;
       }
 
-      const file = await entry.getFile();
-      candidateCount += 1;
+      traversedFileCount += 1;
       entries.push({
-        id: `recovery_candidate_${candidateCount}`,
+        id: `recovery_candidate_${traversedFileCount}`,
         sourceLabel,
         relativePath: nextRelativePath,
-        file
+        fileName: name,
+        handle: entry
       });
 
       options.onProgress?.({
-        scannedFileCount: candidateCount,
+        phase: "traversal",
+        traversedFileCount,
         currentPath: nextRelativePath
       });
     }

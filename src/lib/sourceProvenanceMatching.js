@@ -18,6 +18,22 @@ export function normalizeComparableFilename(value) {
   return normalizeText(value).replace(/\\/g, "/").toLowerCase();
 }
 
+function getNormalizedLegacyNumberKey(value) {
+  const parsedNamespacedFilename = parseLegacyNamespacedFilename(value);
+
+  if (parsedNamespacedFilename) {
+    return `images-${parsedNamespacedFilename.number}${parsedNamespacedFilename.extension}`.toLowerCase();
+  }
+
+  const parsedNumberedFilename = parseLegacyNumberedFilename(value);
+
+  if (!parsedNumberedFilename) {
+    return "";
+  }
+
+  return `images-${parsedNumberedFilename.number}${parsedNumberedFilename.extension}`.toLowerCase();
+}
+
 function getPathSegments(value) {
   return normalizeComparableFilename(value)
     .split("/")
@@ -59,7 +75,7 @@ function parseLegacyNumberedFilename(value) {
   };
 }
 
-function collectSourceNamespaces(record = {}) {
+function collectSourceNamespacesSet(record = {}) {
   const namespaces = new Set();
   const pushNamespace = (value) => {
     const normalizedValue = normalizeComparableFilename(value);
@@ -113,10 +129,14 @@ function hasSharedNamespace(leftNamespaces, rightNamespaces) {
   return false;
 }
 
+export function collectSourceNamespaces(record = {}) {
+  return [...collectSourceNamespacesSet(record)];
+}
+
 export function collectSourceFilenameCandidates(record = {}) {
   const seen = new Set();
   const candidates = [];
-  const namespaces = collectSourceNamespaces(record);
+  const namespaces = collectSourceNamespacesSet(record);
   const pushCandidate = (value) => {
     const normalizedValue = normalizeText(value);
     const candidateKey = normalizeComparableFilename(normalizedValue);
@@ -143,18 +163,71 @@ export function collectSourceFilenameCandidates(record = {}) {
   return candidates;
 }
 
-function collectComparableFilenameKeys(record = {}) {
-  return new Set(collectSourceFilenameCandidates(record).map(normalizeComparableFilename).filter(Boolean));
+export function collectComparableFilenameKeys(record = {}) {
+  return collectSourceFilenameCandidates(record).map(normalizeComparableFilename).filter(Boolean);
+}
+
+export function buildSourceProvenanceSignals(record = {}) {
+  const comparableFilenameKeys = collectComparableFilenameKeys(record);
+  const namespaces = collectSourceNamespaces(record);
+  const legacyNumberKeys = [];
+  const namespaceFilenameKeys = [];
+  const namespaceLegacyNumberKeys = [];
+  const seenLegacyNumberKeys = new Set();
+  const seenNamespaceFilenameKeys = new Set();
+  const seenNamespaceLegacyNumberKeys = new Set();
+
+  comparableFilenameKeys.forEach((filenameKey) => {
+    const legacyNumberKey = getNormalizedLegacyNumberKey(filenameKey);
+
+    if (legacyNumberKey && !seenLegacyNumberKeys.has(legacyNumberKey)) {
+      seenLegacyNumberKeys.add(legacyNumberKey);
+      legacyNumberKeys.push(legacyNumberKey);
+    }
+
+    namespaces.forEach((namespace) => {
+      const namespaceFilenameKey = `${namespace}|${filenameKey}`;
+
+      if (!seenNamespaceFilenameKeys.has(namespaceFilenameKey)) {
+        seenNamespaceFilenameKeys.add(namespaceFilenameKey);
+        namespaceFilenameKeys.push(namespaceFilenameKey);
+      }
+
+      if (!legacyNumberKey) {
+        return;
+      }
+
+      const namespaceLegacyNumberKey = `${namespace}|${legacyNumberKey}`;
+
+      if (!seenNamespaceLegacyNumberKeys.has(namespaceLegacyNumberKey)) {
+        seenNamespaceLegacyNumberKeys.add(namespaceLegacyNumberKey);
+        namespaceLegacyNumberKeys.push(namespaceLegacyNumberKey);
+      }
+    });
+  });
+
+  return {
+    comparableFilenameKeys,
+    comparableFilenameKeySet: new Set(comparableFilenameKeys),
+    namespaces,
+    namespaceSet: new Set(namespaces),
+    legacyNumberKeys,
+    legacyNumberKeySet: new Set(legacyNumberKeys),
+    namespaceFilenameKeys,
+    namespaceLegacyNumberKeys
+  };
 }
 
 function hasSharedFilename(record, candidate) {
-  const left = collectComparableFilenameKeys(record);
-  const right = collectComparableFilenameKeys(candidate);
-  const leftNamespaces = collectSourceNamespaces(record);
-  const rightNamespaces = collectSourceNamespaces(candidate);
+  return hasSharedFilenameFromSignals(
+    buildSourceProvenanceSignals(record),
+    buildSourceProvenanceSignals(candidate)
+  );
+}
 
-  for (const entry of left) {
-    if (!right.has(entry)) {
+function hasSharedFilenameFromSignals(leftSignals, rightSignals) {
+  for (const entry of leftSignals.comparableFilenameKeys) {
+    if (!rightSignals.comparableFilenameKeySet.has(entry)) {
       continue;
     }
 
@@ -162,7 +235,11 @@ function hasSharedFilename(record, candidate) {
       return true;
     }
 
-    if (leftNamespaces.size && rightNamespaces.size && hasSharedNamespace(leftNamespaces, rightNamespaces)) {
+    if (
+      leftSignals.namespaceSet.size
+      && rightSignals.namespaceSet.size
+      && hasSharedNamespace(leftSignals.namespaceSet, rightSignals.namespaceSet)
+    ) {
       return true;
     }
   }
@@ -202,8 +279,26 @@ function hasExactMimeTypeMatch(record, candidate) {
   return Boolean(left && right && left === right);
 }
 
-export function getSourceProvenanceMatchDetails(record = {}, candidate = {}) {
-  const filenameMatch = hasSharedFilename(record, candidate);
+export function createSourceProvenanceComparableRecord(record = {}) {
+  return {
+    sourceRelativePath: normalizeText(record?.sourceRelativePath),
+    relativePath: normalizeText(record?.relativePath),
+    sourceOriginalFilename: normalizeText(record?.sourceOriginalFilename),
+    originalFilename: normalizeText(record?.originalFilename),
+    sourceFilenameAliases: Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : [],
+    sourceFileSize: normalizeNumber(record?.sourceFileSize),
+    sourceImageWidth: normalizeNumber(record?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(record?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(record?.sourceLastModified),
+    mimeType: normalizeMimeType(record?.mimeType),
+    images: record?.images
+  };
+}
+
+export function getSourceProvenanceMatchDetails(record = {}, candidate = {}, options = {}) {
+  const recordSignals = options.recordSignals ?? buildSourceProvenanceSignals(record);
+  const candidateSignals = options.candidateSignals ?? buildSourceProvenanceSignals(candidate);
+  const filenameMatch = hasSharedFilenameFromSignals(recordSignals, candidateSignals);
   const sizeMatch = hasExactSizeMatch(record, candidate);
   const dimensionMatch = hasExactDimensionMatch(record, candidate);
   const lastModifiedMatch = hasExactLastModifiedMatch(record, candidate);
@@ -232,6 +327,6 @@ export function getSourceProvenanceMatchDetails(record = {}, candidate = {}) {
   };
 }
 
-export function classifySourceProvenanceMatch(record = {}, candidate = {}) {
-  return getSourceProvenanceMatchDetails(record, candidate).classification;
+export function classifySourceProvenanceMatch(record = {}, candidate = {}, options = {}) {
+  return getSourceProvenanceMatchDetails(record, candidate, options).classification;
 }

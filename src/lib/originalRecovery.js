@@ -1,4 +1,8 @@
-import { getSourceProvenanceMatchDetails } from "./sourceProvenanceMatching.js";
+import {
+  buildSourceProvenanceSignals,
+  createSourceProvenanceComparableRecord,
+  getSourceProvenanceMatchDetails
+} from "./sourceProvenanceMatching.js";
 
 const MATCH_PRIORITY = {
   none: 0,
@@ -33,7 +37,7 @@ function normalizeStringArray(value) {
 }
 
 function buildComparableCandidate(candidate) {
-  return {
+  return createSourceProvenanceComparableRecord({
     sourceOriginalFilename: normalizeText(candidate.fileName),
     sourceRelativePath: normalizeText(candidate.relativePath),
     sourceFilenameAliases: [],
@@ -42,7 +46,7 @@ function buildComparableCandidate(candidate) {
     sourceImageHeight: normalizeNumber(candidate.sourceImageHeight),
     sourceLastModified: normalizeNumber(candidate.sourceLastModified),
     mimeType: normalizeText(candidate.mimeType)
-  };
+  });
 }
 
 function buildMatchReasons(match) {
@@ -130,6 +134,141 @@ function createCandidateFingerprint(candidate) {
   ].join("|");
 }
 
+function createPreparedCandidate(candidate) {
+  const comparableRecord = buildComparableCandidate(candidate);
+  const provenanceSignals = buildSourceProvenanceSignals(comparableRecord);
+
+  return {
+    candidate,
+    comparableRecord,
+    provenanceSignals,
+    supportKeys: {
+      sizeKey: normalizeNumber(comparableRecord.sourceFileSize) || 0,
+      dimensionKey:
+        comparableRecord.sourceImageWidth && comparableRecord.sourceImageHeight
+          ? `${comparableRecord.sourceImageWidth}x${comparableRecord.sourceImageHeight}`
+          : "",
+      mimeTypeKey: normalizeText(comparableRecord.mimeType).toLowerCase()
+    }
+  };
+}
+
+function createPreparedItem(item) {
+  const comparableRecord = createSourceProvenanceComparableRecord({
+    sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
+    sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
+    sourceFileSize: normalizeNumber(item?.sourceFileSize),
+    sourceImageWidth: normalizeNumber(item?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(item?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(item?.sourceLastModified),
+    mimeType: normalizeText(item?.mimeType)
+  });
+  const provenanceSignals = buildSourceProvenanceSignals(comparableRecord);
+
+  return {
+    item,
+    comparableRecord,
+    provenanceSignals,
+    supportKeys: {
+      sizeKey: normalizeNumber(comparableRecord.sourceFileSize) || 0,
+      dimensionKey:
+        comparableRecord.sourceImageWidth && comparableRecord.sourceImageHeight
+          ? `${comparableRecord.sourceImageWidth}x${comparableRecord.sourceImageHeight}`
+          : "",
+      mimeTypeKey: normalizeText(comparableRecord.mimeType).toLowerCase()
+    }
+  };
+}
+
+function pushIndexedCandidate(index, key, preparedCandidate) {
+  if (!key) {
+    return;
+  }
+
+  const existingCandidates = index.get(key);
+
+  if (existingCandidates) {
+    existingCandidates.push(preparedCandidate);
+    return;
+  }
+
+  index.set(key, [preparedCandidate]);
+}
+
+function buildPreparedCandidateIndex(candidates) {
+  const preparedCandidates = (Array.isArray(candidates) ? candidates : []).map(createPreparedCandidate);
+  const indexes = {
+    preparedCandidates,
+    byFilename: new Map(),
+    byNamespaceFilename: new Map(),
+    byLegacyNumber: new Map(),
+    byNamespaceLegacyNumber: new Map(),
+    bySize: new Map(),
+    byDimensions: new Map(),
+    byMimeType: new Map()
+  };
+
+  preparedCandidates.forEach((preparedCandidate) => {
+    preparedCandidate.provenanceSignals.comparableFilenameKeys.forEach((filenameKey) => {
+      pushIndexedCandidate(indexes.byFilename, filenameKey, preparedCandidate);
+    });
+    preparedCandidate.provenanceSignals.namespaceFilenameKeys.forEach((namespaceFilenameKey) => {
+      pushIndexedCandidate(indexes.byNamespaceFilename, namespaceFilenameKey, preparedCandidate);
+    });
+    preparedCandidate.provenanceSignals.legacyNumberKeys.forEach((legacyNumberKey) => {
+      pushIndexedCandidate(indexes.byLegacyNumber, legacyNumberKey, preparedCandidate);
+    });
+    preparedCandidate.provenanceSignals.namespaceLegacyNumberKeys.forEach((namespaceLegacyNumberKey) => {
+      pushIndexedCandidate(indexes.byNamespaceLegacyNumber, namespaceLegacyNumberKey, preparedCandidate);
+    });
+    pushIndexedCandidate(indexes.bySize, preparedCandidate.supportKeys.sizeKey, preparedCandidate);
+    pushIndexedCandidate(indexes.byDimensions, preparedCandidate.supportKeys.dimensionKey, preparedCandidate);
+    pushIndexedCandidate(indexes.byMimeType, preparedCandidate.supportKeys.mimeTypeKey, preparedCandidate);
+  });
+
+  return indexes;
+}
+
+function collectCandidateUnion(preparedItem, candidateIndex, options = {}) {
+  const candidatesById = new Map();
+  const includeMimeIndex = options.includeMimeIndex !== false;
+  const includeDimensionIndex = options.includeDimensionIndex !== false;
+  const pushCandidates = (entries) => {
+    (Array.isArray(entries) ? entries : []).forEach((preparedCandidate) => {
+      const candidateId = normalizeText(preparedCandidate?.candidate?.id);
+
+      if (candidateId) {
+        candidatesById.set(candidateId, preparedCandidate);
+      }
+    });
+  };
+
+  preparedItem.provenanceSignals.comparableFilenameKeys.forEach((filenameKey) => {
+    pushCandidates(candidateIndex.byFilename.get(filenameKey));
+  });
+  preparedItem.provenanceSignals.namespaceFilenameKeys.forEach((namespaceFilenameKey) => {
+    pushCandidates(candidateIndex.byNamespaceFilename.get(namespaceFilenameKey));
+  });
+  preparedItem.provenanceSignals.legacyNumberKeys.forEach((legacyNumberKey) => {
+    pushCandidates(candidateIndex.byLegacyNumber.get(legacyNumberKey));
+  });
+  preparedItem.provenanceSignals.namespaceLegacyNumberKeys.forEach((namespaceLegacyNumberKey) => {
+    pushCandidates(candidateIndex.byNamespaceLegacyNumber.get(namespaceLegacyNumberKey));
+  });
+  pushCandidates(candidateIndex.bySize.get(preparedItem.supportKeys.sizeKey));
+
+  if (includeDimensionIndex) {
+    pushCandidates(candidateIndex.byDimensions.get(preparedItem.supportKeys.dimensionKey));
+  }
+
+  if (includeMimeIndex) {
+    pushCandidates(candidateIndex.byMimeType.get(preparedItem.supportKeys.mimeTypeKey));
+  }
+
+  return [...candidatesById.values()];
+}
+
 export function createOriginalRecoveryCandidateRecord(scanEntry, originalAsset = {}) {
   const candidateId = normalizeText(scanEntry?.id);
 
@@ -159,6 +298,24 @@ function createCandidateMatchRecord(item, candidate) {
   return {
     ...candidate,
     fingerprint: createCandidateFingerprint(candidate),
+    match,
+    reasons: buildMatchReasons(match)
+  };
+}
+
+function createPreparedCandidateMatchRecord(preparedItem, preparedCandidate) {
+  const match = getSourceProvenanceMatchDetails(
+    preparedItem.comparableRecord,
+    preparedCandidate.comparableRecord,
+    {
+      recordSignals: preparedItem.provenanceSignals,
+      candidateSignals: preparedCandidate.provenanceSignals
+    }
+  );
+
+  return {
+    ...preparedCandidate.candidate,
+    fingerprint: createCandidateFingerprint(preparedCandidate.candidate),
     match,
     reasons: buildMatchReasons(match)
   };
@@ -323,14 +480,94 @@ function createMatchRecord(item, candidates, previousMatch = null) {
   };
 }
 
-export function buildOriginalRecoverySession({
+function createIndexedMatchRecord(item, preparedItem, candidateIndex, previousMatch = null) {
+  const candidateMatches = collectCandidateUnion(preparedItem, candidateIndex)
+    .map((preparedCandidate) => createPreparedCandidateMatchRecord(preparedItem, preparedCandidate))
+    .filter((candidate) => candidate.match.classification !== "none")
+    .sort(sortCandidateMatches);
+  const topClassification = candidateMatches[0]?.match?.classification ?? "none";
+  const topClassificationRank = MATCH_PRIORITY[topClassification] ?? 0;
+  const topRankCandidates = candidateMatches.filter(
+    (candidate) => (MATCH_PRIORITY[candidate.match.classification] ?? 0) === topClassificationRank
+  );
+  const outcome = createOutcomeFromRank(topClassification, topRankCandidates.length);
+  const selectedCandidateId =
+    selectPreviousCandidate(previousMatch, candidateMatches) || selectDefaultCandidate(candidateMatches, outcome);
+  const decision = deriveNextDecision(previousMatch, outcome, selectedCandidateId);
+
+  return {
+    itemId: normalizeText(item?.id),
+    itemUuid: normalizeText(item?.itemUuid),
+    itemName: normalizeText(item?.name) || normalizeText(item?.sourceOriginalFilename),
+    outcome,
+    decision,
+    exclusionReason: "",
+    relinkStatus: normalizeText(item?.relinkStatus),
+    selectedCandidateId,
+    sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
+    sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
+    sourceFileSize: normalizeNumber(item?.sourceFileSize),
+    sourceImageWidth: normalizeNumber(item?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(item?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(item?.sourceLastModified),
+    mimeType: normalizeText(item?.mimeType),
+    candidates: candidateMatches,
+    applyResult: previousMatch?.applyResult ?? null
+  };
+}
+
+function itemNeedsExhaustivePlausibleFallback(preparedItem, candidateUnionSize) {
+  if (candidateUnionSize > 0) {
+    return false;
+  }
+
+  return Boolean(
+    preparedItem.provenanceSignals.comparableFilenameKeys.length === 0
+    || (!preparedItem.supportKeys.sizeKey && !preparedItem.supportKeys.dimensionKey)
+  );
+}
+
+export function collectOriginalRecoveryPlausibleCandidateIds(items = [], candidates = []) {
+  const candidateIndex = buildPreparedCandidateIndex(candidates);
+  const plausibleCandidateIds = new Set();
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    if (!normalizeText(item?.id) || item?.originalPreserved || !normalizeText(item?.itemUuid)) {
+      return;
+    }
+
+    const preparedItem = createPreparedItem(item);
+    let candidateUnion = collectCandidateUnion(preparedItem, candidateIndex, {
+      includeMimeIndex: false,
+      includeDimensionIndex: false
+    });
+
+    if (itemNeedsExhaustivePlausibleFallback(preparedItem, candidateUnion.length)) {
+      candidateUnion = candidateIndex.preparedCandidates;
+    }
+
+    candidateUnion.forEach((preparedCandidate) => {
+      const candidateId = normalizeText(preparedCandidate?.candidate?.id);
+
+      if (candidateId) {
+        plausibleCandidateIds.add(candidateId);
+      }
+    });
+  });
+
+  return plausibleCandidateIds;
+}
+
+export function buildOriginalRecoverySessionExhaustive({
   sessionId = "",
   app = "mba",
   sourceLabel = "",
   items = [],
   candidates = [],
   previousSession = null,
-  now = new Date().toISOString()
+  now = new Date().toISOString(),
+  scannedFileCount = null
 } = {}) {
   const previousMatchesByItemId = new Map(
     (Array.isArray(previousSession?.matches) ? previousSession.matches : [])
@@ -351,7 +588,56 @@ export function buildOriginalRecoverySession({
     })
     .filter(Boolean)
     .sort((left, right) => normalizeText(left.itemName || left.itemId).localeCompare(normalizeText(right.itemName || right.itemId)));
-  const summary = summarizeMatches(matches, candidates.length);
+  const summary = summarizeMatches(matches, scannedFileCount ?? candidates.length);
+
+  return {
+    id: normalizeText(sessionId) || normalizeText(previousSession?.id) || `original_recovery_${Date.now()}`,
+    app: normalizeText(app) || normalizeText(previousSession?.app) || "mba",
+    sourceLabel: normalizeText(sourceLabel) || normalizeText(previousSession?.sourceLabel),
+    createdAt: normalizeText(previousSession?.createdAt) || now,
+    updatedAt: now,
+    status: "scanned",
+    summary,
+    matches
+  };
+}
+
+export function buildOriginalRecoverySession({
+  sessionId = "",
+  app = "mba",
+  sourceLabel = "",
+  items = [],
+  candidates = [],
+  previousSession = null,
+  now = new Date().toISOString(),
+  scannedFileCount = null
+} = {}) {
+  const previousMatchesByItemId = new Map(
+    (Array.isArray(previousSession?.matches) ? previousSession.matches : [])
+      .filter((match) => normalizeText(match?.itemId))
+      .map((match) => [normalizeText(match.itemId), match])
+  );
+  const candidateIndex = buildPreparedCandidateIndex(candidates);
+  const matches = (Array.isArray(items) ? items : [])
+    .map((item) => {
+      if (!normalizeText(item?.id)) {
+        return null;
+      }
+
+      if (item?.originalPreserved || !normalizeText(item?.itemUuid)) {
+        return createExcludedMatchRecord(item);
+      }
+
+      return createIndexedMatchRecord(
+        item,
+        createPreparedItem(item),
+        candidateIndex,
+        previousMatchesByItemId.get(normalizeText(item.id))
+      );
+    })
+    .filter(Boolean)
+    .sort((left, right) => normalizeText(left.itemName || left.itemId).localeCompare(normalizeText(right.itemName || right.itemId)));
+  const summary = summarizeMatches(matches, scannedFileCount ?? candidates.length);
 
   return {
     id: normalizeText(sessionId) || normalizeText(previousSession?.id) || `original_recovery_${Date.now()}`,
