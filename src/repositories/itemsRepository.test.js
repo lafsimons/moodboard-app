@@ -7,11 +7,16 @@ import {
 } from "../lib/storage.js";
 import { INDEXED_DB_NAME } from "../lib/appIdentity.js";
 import {
+  classifyOriginalAvailability,
+  createOriginalReconnectionSnapshot,
   loadItemMediaAssetById,
   loadItems,
   loadStartupItemMetadata,
+  markOriginalMissing,
   prepareLoadedItems,
+  reconnectOriginalForItem,
   resolveItemMediaSource,
+  scanOriginalReconnectionCandidates,
   saveItem
 } from "./itemsRepository.js";
 
@@ -425,6 +430,128 @@ test("resolveItemMediaSource resolves out-of-line media for metadata-only items"
     URL.createObjectURL = originalCreateObjectUrl;
     URL.revokeObjectURL = originalRevokeObjectUrl;
   }
+});
+
+test("resolveItemMediaSource falls back to preview and exposes missingOriginal when preserved original is unavailable", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-missing-original",
+    itemUuid: "uuid-missing-original",
+    originalPreserved: true,
+    relinkStatus: "linked",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-missing-original",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "preview.webp"
+      }
+    }
+  });
+
+  const media = await resolveItemMediaSource("item-missing-original", "original");
+
+  assert.equal(media.src, "data:image/webp;base64,preview-missing-original");
+  assert.equal(media.missingOriginal, true);
+  assert.equal(media.resolvedFromVariant, "preview");
+});
+
+test("original reconnection candidate scanning, snapshotting, reconnecting, and mark-missing stay additive", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-reconnect",
+    itemUuid: "uuid-reconnect",
+    name: "Reconnect",
+    originalPreserved: false,
+    relinkStatus: "hub-awaiting-rebind",
+    sourceOriginalFilename: "reconnect.jpg",
+    sourceFilenameAliases: ["archive-copy.jpg"],
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-reconnect",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50,
+        originalFilename: "reconnect.webp"
+      }
+    }
+  });
+
+  const file = new File(["1234567890"], "reconnect.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const decodeOriginalAsset = async (selectedFile) => ({
+    src: "data:image/jpeg;base64,cmVjb25uZWN0",
+    mimeType: selectedFile.type,
+    width: 100,
+    height: 50,
+    fileSize: selectedFile.size,
+    originalFilename: selectedFile.name
+  });
+
+  const [candidate] = await scanOriginalReconnectionCandidates(
+    {
+      sourceOriginalFilename: "reconnect.jpg",
+      sourceFilenameAliases: ["archive-copy.jpg"],
+      sourceFileSize: 10,
+      sourceImageWidth: 100,
+      sourceImageHeight: 50,
+      sourceLastModified: 1717236000000,
+      mimeType: "image/jpeg"
+    },
+    [file],
+    {
+      createOriginalImageAsset: decodeOriginalAsset
+    }
+  );
+
+  assert.equal(candidate.review.match.classification, "exact");
+
+  const snapshotResult = await createOriginalReconnectionSnapshot("item-reconnect", {
+    appVersion: "test",
+    appBuildTime: "2026-06-01T12:00:00.000Z"
+  });
+
+  assert.equal(snapshotResult.snapshot.reason, "before-repair");
+  assert.deepEqual(snapshotResult.snapshot.changedItemIds, ["item-reconnect"]);
+
+  const reconnectResult = await reconnectOriginalForItem(
+    "item-reconnect",
+    file,
+    candidate.review,
+    {
+      createOriginalImageAsset: decodeOriginalAsset,
+      now: () => "2026-06-01T12:34:56.000Z"
+    }
+  );
+
+  assert.equal(reconnectResult.item.originalPreserved, true);
+  assert.equal(reconnectResult.item.relinkStatus, "linked");
+  assert.equal(reconnectResult.item.originalLinkedAt, "2026-06-01T12:34:56.000Z");
+  assert.equal(reconnectResult.item.originalRelinkedFrom, "file-picker");
+  assert.equal(reconnectResult.item.originalRelinkedFilename, "reconnect.jpg");
+  assert.deepEqual(reconnectResult.item.sourceFilenameAliases, ["archive-copy.jpg", "reconnect.webp"]);
+
+  const afterReconnectAvailability = await classifyOriginalAvailability("item-reconnect");
+  assert.equal(afterReconnectAvailability.state, "preserved");
+  assert.equal(afterReconnectAvailability.hasStoredOriginal, true);
+
+  const resolvedOriginal = await resolveItemMediaSource("item-reconnect", "original", { preferDataUrl: true });
+  assert.equal(resolvedOriginal.src.startsWith("data:image/jpeg;base64,"), true);
+
+  const markedMissingItem = await markOriginalMissing("item-reconnect");
+  assert.equal(markedMissingItem.originalPreserved, false);
+  assert.equal(markedMissingItem.relinkStatus, "missing");
+
+  const afterMissingAvailability = await classifyOriginalAvailability("item-reconnect");
+  assert.equal(afterMissingAvailability.state, "missing");
+  assert.equal(afterMissingAvailability.hasStoredOriginal, false);
 });
 
 test("metadata-only edited references stay metadata-only and still resolve preview media after save", async () => {

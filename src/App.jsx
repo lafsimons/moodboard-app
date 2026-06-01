@@ -186,14 +186,19 @@ import {
   savedOutfitHasMissingItems
 } from "./repositories/boardsRepository.js";
 import {
+  classifyOriginalAvailability,
+  createOriginalReconnectionSnapshot,
   deleteItem,
   deleteItems,
   loadItemMediaAssetById,
   loadStartupItemMetadata,
+  markOriginalMissing,
   prepareLoadedItems,
+  reconnectOriginalForItem,
   resolveItemMediaSource,
   runMediaIntegrityCheck,
   saveItem,
+  scanOriginalReconnectionCandidates,
   saveItems
 } from "./repositories/itemsRepository.js";
 import { loadStartupAppState, saveAppState } from "./repositories/appStateRepository.js";
@@ -3931,6 +3936,8 @@ export default function App() {
   const [replaceOriginalShouldRegenerate, setReplaceOriginalShouldRegenerate] = useState(false);
   const [itemImageDragActive, setItemImageDragActive] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
+  const [originalReconnectionDialog, setOriginalReconnectionDialog] = useState(null);
+  const [originalReconnectionFeedback, setOriginalReconnectionFeedback] = useState("");
   const [selectedReferenceSelection, setSelectedReferenceSelection] = useState({
     ids: {},
     anchorId: null
@@ -3959,6 +3966,68 @@ export default function App() {
   useEffect(() => {
     mobileReferencePreviewScaleRef.current = mobileReferencePreviewScale;
   }, [mobileReferencePreviewScale]);
+
+  useEffect(() => {
+    if (!referencePreview?.id || !referencePreview.originalPreserved) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function syncReferencePreviewOriginalAvailability() {
+      try {
+        const availability = await classifyOriginalAvailability(referencePreview);
+
+        if (cancelled || availability.state !== "missing" || !referencePreview.originalPreserved) {
+          return;
+        }
+
+        const savedItem = await markOriginalMissing(referencePreview.id);
+
+        if (!cancelled) {
+          applyPersistedOriginalMutation(savedItem);
+          markMetadataDirty([referencePreview.id]);
+        }
+      } catch {}
+    }
+
+    void syncReferencePreviewOriginalAvailability();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [referencePreview?.id, referencePreview?.originalPreserved]);
+
+  useEffect(() => {
+    if (!draft?.id || editingId === "new" || !draft.originalPreserved) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function syncDraftOriginalAvailability() {
+      try {
+        const availability = await classifyOriginalAvailability(draft);
+
+        if (cancelled || availability.state !== "missing" || !draft.originalPreserved) {
+          return;
+        }
+
+        const savedItem = await markOriginalMissing(draft.id);
+
+        if (!cancelled) {
+          applyPersistedOriginalMutation(savedItem);
+          markMetadataDirty([draft.id]);
+        }
+      } catch {}
+    }
+
+    void syncDraftOriginalAvailability();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draft?.id, draft?.originalPreserved, editingId]);
 
   useEffect(() => () => {
     if (excludedOutfitReconcileFrameRef.current) {
@@ -4992,6 +5061,224 @@ export default function App() {
         }
       });
     });
+  }
+
+  function getOriginalAvailabilityState(item) {
+    const normalizedRelinkStatus = typeof item?.relinkStatus === "string" ? item.relinkStatus.trim().toLowerCase() : "";
+
+    if (item?.originalPreserved) {
+      return "preserved";
+    }
+
+    if (normalizedRelinkStatus === "missing") {
+      return "missing";
+    }
+
+    return "attention";
+  }
+
+  function getOriginalAvailabilityLabel(item) {
+    const state = getOriginalAvailabilityState(item);
+
+    if (state === "preserved") {
+      return "Original preserved";
+    }
+
+    if (state === "missing") {
+      return "Original missing";
+    }
+
+    return "Original needs reconnection";
+  }
+
+  function mergeOriginalMutationIntoDraft(currentDraft, savedItem) {
+    if (!currentDraft?.id || currentDraft.id !== savedItem?.id) {
+      return currentDraft;
+    }
+
+    return {
+      ...currentDraft,
+      originalPreserved: Boolean(savedItem?.originalPreserved),
+      relinkStatus: savedItem?.relinkStatus ?? currentDraft.relinkStatus,
+      sourceFilenameAliases: Array.isArray(savedItem?.sourceFilenameAliases) ? savedItem.sourceFilenameAliases : currentDraft.sourceFilenameAliases,
+      originalLinkedAt: savedItem?.originalLinkedAt ?? currentDraft.originalLinkedAt ?? "",
+      originalRelinkedFrom: savedItem?.originalRelinkedFrom ?? currentDraft.originalRelinkedFrom ?? "",
+      originalRelinkedFilename: savedItem?.originalRelinkedFilename ?? currentDraft.originalRelinkedFilename ?? "",
+      updatedAt: savedItem?.updatedAt ?? currentDraft.updatedAt,
+      images: {
+        ...(currentDraft?.images && typeof currentDraft.images === "object" ? currentDraft.images : {}),
+        original: createImageAsset(savedItem?.images?.original)
+      }
+    };
+  }
+
+  function applyPersistedOriginalMutation(savedItem) {
+    if (!savedItem?.id) {
+      return;
+    }
+
+    setItems((current) =>
+      current.map((item) => item.id === savedItem.id ? mergeItemImageState(item, savedItem) : item)
+    );
+    setReferencePreview((current) =>
+      current?.id === savedItem.id ? mergeItemImageState(current, savedItem) : current
+    );
+    setDraft((current) => mergeOriginalMutationIntoDraft(current, savedItem));
+  }
+
+  function showOriginalOperationFeedback(itemId, message, kind = "success") {
+    if (editingId && editingId !== "new" && draft?.id === itemId) {
+      if (kind === "error") {
+        setImageUploadError(message);
+        setOriginalReconnectionFeedback("");
+      } else {
+        setImageUploadError("");
+        setOriginalReconnectionFeedback(message);
+      }
+
+      return;
+    }
+
+    if (typeof window !== "undefined" && typeof window.alert === "function") {
+      window.alert(message);
+    }
+  }
+
+  async function openOriginalReconnectionDialog(item, mode = "reconnect") {
+    if (!item?.id) {
+      return;
+    }
+
+    const pickerInput = document.createElement("input");
+    pickerInput.type = "file";
+    pickerInput.accept = "image/*";
+    pickerInput.multiple = false;
+
+    const selectedFile = await new Promise((resolve) => {
+      pickerInput.addEventListener("change", () => {
+        resolve(pickerInput.files?.[0] ?? null);
+      }, { once: true });
+      pickerInput.click();
+    });
+
+    if (!selectedFile) {
+      return;
+    }
+
+    try {
+      setImageUploadError("");
+      setOriginalReconnectionFeedback("");
+      const [candidate] = await scanOriginalReconnectionCandidates(item, [selectedFile], {
+        createOriginalImageAsset
+      });
+
+      if (!candidate?.review?.canConfirm) {
+        showOriginalOperationFeedback(item.id, "Selected file does not match stored provenance strongly enough to reconnect.", "error");
+        return;
+      }
+
+      setOriginalReconnectionDialog({
+        itemId: item.id,
+        itemName: buildDisplayName(item),
+        mode,
+        file: selectedFile,
+        candidate,
+        isSubmitting: false,
+        error: ""
+      });
+    } catch (error) {
+      showOriginalOperationFeedback(item.id, formatErrorMessage(error, "Original reconnection failed."), "error");
+    }
+  }
+
+  async function confirmOriginalReconnection() {
+    if (!originalReconnectionDialog?.itemId || !originalReconnectionDialog?.file) {
+      return;
+    }
+
+    const dialogState = originalReconnectionDialog;
+    setOriginalReconnectionDialog((current) => current ? { ...current, isSubmitting: true, error: "" } : current);
+
+    try {
+      try {
+        await createOriginalReconnectionSnapshot(dialogState.itemId, {
+          reason: "before-repair",
+          appVersion: APP_BUILD_VERSION,
+          appBuildTime: APP_BUILD_TIME
+        });
+      } catch (error) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: `Metadata snapshot failed: ${formatErrorMessage(error, "Metadata snapshot failed.")} Continue with the original ${dialogState.mode === "replace" ? "replacement" : "reconnection"} anyway?`,
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          setOriginalReconnectionDialog((current) => current ? { ...current, isSubmitting: false } : current);
+          return;
+        }
+      }
+
+      const result = await reconnectOriginalForItem(
+        dialogState.itemId,
+        dialogState.file,
+        dialogState.candidate?.review,
+        {
+          createOriginalImageAsset
+        }
+      );
+
+      applyPersistedOriginalMutation(result?.item);
+      markMetadataDirty([dialogState.itemId]);
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+      setOriginalReconnectionDialog(null);
+      showOriginalOperationFeedback(
+        dialogState.itemId,
+        dialogState.mode === "replace" ? "Original image replaced." : "Original image reconnected."
+      );
+    } catch (error) {
+      setOriginalReconnectionDialog((current) =>
+        current
+          ? {
+              ...current,
+              isSubmitting: false,
+              error: formatErrorMessage(error, "Original reconnection failed.")
+            }
+          : current
+      );
+    }
+  }
+
+  async function handleMarkOriginalMissing(item) {
+    if (!item?.id) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Mark original missing?",
+      message: "This keeps the preview but clears the local original attachment for this reference on this device.",
+      confirmLabel: "Mark missing"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const savedItem = await markOriginalMissing(item.id);
+      applyPersistedOriginalMutation(savedItem);
+      markMetadataDirty([item.id]);
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+      showOriginalOperationFeedback(item.id, "Original marked as missing.");
+    } catch (error) {
+      showOriginalOperationFeedback(item.id, formatErrorMessage(error, "Failed to mark original as missing."), "error");
+    }
   }
   const visibleWardrobeItems = useMemo(() => {
     const startedAt = isLibraryPerfDebug ? performance.now() : 0;
@@ -7785,6 +8072,7 @@ export default function App() {
     setEditorAdvancedOpen(false);
     setDraft(emptyForm);
     setImageUploadError("");
+    setOriginalReconnectionFeedback("");
     setImageProcessing(false);
     setItemImporting(false);
     setItemImageDragActive(false);
@@ -11961,8 +12249,8 @@ export default function App() {
             <span>No image selected</span>
           )}
         </div>
-        {!draft.originalPreserved && draftImageUrl ? (
-          <p className="image-preservation-note">Original not preserved</p>
+        {draftImageUrl ? (
+          <p className="image-preservation-note">{getOriginalAvailabilityLabel(draft)}</p>
         ) : null}
         <div className="item-image-actions">
           <div className="item-image-action-row item-image-action-row-primary">
@@ -11986,19 +12274,50 @@ export default function App() {
           </div>
           {draftImageUrl ? (
             <div className="item-image-action-row item-image-action-row-secondary">
-              <label className="upload-button upload-button-secondary editor-image-button editor-image-button-secondary">
-                Replace original image
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleReplaceOriginalImageUpload}
+              {!draft.originalPreserved && editingId !== "new" ? (
+                <button
+                  type="button"
+                  className="editor-image-button"
+                  onClick={() => void openOriginalReconnectionDialog(draft, "reconnect")}
                   disabled={imageProcessing || itemImporting}
-                />
-              </label>
+                >
+                  Reconnect original
+                </button>
+              ) : null}
+              {editingId === "new" ? (
+                <label className="upload-button upload-button-secondary editor-image-button editor-image-button-secondary">
+                  {draft.originalPreserved ? "Replace original image" : "Attach as new original"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleReplaceOriginalImageUpload}
+                    disabled={imageProcessing || itemImporting}
+                  />
+                </label>
+              ) : (
+                <button
+                  type="button"
+                  className="editor-image-button editor-image-button-secondary"
+                  onClick={() => void openOriginalReconnectionDialog(draft, "replace")}
+                  disabled={imageProcessing || itemImporting}
+                >
+                  {draft.originalPreserved ? "Replace original image" : "Attach as new original"}
+                </button>
+              )}
+              {draft.originalPreserved && editingId !== "new" ? (
+                <button
+                  type="button"
+                  className="editor-image-button editor-image-button-secondary"
+                  onClick={() => void handleMarkOriginalMissing(draft)}
+                  disabled={imageProcessing || itemImporting}
+                >
+                  Mark original missing
+                </button>
+              ) : null}
             </div>
           ) : null}
-          {draftImageUrl ? (
+          {draftImageUrl && editingId === "new" ? (
             <div className="item-image-action-row item-image-action-row-checkbox">
               <label className="editor-inline-checkbox editor-inline-checkbox-technical">
                 <input
@@ -12027,6 +12346,7 @@ export default function App() {
           ) : null}
         </div>
         {imageUploadError ? <p className="form-error">{imageUploadError}</p> : null}
+        {originalReconnectionFeedback && editingId !== "new" && draft.id ? <p className="form-success">{originalReconnectionFeedback}</p> : null}
       </div>
 
       <div className="editor-core-fields">
@@ -13604,6 +13924,77 @@ export default function App() {
           </div>
         ) : null}
 
+        {originalReconnectionDialog ? (
+          <div className="floating-backdrop confirm-backdrop" onClick={() => {
+            if (!originalReconnectionDialog.isSubmitting) {
+              setOriginalReconnectionDialog(null);
+            }
+          }}>
+            <div className="confirm-dialog reconnection-dialog" onClick={(event) => event.stopPropagation()}>
+              <div>
+                <p className="eyebrow">{originalReconnectionDialog.mode === "replace" ? "Replace original" : "Reconnect original"}</p>
+                <h2>{originalReconnectionDialog.itemName}</h2>
+              </div>
+              <p>
+                Confidence: <strong>{originalReconnectionDialog.candidate?.review?.match?.classification || "unknown"}</strong>
+              </p>
+              <div className="saved-metadata-list" aria-label="Original reconnection details">
+                <div className="saved-metadata-row">
+                  <span>Filename</span>
+                  <strong>{originalReconnectionDialog.file?.name || "Unknown"}</strong>
+                </div>
+                <div className="saved-metadata-row">
+                  <span>Dimensions</span>
+                  <strong>
+                    {originalReconnectionDialog.candidate?.originalAsset?.width && originalReconnectionDialog.candidate?.originalAsset?.height
+                      ? `${originalReconnectionDialog.candidate.originalAsset.width} × ${originalReconnectionDialog.candidate.originalAsset.height}`
+                      : "Unknown"}
+                  </strong>
+                </div>
+                <div className="saved-metadata-row">
+                  <span>File size</span>
+                  <strong>{formatFileSize(originalReconnectionDialog.file?.size || originalReconnectionDialog.candidate?.originalAsset?.fileSize)}</strong>
+                </div>
+                <div className="saved-metadata-row">
+                  <span>Last modified</span>
+                  <strong>{originalReconnectionDialog.file?.lastModified ? formatCreatedAt(originalReconnectionDialog.file.lastModified) : "Unknown"}</strong>
+                </div>
+              </div>
+              {originalReconnectionDialog.candidate?.review?.reasons?.length ? (
+                <div className="reconnection-reasons">
+                  {originalReconnectionDialog.candidate.review.reasons.map((reason) => (
+                    <p key={reason}>{reason}</p>
+                  ))}
+                </div>
+              ) : null}
+              {originalReconnectionDialog.candidate?.review?.requiresExplicitOverride ? (
+                <p className="image-preservation-note">This is a weak match. Review carefully before continuing.</p>
+              ) : null}
+              {originalReconnectionDialog.error ? <p className="form-error">{originalReconnectionDialog.error}</p> : null}
+              <div className="confirm-actions">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setOriginalReconnectionDialog(null)}
+                  disabled={originalReconnectionDialog.isSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => void confirmOriginalReconnection()}
+                  disabled={originalReconnectionDialog.isSubmitting}
+                >
+                  {originalReconnectionDialog.isSubmitting
+                    ? (originalReconnectionDialog.mode === "replace" ? "Replacing..." : "Reconnecting...")
+                    : (originalReconnectionDialog.mode === "replace" ? "Replace original" : "Reconnect original")}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {confirmation ? (
           <div className="floating-backdrop confirm-backdrop" onClick={confirmation.onCancel}>
             <div className="confirm-dialog" onClick={(event) => event.stopPropagation()}>
@@ -13708,6 +14099,30 @@ export default function App() {
                                 >
                                   Edit
                                 </button>
+                                {!referencePreview.originalPreserved ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={() => {
+                                      setMobileReferencePreviewActionsOpen(false);
+                                      void openOriginalReconnectionDialog(referencePreview, "reconnect");
+                                    }}
+                                  >
+                                    Reconnect original
+                                  </button>
+                                ) : null}
+                                {referencePreview.originalPreserved ? (
+                                  <button
+                                    type="button"
+                                    className="selection-actions-popover-item"
+                                    onClick={() => {
+                                      setMobileReferencePreviewActionsOpen(false);
+                                      void handleMarkOriginalMissing(referencePreview);
+                                    }}
+                                  >
+                                    Mark original missing
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
                                   className="selection-actions-popover-item is-danger"
@@ -13761,7 +14176,7 @@ export default function App() {
                         <div className="reference-preview-mobile-sheet" onClick={(event) => event.stopPropagation()}>
                           <div className="reference-preview-mobile-sheet-header">
                             <strong>{buildDisplayName(referencePreview)}</strong>
-                            {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
+                            <span className="image-preservation-note">{getOriginalAvailabilityLabel(referencePreview)}</span>
                           </div>
                           {referencePreviewTagLabel ? (
                             <div className="reference-preview-mobile-sheet-section">
@@ -13780,7 +14195,7 @@ export default function App() {
                             <p>
                               {referencePreview.favorite ? "Favorite" : "Not favorite"}
                               {referencePreviewExcluded ? " · Excluded from generation" : ""}
-                              {!referencePreview.originalPreserved ? " · Original not preserved" : " · Original preserved"}
+                              {` · ${getOriginalAvailabilityLabel(referencePreview)}`}
                             </p>
                           </div>
                         </div>
@@ -13817,7 +14232,7 @@ export default function App() {
                               {referencePreviewExcluded ? <span className="reference-preview-status-chip">Excluded from generation</span> : null}
                             </div>
                           ) : null}
-                          {!referencePreview.originalPreserved ? <span className="image-preservation-note">Original not preserved</span> : null}
+                          <span className="image-preservation-note">{getOriginalAvailabilityLabel(referencePreview)}</span>
                         </div>
                         <div className="reference-preview-actions">
                           <button
@@ -13864,6 +14279,24 @@ export default function App() {
                           >
                             Edit
                           </button>
+                          {!referencePreview.originalPreserved ? (
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              onClick={() => void openOriginalReconnectionDialog(referencePreview, "reconnect")}
+                            >
+                              Reconnect original
+                            </button>
+                          ) : null}
+                          {referencePreview.originalPreserved ? (
+                            <button
+                              type="button"
+                              className="ghost-button"
+                              onClick={() => void handleMarkOriginalMissing(referencePreview)}
+                            >
+                              Mark original missing
+                            </button>
+                          ) : null}
                           <button type="button" className="ghost-button danger" onClick={deleteReferencePreviewItem}>
                             Delete
                           </button>

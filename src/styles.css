@@ -4613,6 +4613,19 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   flex-wrap: wrap;
 }
 
+.reconnection-dialog {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.reconnection-reasons {
+  display: grid;
+  gap: 6px;
+}
+
+.reconnection-reasons p {
+  margin: 0;
+}
+
 .fitpic-preview-overlay {
   max-width: min(980px, calc(100vw - 40px));
   max-height: calc(100vh - 40px);

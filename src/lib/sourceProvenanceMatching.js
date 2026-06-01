@@ -87,29 +87,36 @@ function hasExactMimeTypeMatch(record, candidate) {
   return Boolean(left && right && left === right);
 }
 
-export function classifySourceProvenanceMatch(record = {}, candidate = {}) {
+export function getSourceProvenanceMatchDetails(record = {}, candidate = {}) {
   const filenameMatch = hasSharedFilename(record, candidate);
   const sizeMatch = hasExactSizeMatch(record, candidate);
   const dimensionMatch = hasExactDimensionMatch(record, candidate);
   const lastModifiedMatch = hasExactLastModifiedMatch(record, candidate);
   const mimeTypeMatch = hasExactMimeTypeMatch(record, candidate);
   const supportingMatches = [sizeMatch, dimensionMatch, mimeTypeMatch].filter(Boolean).length;
+  let classification = "none";
 
   if (filenameMatch && sizeMatch && dimensionMatch && lastModifiedMatch) {
-    return "exact";
+    classification = "exact";
+  } else if (filenameMatch && sizeMatch && dimensionMatch) {
+    classification = "strong";
+  } else if (filenameMatch && supportingMatches >= 1) {
+    classification = "possible";
+  } else if (filenameMatch || supportingMatches >= 2) {
+    classification = "weak";
   }
 
-  if (filenameMatch && sizeMatch && dimensionMatch) {
-    return "strong";
-  }
+  return {
+    classification,
+    filenameMatch,
+    sizeMatch,
+    dimensionMatch,
+    lastModifiedMatch,
+    mimeTypeMatch,
+    supportingMatches
+  };
+}
 
-  if (filenameMatch && supportingMatches >= 1) {
-    return "possible";
-  }
-
-  if (filenameMatch || supportingMatches >= 2) {
-    return "weak";
-  }
-
-  return "none";
+export function classifySourceProvenanceMatch(record = {}, candidate = {}) {
+  return getSourceProvenanceMatchDetails(record, candidate).classification;
 }
