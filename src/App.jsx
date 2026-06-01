@@ -5139,16 +5139,38 @@ export default function App() {
     };
   }
 
+  function mergeOriginalMutationIntoItem(currentItem, savedItem) {
+    if (!currentItem?.id || currentItem.id !== savedItem?.id) {
+      return currentItem;
+    }
+
+    return {
+      ...currentItem,
+      originalPreserved: Boolean(savedItem?.originalPreserved),
+      relinkStatus: savedItem?.relinkStatus ?? currentItem.relinkStatus,
+      sourceOriginalFilename: savedItem?.sourceOriginalFilename ?? currentItem.sourceOriginalFilename,
+      sourceFilenameAliases: Array.isArray(savedItem?.sourceFilenameAliases) ? savedItem.sourceFilenameAliases : currentItem.sourceFilenameAliases,
+      originalLinkedAt: savedItem?.originalLinkedAt ?? currentItem.originalLinkedAt ?? "",
+      originalRelinkedFrom: savedItem?.originalRelinkedFrom ?? currentItem.originalRelinkedFrom ?? "",
+      originalRelinkedFilename: savedItem?.originalRelinkedFilename ?? currentItem.originalRelinkedFilename ?? "",
+      updatedAt: savedItem?.updatedAt ?? currentItem.updatedAt,
+      images: {
+        ...(currentItem?.images && typeof currentItem.images === "object" ? currentItem.images : {}),
+        original: createImageAsset(savedItem?.images?.original)
+      }
+    };
+  }
+
   function applyPersistedOriginalMutation(savedItem) {
     if (!savedItem?.id) {
       return;
     }
 
     setItems((current) =>
-      current.map((item) => item.id === savedItem.id ? mergeItemImageState(item, savedItem) : item)
+      current.map((item) => item.id === savedItem.id ? mergeOriginalMutationIntoItem(item, savedItem) : item)
     );
     setReferencePreview((current) =>
-      current?.id === savedItem.id ? mergeItemImageState(current, savedItem) : current
+      current?.id === savedItem.id ? mergeOriginalMutationIntoItem(current, savedItem) : current
     );
     setDraft((current) => mergeOriginalMutationIntoDraft(current, savedItem));
   }
@@ -5778,8 +5800,8 @@ export default function App() {
       }
       setOriginalRecoverySession(result.session);
       setOriginalRecoveryFeedback(result.persisted
-        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
-        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
+        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
+        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
       );
     } catch (error) {
       setOriginalRecoveryError(formatErrorMessage(error, "Original recovery apply failed."));

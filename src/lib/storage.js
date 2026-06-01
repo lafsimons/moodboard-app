@@ -393,6 +393,32 @@ function buildReferenceSyncMetadata(item, deviceId, existingRecord = null) {
   });
 }
 
+async function markReferenceSyncMetadataDirtyForItem(item) {
+  const stableKey = normalizeSyncText(item?.itemUuid);
+
+  if (!stableKey) {
+    return null;
+  }
+
+  const [deviceId, existingRecord] = await Promise.all([
+    getOrCreateDeviceId(),
+    getSyncMetadata(createReferenceSyncMetadataKey(stableKey))
+  ]);
+
+  const nextRecord = createNextDirtySyncMetadataRecord({
+    key: createReferenceSyncMetadataKey(stableKey),
+    entityType: "mbaReference",
+    stableKey,
+    localId: normalizeSyncText(item?.id),
+    existingRecord,
+    deviceId,
+    pendingDelete: false
+  });
+
+  await upsertSyncMetadata(nextRecord);
+  return nextRecord;
+}
+
 function buildSavedBoardSyncMetadata(savedOutfit, deviceId, existingRecord = null) {
   const normalizedSavedOutfit = ensureSavedBoardUuid(savedOutfit);
   const stableKey = normalizeSyncText(normalizedSavedOutfit?.board?.boardUuid);
@@ -1515,6 +1541,28 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
   return null;
 }
 
+export async function loadItemById(itemId, options = {}) {
+  const normalizedItemId = typeof itemId === "string" ? itemId.trim() : "";
+
+  if (!normalizedItemId) {
+    return null;
+  }
+
+  const item = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(normalizedItemId));
+
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const migratedItem = migrateReferenceMetadataToTags(item);
+
+  if (options.includeMediaPayloads) {
+    return materializeStoredItemMedia(migratedItem);
+  }
+
+  return stripItemInlineMediaFields(migratedItem);
+}
+
 export async function loadMediaIntegritySnapshot() {
   return withStores([ITEM_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE], "readonly", async ({ items, itemMediaAssets, originalImageBlobs }) => {
     const [itemRecords, itemMediaRecords, originalBlobRecords] = await Promise.all([
@@ -1631,7 +1679,6 @@ export async function saveItem(item) {
     }
   }
 
-  const stableKey = normalizeSyncText(storedItem?.itemUuid);
   const materializedMergedItem = await materializeStoredItemMedia(mergedItem);
   const afterSnapshot = await createSaveMediaDebugSnapshot(storedItem);
 
@@ -1641,28 +1688,64 @@ export async function saveItem(item) {
     snapshot: afterSnapshot
   });
 
-  if (!stableKey) {
-    return materializedMergedItem;
-  }
-
-  const [deviceId, existingRecord] = await Promise.all([
-    getOrCreateDeviceId(),
-    getSyncMetadata(createReferenceSyncMetadataKey(stableKey))
-  ]);
-
-  await upsertSyncMetadata(
-    createNextDirtySyncMetadataRecord({
-      key: createReferenceSyncMetadataKey(stableKey),
-      entityType: "mbaReference",
-      stableKey,
-      localId: normalizeSyncText(storedItem?.id),
-      existingRecord,
-      deviceId,
-      pendingDelete: false
-    })
-  );
+  await markReferenceSyncMetadataDirtyForItem(storedItem);
 
   return materializedMergedItem;
+}
+
+export async function markItemOriginalRecovered(itemOrId, recoveryItem = {}) {
+  const existingItem = itemOrId && typeof itemOrId === "object"
+    ? itemOrId
+    : await loadItemById(itemOrId);
+
+  if (!existingItem?.id) {
+    throw new Error("Reference could not be found.");
+  }
+
+  const normalizedExistingImages = normalizeItemImages(existingItem);
+  const incomingImages = normalizeItemImages(recoveryItem);
+  const nextItem = {
+    ...existingItem,
+    originalPreserved: true,
+    relinkStatus: typeof recoveryItem?.relinkStatus === "string" && recoveryItem.relinkStatus.trim()
+      ? recoveryItem.relinkStatus.trim()
+      : "linked",
+    originalLinkedAt: normalizeSyncText(recoveryItem?.originalLinkedAt),
+    originalRelinkedFrom: normalizeSyncText(recoveryItem?.originalRelinkedFrom),
+    originalRelinkedFilename: normalizeSyncText(recoveryItem?.originalRelinkedFilename),
+    updatedAt: normalizeSyncText(recoveryItem?.updatedAt) || normalizeSyncText(existingItem?.updatedAt),
+    sourceFilenameAliases: Array.isArray(recoveryItem?.sourceFilenameAliases)
+      ? recoveryItem.sourceFilenameAliases
+      : Array.isArray(existingItem?.sourceFilenameAliases)
+        ? existingItem.sourceFilenameAliases
+        : [],
+    sourceOriginalFilename: normalizeSyncText(existingItem?.sourceOriginalFilename) || normalizeSyncText(recoveryItem?.sourceOriginalFilename),
+    images: {
+      ...(existingItem?.images && typeof existingItem.images === "object" && !Array.isArray(existingItem.images)
+        ? existingItem.images
+        : {}),
+      preview: normalizedExistingImages.preview,
+      thumbnail: normalizedExistingImages.thumbnail,
+      original: incomingImages.original
+    }
+  };
+  const storedItem = stripItemInlineMediaFields(nextItem);
+
+  await withStore(ITEM_STORE, "readwrite", (store) => store.put(storedItem));
+  await markReferenceSyncMetadataDirtyForItem(storedItem);
+
+  return {
+    ...nextItem,
+    images: {
+      ...(nextItem?.images && typeof nextItem.images === "object" && !Array.isArray(nextItem.images) ? nextItem.images : {}),
+      preview: normalizedExistingImages.preview,
+      thumbnail: normalizedExistingImages.thumbnail,
+      original: {
+        ...incomingImages.original,
+        src: ""
+      }
+    }
+  };
 }
 
 export async function deleteItemsByIds(ids) {

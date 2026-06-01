@@ -3,11 +3,13 @@ import {
   deleteItem as deleteStoredItem,
   deleteItems as deleteStoredItems,
   deleteOriginalImageBlob,
+  loadItemById as loadStoredItemById,
   loadItemMediaAssetById as loadStoredItemMediaAssetById,
   loadMediaIntegritySnapshot as loadStoredMediaIntegritySnapshot,
   loadItems as loadStoredItems,
   loadOriginalImageBlobEntry,
   loadStartupAppState as loadStoredStartupAppState,
+  markItemOriginalRecovered as markStoredItemOriginalRecovered,
   loadStartupItemMetadata as loadStoredStartupItemMetadata,
   saveOriginalImageBlob,
   saveItem as saveStoredItem
@@ -245,8 +247,7 @@ async function loadItemById(itemId) {
     return null;
   }
 
-  const items = await loadStoredItems();
-  return (Array.isArray(items) ? items : []).find((item) => item?.id === normalizedItemId) ?? null;
+  return loadStoredItemById(normalizedItemId);
 }
 
 export async function scanOriginalReconnectionCandidates(item, files = [], options = {}) {
@@ -392,6 +393,10 @@ export async function attachRecoveredOriginalForItem(itemId, file, candidate = {
     now = () => new Date().toISOString(),
     onProgress = null
   } = options;
+  const timings = {
+    blobWriteMs: 0,
+    itemMetadataSaveMs: 0
+  };
 
   if (!normalizedItemId || !item?.id) {
     throw new Error("Reference could not be found.");
@@ -451,7 +456,16 @@ export async function attachRecoveredOriginalForItem(itemId, file, candidate = {
     itemId: normalizedItemId,
     fileName: recoveredFilename
   });
+  const blobWriteStartedAtMs = typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
   await saveOriginalImageBlob(item.itemUuid, file, originalMetadata);
+  timings.blobWriteMs = Math.max(
+    0,
+    Math.round((((typeof performance !== "undefined" && typeof performance.now === "function")
+      ? performance.now()
+      : Date.now()) - blobWriteStartedAtMs) * 100) / 100
+  );
 
   try {
     onProgress?.({
@@ -459,7 +473,16 @@ export async function attachRecoveredOriginalForItem(itemId, file, candidate = {
       itemId: normalizedItemId,
       fileName: recoveredFilename
     });
-    const savedItem = await saveStoredItem(nextItem);
+    const itemSaveStartedAtMs = typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+    const savedItem = await markStoredItemOriginalRecovered(item, nextItem);
+    timings.itemMetadataSaveMs = Math.max(
+      0,
+      Math.round((((typeof performance !== "undefined" && typeof performance.now === "function")
+        ? performance.now()
+        : Date.now()) - itemSaveStartedAtMs) * 100) / 100
+    );
     onProgress?.({
       phase: "completed",
       itemId: normalizedItemId,
@@ -467,6 +490,7 @@ export async function attachRecoveredOriginalForItem(itemId, file, candidate = {
     });
     const resultItem = {
       ...(savedItem ?? nextItem),
+      mediaUpdateIntent: "replace",
       originalPreserved: true,
       relinkStatus: "linked",
       sourceOriginalFilename: nextItem.sourceOriginalFilename,
@@ -505,7 +529,8 @@ export async function attachRecoveredOriginalForItem(itemId, file, candidate = {
         canConfirm: true,
         requiresExplicitOverride: false
       },
-      replacedExistingOriginal: Boolean(item?.originalPreserved)
+      replacedExistingOriginal: Boolean(item?.originalPreserved),
+      timings
     };
   } catch (error) {
     await deleteOriginalImageBlob(item.itemUuid);

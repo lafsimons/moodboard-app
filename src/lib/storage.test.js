@@ -16,6 +16,7 @@ import {
   getOrCreateDeviceId,
   loadLatestMetadataSnapshotInfo,
   loadIndexedDbDebugInfo,
+  loadItemById,
   loadMetadataSnapshots,
   loadLatestOriginalRecoverySession,
   getSyncMetadata,
@@ -24,6 +25,7 @@ import {
   loadItemMediaAssetById,
   loadItems,
   markFullBackupExported,
+  markItemOriginalRecovered,
   markMetadataChanged,
   loadOriginalImageBlob,
   loadOriginalImageBlobEntry,
@@ -1095,6 +1097,108 @@ test("reference create and update mark metadata pending upload", async () => {
   });
 
   const updatedMetadata = await getSyncMetadata("mba:reference:uuid-1");
+  assert.equal(updatedMetadata.syncStatus, "pending_upload");
+  assert.equal(updatedMetadata.recordVersion, 5);
+  assert.equal(updatedMetadata.lastSyncedAt, "2026-05-18T12:00:00.000Z");
+  assert.equal(updatedMetadata.lastSyncError, "");
+  assert.equal(updatedMetadata.pendingDelete, false);
+});
+
+test("markItemOriginalRecovered updates only original metadata and bumps sync metadata without materializing media", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-recovery-metadata",
+    itemUuid: "uuid-recovery-metadata",
+    name: "Recovery Metadata",
+    sourceOriginalFilename: "",
+    sourceFilenameAliases: ["archive-copy.jpg"],
+    originalPreserved: false,
+    relinkStatus: "missing",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-recovery",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "preview-recovery.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,thumb-recovery",
+        mimeType: "image/webp",
+        width: 320,
+        height: 240,
+        originalFilename: "thumb-recovery.webp"
+      }
+    }
+  });
+
+  const createdMetadata = await getSyncMetadata("mba:reference:uuid-recovery-metadata");
+  await upsertSyncMetadata({
+    ...createdMetadata,
+    syncStatus: "synced",
+    recordVersion: 4,
+    lastSyncedAt: "2026-05-18T12:00:00.000Z",
+    lastSyncError: "old-error"
+  });
+
+  const existingItem = await loadItemById("item-recovery-metadata");
+  const originalConsoleLog = console.log;
+  let consoleLogCount = 0;
+  console.log = () => {
+    consoleLogCount += 1;
+  };
+
+  let recoveredItem;
+  try {
+    recoveredItem = await markItemOriginalRecovered(existingItem, {
+      relinkStatus: "linked",
+      originalLinkedAt: "2026-06-01T12:34:56.000Z",
+      originalRelinkedFrom: "original-recovery",
+      originalRelinkedFilename: "recovered-fast.jpg",
+      updatedAt: "2026-06-01T12:34:56.000Z",
+      sourceOriginalFilename: "recovered-fast.jpg",
+      sourceFilenameAliases: ["archive-copy.jpg", "preview-recovery.webp", "recovered-fast.jpg"],
+      images: {
+        original: {
+          mimeType: "image/jpeg",
+          width: 1200,
+          height: 800,
+          fileSize: 1234,
+          originalFilename: "recovered-fast.jpg"
+        }
+      }
+    });
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  assert.equal(consoleLogCount, 0);
+  assert.equal(recoveredItem.originalPreserved, true);
+  assert.equal(recoveredItem.relinkStatus, "linked");
+  assert.equal(recoveredItem.sourceOriginalFilename, "recovered-fast.jpg");
+  assert.deepEqual(recoveredItem.sourceFilenameAliases, ["archive-copy.jpg", "preview-recovery.webp", "recovered-fast.jpg"]);
+  assert.equal(recoveredItem.images.preview.src, "");
+  assert.equal(recoveredItem.images.thumbnail.src, "");
+  assert.equal(recoveredItem.images.original.src, "");
+  assert.equal(recoveredItem.images.original.width, 1200);
+  assert.equal(recoveredItem.images.original.height, 800);
+
+  const savedItem = await loadItemById("item-recovery-metadata");
+  assert.equal(savedItem.originalPreserved, true);
+  assert.equal(savedItem.relinkStatus, "linked");
+  assert.equal(savedItem.originalRelinkedFrom, "original-recovery");
+  assert.equal(savedItem.images.preview.src, "");
+  assert.equal(savedItem.images.thumbnail.src, "");
+  assert.equal(savedItem.images.original.src, "");
+  assert.equal(savedItem.images.original.originalFilename, "recovered-fast.jpg");
+
+  const resolvedPreview = await loadItemMediaAssetById("item-recovery-metadata", "preview");
+  const resolvedThumbnail = await loadItemMediaAssetById("item-recovery-metadata", "thumbnail");
+  assert.equal(resolvedPreview?.src, "data:image/webp;base64,preview-recovery");
+  assert.equal(resolvedThumbnail?.src, "data:image/webp;base64,thumb-recovery");
+
+  const updatedMetadata = await getSyncMetadata("mba:reference:uuid-recovery-metadata");
   assert.equal(updatedMetadata.syncStatus, "pending_upload");
   assert.equal(updatedMetadata.recordVersion, 5);
   assert.equal(updatedMetadata.lastSyncedAt, "2026-05-18T12:00:00.000Z");

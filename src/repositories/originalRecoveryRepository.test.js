@@ -576,6 +576,12 @@ test("applyOriginalRecoverySession reports per-item progress stages and report p
   assert.equal(phases.includes("item-recovered"), true);
   assert.equal(phases.includes("report-persistence"), true);
   assert.equal(phases.includes("apply-complete"), true);
+  assert.equal(typeof applyResult.timings.getFileMs, "number");
+  assert.equal(typeof applyResult.timings.blobWriteMs, "number");
+  assert.equal(typeof applyResult.timings.itemMetadataSaveMs, "number");
+  assert.equal(typeof applyResult.timings.averagePerItemMs, "number");
+  assert.equal(typeof applyResult.timings.reportPersistenceMs, "number");
+  assert.equal(applyResult.timings.appliedItemCount, 1);
 });
 
 test("applyOriginalRecoverySession skips createOriginalImageAsset on the normal verified recovery path", async () => {

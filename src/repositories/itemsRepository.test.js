@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   __setIndexedDbFactoryForTests,
+  loadOriginalImageBlobEntry,
   replaceWithPreparedBackupPackage
 } from "../lib/storage.js";
 import { INDEXED_DB_NAME } from "../lib/appIdentity.js";
@@ -625,11 +626,14 @@ test("attachRecoveredOriginalForItem writes original blob directly without decod
     "preview-fast.webp",
     "recovered-fast.jpg",
   ]);
-  assert.equal(result.item.images.preview.src, "data:image/webp;base64,preview-fast");
-  assert.equal(result.item.images.thumbnail.src, "data:image/webp;base64,thumb-fast");
+  assert.equal(result.item.images.preview.src, "");
+  assert.equal(result.item.images.thumbnail.src, "");
   assert.equal(result.item.images.original.src, "");
   assert.equal(result.item.images.original.width, 1200);
   assert.equal(result.item.images.original.height, 800);
+  const storedOriginalEntry = await loadOriginalImageBlobEntry("uuid-recovery-fast");
+  assert.equal(storedOriginalEntry?.originalFilename, "recovered-fast.jpg");
+  assert.equal(storedOriginalEntry?.blob instanceof Blob, true);
   const afterRecoveryAvailability = await classifyOriginalAvailability("item-recovery-fast");
   assert.equal(afterRecoveryAvailability.hasStoredOriginal, true);
 });

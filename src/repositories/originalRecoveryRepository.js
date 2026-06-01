@@ -98,6 +98,11 @@ function createScanTimingSummary() {
 function createApplyTimingSummary() {
   return {
     autosnapshotMs: 0,
+    getFileMs: 0,
+    blobWriteMs: 0,
+    itemMetadataSaveMs: 0,
+    averagePerItemMs: 0,
+    appliedItemCount: 0,
     applyLoopMs: 0,
     reportPersistenceMs: 0
   };
@@ -405,6 +410,7 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
   });
 
   for (let index = 0; index < approvedMatches.length; index += 1) {
+    const itemStartedAtMs = getNowMs();
     const match = approvedMatches[index];
     const selectedCandidateId = normalizeText(match.selectedCandidateId);
     const selectedCandidate = (Array.isArray(match.candidates) ? match.candidates : []).find(
@@ -419,7 +425,10 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
       fileName: selectedCandidate?.fileName || ""
     });
     const entry = selectedCandidateId ? candidateEntriesById[selectedCandidateId] : null;
+    const getFileStartedAtMs = getNowMs();
     const file = entry ? await resolveScanEntryFile(options.adapter ?? null, entry) : null;
+    const getFileMs = buildPhaseTiming(getFileStartedAtMs);
+    timings.getFileMs += getFileMs;
 
     if (!selectedCandidateId || !selectedCandidate || !file) {
       applyResults.push({
@@ -458,6 +467,14 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
           }
         }
       );
+      timings.blobWriteMs += Number(result?.timings?.blobWriteMs) || 0;
+      timings.itemMetadataSaveMs += Number(result?.timings?.itemMetadataSaveMs) || 0;
+      timings.appliedItemCount += 1;
+      timings.averagePerItemMs = Math.max(
+        0,
+        Math.round((((Number(timings.averagePerItemMs) * Math.max(0, timings.appliedItemCount - 1))
+          + buildPhaseTiming(itemStartedAtMs)) / timings.appliedItemCount) * 100) / 100
+      );
       recoveredItems.push(result.item);
       applyResults.push({
         itemId: match.itemId,
@@ -475,6 +492,12 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
         fileName: selectedCandidate.fileName || ""
       });
     } catch (error) {
+      timings.appliedItemCount += 1;
+      timings.averagePerItemMs = Math.max(
+        0,
+        Math.round((((Number(timings.averagePerItemMs) * Math.max(0, timings.appliedItemCount - 1))
+          + buildPhaseTiming(itemStartedAtMs)) / timings.appliedItemCount) * 100) / 100
+      );
       applyResults.push({
         itemId: match.itemId,
         status: "failed",
