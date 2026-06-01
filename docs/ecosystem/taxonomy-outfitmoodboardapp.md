@@ -147,12 +147,12 @@ medium/*
 * book
 * film
 * editorial
+* lookbook
 * runway
 * photo
 * personal
 * screenshot
 * scan
-* ig (maybe)
 * text
     * medium/text/interview
     * medium/text/article
@@ -181,6 +181,7 @@ reference/*
 * reference/material-culture
 * reference/garment-essence
 * reference/modern-reinterpretation
+* reference/construction
 
 subject/*
 - subject/garment/*
@@ -211,7 +212,18 @@ origin/*
 - origin/japan
 
 period/*
+- period/historical
 - period/archival
+- period/contemporary
+- period/reproduction
+- period/modern-reinterpretation
+
+condition/*
+- condition/pristine
+- condition/worn
+- condition/repaired
+- condition/boro
+- condition/faded
 
 ### T.T library
 

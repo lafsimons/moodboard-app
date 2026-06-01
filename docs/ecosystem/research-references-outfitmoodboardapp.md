@@ -929,3 +929,168 @@ The broader realization is that the underlying attraction is not to specific bra
 - Minimal visual noise.
 - Strong silhouette under wider trousers.
 - Ability to age beautifully over time.
+
+---
+
+# Tagging Process
+
+That’s actually where I think the highest ROI is now.
+
+Not creating new taxonomy branches.
+
+Not designing new tag structures.
+
+Just gradually improving coverage.
+
+Looking at your counts, you already have the framework. The problem is probably:
+
+```text
+Image A:
+brand/t.t
+subject/fit
+
+Image B:
+brand/t.t
+subject/fit
+origin/asia/japan
+
+Image C:
+brand/t.t
+subject/fit
+origin/asia/japan
+reference/modern-reinterpretation
+```
+
+So retrieval becomes inconsistent.
+
+---
+
+If it were my archive, I would stop thinking:
+
+“What new tags do I need?”
+
+and start thinking:
+
+“Which existing tags are missing most often?”
+
+For example:
+
+### **Pass 1: Origin**
+
+Filter:
+
+```text
+NOT origin/*
+```
+
+Then rapidly add:
+
+```text
+origin/eu/france
+origin/usa
+origin/asia/japan
+```
+
+to hundreds of images.
+
+---
+
+### **Pass 2: Period**
+
+Filter:
+
+```text
+period/archival
+```
+
+Then gradually add:
+
+```text
+era/1900s
+era/1910s
+era/1920s
+era/1930s
+era/1940s
+```
+
+where obvious.
+
+---
+
+### **Pass 3: Subject archetypes**
+
+Look at:
+
+```text
+subject/garment/jacket
+```
+
+and identify:
+
+```text
+black-moleskin
+wool-farmers-jacket
+german-knit
+indigo-linen
+atelier-coat
+```
+
+This is probably where the most future value sits.
+
+---
+
+### **Pass 4: Modern interpretation**
+
+This one may actually be missing from many images.
+
+For example:
+
+- Brass
+- Clinch
+- Taiga Takahashi
+- Freewheelers
+- vintage-inspired Japanese brands
+
+could often receive:
+
+```text
+reference/modern-reinterpretation
+```
+
+---
+
+What I would _not_ do is try to fully tag every image.
+
+At 4,000+ images that’s a trap.
+
+Instead:
+
+```text
+Image has 1 useful tag
+↓
+Add 1–2 missing tags
+↓
+Move on
+```
+
+Over time you’ll get:
+
+```text
+brand
+subject
+origin
+```
+
+on 90% of images.
+
+Then:
+
+```text
+period
+lineage
+reference
+```
+
+on the images where they matter.
+
+That’s usually enough to make an archive feel complete without turning tagging into a full-time job.
