@@ -570,12 +570,76 @@ test("applyOriginalRecoverySession reports per-item progress stages and report p
   assert.equal(phases.includes("apply-start"), true);
   assert.equal(phases.includes("candidate-lookup"), true);
   assert.equal(phases.includes("file-read"), true);
-  assert.equal(phases.includes("decoded"), true);
+  assert.equal(phases.includes("decoded"), false);
   assert.equal(phases.includes("blob-write"), true);
   assert.equal(phases.includes("item-save"), true);
   assert.equal(phases.includes("item-recovered"), true);
   assert.equal(phases.includes("report-persistence"), true);
   assert.equal(phases.includes("apply-complete"), true);
+});
+
+test("applyOriginalRecoverySession skips createOriginalImageAsset on the normal verified recovery path", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-fast-apply",
+    itemUuid: "uuid-fast-apply",
+    name: "Camel Coat",
+    sourceOriginalFilename: "camel-coat.jpg",
+    sourceFilenameAliases: ["archive-copy.jpg"],
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-fast-apply",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  const file = new File(["1234567890"], "camel-coat.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const scanResult = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async () => ({
+        sourceLabel: "Archive",
+        entries: [
+          { id: "candidate-fast-apply", sourceLabel: "Archive", relativePath: "archive/camel-coat.jpg", file }
+        ]
+      })
+    },
+    createOriginalImageAsset: async (candidateFile) => ({
+      src: `data:${candidateFile.type};base64,ZmFrZQ==`,
+      mimeType: candidateFile.type,
+      width: 100,
+      height: 50,
+      fileSize: candidateFile.size,
+      originalFilename: candidateFile.name
+    }),
+    now: () => "2026-06-01T12:00:00.000Z"
+  });
+
+  let decodeCount = 0;
+  const applyResult = await applyOriginalRecoverySession(scanResult.session.id, {
+    currentSession: scanResult.session,
+    candidateEntriesById: scanResult.candidateEntriesById,
+    createOriginalImageAsset: async () => {
+      decodeCount += 1;
+      throw new Error("fast batch apply should not decode");
+    },
+    now: () => "2026-06-01T12:34:56.000Z"
+  });
+
+  assert.equal(decodeCount, 0);
+  assert.equal(applyResult.session.summary.recoveredCount, 1);
+  assert.equal(applyResult.session.summary.failedCount, 0);
 });
 
 test("scan approve and apply still work with in-memory session when persistence is unavailable", async () => {

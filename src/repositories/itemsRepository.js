@@ -317,6 +317,202 @@ export async function createOriginalReconnectionSnapshot(itemId, options = {}) {
   });
 }
 
+function normalizeText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeNumber(value) {
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) && parsedValue > 0 ? Math.round(parsedValue) : 0;
+}
+
+function normalizeTimestamp(value) {
+  const parsedValue = normalizeNumber(value);
+
+  if (parsedValue) {
+    return parsedValue;
+  }
+
+  if (typeof value === "string") {
+    const dateValue = Date.parse(value);
+    return Number.isFinite(dateValue) && dateValue > 0 ? Math.round(dateValue) : 0;
+  }
+
+  return 0;
+}
+
+function buildRecoveryOriginalMetadata(file, candidate = {}) {
+  return {
+    src: "",
+    mimeType: normalizeText(candidate?.mimeType) || normalizeText(file?.type),
+    width: normalizeNumber(candidate?.sourceImageWidth),
+    height: normalizeNumber(candidate?.sourceImageHeight),
+    fileSize: normalizeNumber(candidate?.sourceFileSize) || normalizeNumber(file?.size),
+    originalFilename: normalizeText(candidate?.fileName) || normalizeText(file?.name)
+  };
+}
+
+function verifyRecoveredOriginalCandidate(file, candidate = {}) {
+  const expectedFilename = normalizeText(candidate?.fileName);
+  const actualFilename = normalizeText(file?.name);
+  const expectedSize = normalizeNumber(candidate?.sourceFileSize);
+  const actualSize = normalizeNumber(file?.size);
+  const expectedMimeType = normalizeText(candidate?.mimeType).toLowerCase();
+  const actualMimeType = normalizeText(file?.type).toLowerCase();
+  const expectedLastModified = normalizeTimestamp(candidate?.sourceLastModified);
+  const actualLastModified = normalizeTimestamp(file?.lastModified);
+  const hasDimensions = Boolean(
+    normalizeNumber(candidate?.sourceImageWidth) && normalizeNumber(candidate?.sourceImageHeight)
+  );
+  const scalarMismatch = (
+    (expectedFilename && actualFilename && expectedFilename !== actualFilename)
+    || (expectedSize && actualSize && expectedSize !== actualSize)
+    || (expectedMimeType && actualMimeType && expectedMimeType !== actualMimeType)
+    || (expectedLastModified && actualLastModified && expectedLastModified !== actualLastModified)
+  );
+
+  return {
+    verified: hasDimensions && !scalarMismatch,
+    scalarMismatch,
+    missingDimensions: !hasDimensions,
+    incompleteCandidate:
+      !normalizeText(candidate?.id)
+      || !normalizeText(candidate?.fileName)
+      || !normalizeText(candidate?.match?.classification),
+    expectedFilename,
+    actualFilename
+  };
+}
+
+export async function attachRecoveredOriginalForItem(itemId, file, candidate = {}, options = {}) {
+  const normalizedItemId = normalizeText(itemId);
+  const item = await loadItemById(normalizedItemId);
+  const {
+    createOriginalImageAsset,
+    now = () => new Date().toISOString(),
+    onProgress = null
+  } = options;
+
+  if (!normalizedItemId || !item?.id) {
+    throw new Error("Reference could not be found.");
+  }
+
+  if (!file?.type?.startsWith?.("image/")) {
+    throw new Error("Selected file is not an image.");
+  }
+
+  onProgress?.({
+    phase: "file-read",
+    itemId: normalizedItemId,
+    fileName: file?.name ?? ""
+  });
+
+  const verification = verifyRecoveredOriginalCandidate(file, candidate);
+
+  if (verification.scalarMismatch || verification.missingDimensions || verification.incompleteCandidate) {
+    if (typeof createOriginalImageAsset !== "function") {
+      throw new Error("Recovered original candidate metadata could not be verified. Re-scan before applying.");
+    }
+
+    return reconnectOriginalForItem(
+      normalizedItemId,
+      file,
+      null,
+      {
+        createOriginalImageAsset,
+        now,
+        onProgress
+      }
+    );
+  }
+
+  const originalMetadata = buildRecoveryOriginalMetadata(file, candidate);
+  const linkedAt = typeof now === "function" ? now() : new Date().toISOString();
+  const recoveredFilename = normalizeText(file?.name) || normalizeText(originalMetadata.originalFilename);
+  const nextItem = {
+    ...item,
+    originalPreserved: true,
+    relinkStatus: "linked",
+    sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename) || recoveredFilename,
+    sourceFilenameAliases: appendOriginalReconnectionAlias(item, recoveredFilename),
+    originalLinkedAt: linkedAt,
+    originalRelinkedFrom: "original-recovery",
+    originalRelinkedFilename: recoveredFilename,
+    updatedAt: linkedAt,
+    images: {
+      ...(item?.images && typeof item.images === "object" ? item.images : {}),
+      original: originalMetadata
+    },
+    mediaUpdateIntent: "replace"
+  };
+
+  onProgress?.({
+    phase: "blob-write",
+    itemId: normalizedItemId,
+    fileName: recoveredFilename
+  });
+  await saveOriginalImageBlob(item.itemUuid, file, originalMetadata);
+
+  try {
+    onProgress?.({
+      phase: "item-save",
+      itemId: normalizedItemId,
+      fileName: recoveredFilename
+    });
+    const savedItem = await saveStoredItem(nextItem);
+    onProgress?.({
+      phase: "completed",
+      itemId: normalizedItemId,
+      fileName: recoveredFilename
+    });
+    const resultItem = {
+      ...(savedItem ?? nextItem),
+      originalPreserved: true,
+      relinkStatus: "linked",
+      sourceOriginalFilename: nextItem.sourceOriginalFilename,
+      sourceFilenameAliases: nextItem.sourceFilenameAliases,
+      originalLinkedAt: nextItem.originalLinkedAt,
+      originalRelinkedFrom: nextItem.originalRelinkedFrom,
+      originalRelinkedFilename: nextItem.originalRelinkedFilename,
+      images: {
+        ...((savedItem ?? nextItem)?.images && typeof (savedItem ?? nextItem).images === "object"
+          ? (savedItem ?? nextItem).images
+          : {}),
+        original: {
+          ...(((savedItem ?? nextItem)?.images?.original && typeof (savedItem ?? nextItem).images.original === "object")
+            ? (savedItem ?? nextItem).images.original
+            : {}),
+          ...originalMetadata,
+          src: ""
+        }
+      }
+    };
+
+    return {
+      item: resultItem,
+      review: {
+        candidate: {
+          sourceOriginalFilename: recoveredFilename,
+          sourceFilenameAliases: [],
+          sourceFileSize: originalMetadata.fileSize,
+          sourceImageWidth: originalMetadata.width,
+          sourceImageHeight: originalMetadata.height,
+          sourceLastModified: normalizeTimestamp(file?.lastModified),
+          mimeType: originalMetadata.mimeType
+        },
+        match: candidate?.match ?? { classification: normalizeText(candidate?.match?.classification) || "strong" },
+        reasons: Array.isArray(candidate?.reasons) ? candidate.reasons : [],
+        canConfirm: true,
+        requiresExplicitOverride: false
+      },
+      replacedExistingOriginal: Boolean(item?.originalPreserved)
+    };
+  } catch (error) {
+    await deleteOriginalImageBlob(item.itemUuid);
+    throw error;
+  }
+}
+
 export async function reconnectOriginalForItem(itemId, file, expectedMatchContext = null, options = {}) {
   const normalizedItemId = typeof itemId === "string" ? itemId.trim() : "";
   const item = await loadItemById(normalizedItemId);

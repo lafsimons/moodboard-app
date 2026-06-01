@@ -14,7 +14,7 @@ import {
   selectOriginalRecoveryCandidate,
   updateOriginalRecoveryMatchDecision
 } from "../lib/originalRecovery.js";
-import { loadItems, reconnectOriginalForItem } from "./itemsRepository.js";
+import { attachRecoveredOriginalForItem, loadItems } from "./itemsRepository.js";
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -387,10 +387,6 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
     throw new Error("Original recovery session is unavailable. Re-scan the source before applying.");
   }
 
-  if (typeof options.createOriginalImageAsset !== "function") {
-    throw new Error("Original recovery apply requires an original image asset decoder.");
-  }
-
   const candidateEntriesById = options.candidateEntriesById && typeof options.candidateEntriesById === "object"
     ? options.candidateEntriesById
     : {};
@@ -445,14 +441,10 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
     }
 
     try {
-      const result = await reconnectOriginalForItem(
+      const result = await attachRecoveredOriginalForItem(
         match.itemId,
         file,
-        {
-          match: {
-            classification: selectedCandidate.match?.classification
-          }
-        },
+        selectedCandidate,
         {
           createOriginalImageAsset: options.createOriginalImageAsset,
           now: options.now,

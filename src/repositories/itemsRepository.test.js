@@ -7,6 +7,7 @@ import {
 } from "../lib/storage.js";
 import { INDEXED_DB_NAME } from "../lib/appIdentity.js";
 import {
+  attachRecoveredOriginalForItem,
   classifyOriginalAvailability,
   createOriginalReconnectionSnapshot,
   loadItemMediaAssetById,
@@ -552,6 +553,151 @@ test("original reconnection candidate scanning, snapshotting, reconnecting, and 
   const afterMissingAvailability = await classifyOriginalAvailability("item-reconnect");
   assert.equal(afterMissingAvailability.state, "missing");
   assert.equal(afterMissingAvailability.hasStoredOriginal, false);
+});
+
+test("attachRecoveredOriginalForItem writes original blob directly without decode and preserves preview metadata", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-recovery-fast",
+    itemUuid: "uuid-recovery-fast",
+    name: "Recovery Fast",
+    sourceOriginalFilename: "",
+    sourceFilenameAliases: ["archive-copy.jpg"],
+    originalPreserved: false,
+    relinkStatus: "missing",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-fast",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "preview-fast.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,thumb-fast",
+        mimeType: "image/webp",
+        width: 320,
+        height: 240,
+        originalFilename: "thumb-fast.webp"
+      }
+    }
+  });
+
+  let decodeCount = 0;
+  const file = new File(["recovered-original"], "recovered-fast.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const result = await attachRecoveredOriginalForItem(
+    "item-recovery-fast",
+    file,
+    {
+      id: "candidate-fast",
+      fileName: "recovered-fast.jpg",
+      sourceFileSize: file.size,
+      sourceImageWidth: 1200,
+      sourceImageHeight: 800,
+      sourceLastModified: 1717236000000,
+      mimeType: "image/jpeg",
+      match: {
+        classification: "strong"
+      },
+      reasons: ["Filename matches stored provenance"]
+    },
+    {
+      createOriginalImageAsset: async () => {
+        decodeCount += 1;
+        throw new Error("fast path should not decode");
+      },
+      now: () => "2026-06-01T12:34:56.000Z"
+    }
+  );
+
+  assert.equal(decodeCount, 0);
+  assert.equal(result.item.originalPreserved, true);
+  assert.equal(result.item.relinkStatus, "linked");
+  assert.equal(result.item.originalLinkedAt, "2026-06-01T12:34:56.000Z");
+  assert.equal(result.item.originalRelinkedFrom, "original-recovery");
+  assert.equal(result.item.originalRelinkedFilename, "recovered-fast.jpg");
+  assert.equal(result.item.sourceOriginalFilename, "recovered-fast.jpg");
+  assert.deepEqual(result.item.sourceFilenameAliases, [
+    "archive-copy.jpg",
+    "preview-fast.webp",
+    "recovered-fast.jpg",
+  ]);
+  assert.equal(result.item.images.preview.src, "data:image/webp;base64,preview-fast");
+  assert.equal(result.item.images.thumbnail.src, "data:image/webp;base64,thumb-fast");
+  assert.equal(result.item.images.original.src, "");
+  assert.equal(result.item.images.original.width, 1200);
+  assert.equal(result.item.images.original.height, 800);
+  const afterRecoveryAvailability = await classifyOriginalAvailability("item-recovery-fast");
+  assert.equal(afterRecoveryAvailability.hasStoredOriginal, true);
+});
+
+test("attachRecoveredOriginalForItem preserves sourceOriginalFilename and falls back to decode on scalar mismatch", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-recovery-fallback",
+    itemUuid: "uuid-recovery-fallback",
+    name: "Recovery Fallback",
+    sourceOriginalFilename: "canonical.jpg",
+    sourceFilenameAliases: ["archive-copy.jpg"],
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-fallback",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  let decodeCount = 0;
+  const file = new File(["fallback-original"], "fallback-recovered.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  await assert.rejects(
+    attachRecoveredOriginalForItem(
+      "item-recovery-fallback",
+      file,
+      {
+        id: "candidate-fallback",
+        fileName: "fallback-recovered.jpg",
+        sourceFileSize: file.size + 1,
+        sourceImageWidth: 100,
+        sourceImageHeight: 50,
+        sourceLastModified: 1717236000000,
+        mimeType: "image/jpeg",
+        match: {
+          classification: "exact"
+        }
+      },
+      {
+        createOriginalImageAsset: async (candidateFile) => {
+          decodeCount += 1;
+          return {
+            src: `data:${candidateFile.type};base64,ZmFrZQ==`,
+            mimeType: candidateFile.type,
+            width: 100,
+            height: 50,
+            fileSize: candidateFile.size,
+            originalFilename: `${candidateFile.name}.webp`
+          };
+        },
+        now: () => "2026-06-01T12:34:56.000Z"
+      }
+    ),
+    /strongly enough to reconnect|candidate changed during review/
+  );
+
+  assert.equal(decodeCount, 1);
 });
 
 test("metadata-only edited references stay metadata-only and still resolve preview media after save", async () => {

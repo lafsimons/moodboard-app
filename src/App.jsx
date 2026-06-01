@@ -5587,6 +5587,30 @@ export default function App() {
     setIsOriginalRecoveryApplying(true);
 
     try {
+      let lastApplyProgressPhase = "";
+      let lastApplyProgressCompleted = -1;
+      let lastApplyProgressUpdateAt = 0;
+      const publishOriginalRecoveryApplyProgress = (message, phase = "", completed = 0, total = 0) => {
+        const nowMs = typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+        const shouldUpdate =
+          phase !== lastApplyProgressPhase
+          || completed === total
+          || completed === 0
+          || completed - lastApplyProgressCompleted >= 5
+          || nowMs - lastApplyProgressUpdateAt >= 250;
+
+        if (!shouldUpdate) {
+          return;
+        }
+
+        lastApplyProgressPhase = phase;
+        lastApplyProgressCompleted = completed;
+        lastApplyProgressUpdateAt = nowMs;
+        setOriginalRecoveryScanProgress(message);
+      };
+
       const autosnapshotStartedAt = typeof performance !== "undefined" && typeof performance.now === "function"
         ? performance.now()
         : Date.now();
@@ -5630,89 +5654,113 @@ export default function App() {
           const countLabel = total > 0 ? `${Math.min(completed, total)}/${total}` : `${completed}`;
 
           if (phase === "apply-start") {
-            setOriginalRecoveryScanProgress(`Applying approved recoveries... ${countLabel}`);
+            publishOriginalRecoveryApplyProgress(`Applying approved recoveries... ${countLabel}`, phase, completed, total);
             return;
           }
 
           if (phase === "candidate-lookup") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Preparing candidate file... ${countLabel} ${itemLabel}`
-                : `Preparing candidate file... ${countLabel}`
+                : `Preparing candidate file... ${countLabel}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "file-read") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Reading source file... ${countLabel} ${itemLabel}`
-                : `Reading source file... ${countLabel}`
+                : `Reading source file... ${countLabel}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "decoded") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Decoding original... ${countLabel} ${itemLabel}`
-                : `Decoding original... ${countLabel}`
+                : `Decoding original... ${countLabel}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "blob-write") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Writing original blob... ${countLabel} ${itemLabel}`
-                : `Writing original blob... ${countLabel}`
+                : `Writing original blob... ${countLabel}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "item-save") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Saving item metadata... ${countLabel} ${itemLabel}`
-                : `Saving item metadata... ${countLabel}`
+                : `Saving item metadata... ${countLabel}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "candidate-missing") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Candidate missing, marking for re-scan... ${countLabel} ${itemLabel}`
-                : `Candidate missing, marking for re-scan... ${countLabel}`
+                : `Candidate missing, marking for re-scan... ${countLabel}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "item-failed") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Recovery failed, continuing... ${countLabel} ${itemLabel}${progressError ? ` (${progressError})` : ""}`
-                : `Recovery failed, continuing... ${countLabel}${progressError ? ` (${progressError})` : ""}`
+                : `Recovery failed, continuing... ${countLabel}${progressError ? ` (${progressError})` : ""}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "item-recovered") {
-            setOriginalRecoveryScanProgress(
+            publishOriginalRecoveryApplyProgress(
               itemLabel
                 ? `Recovered original... ${countLabel} ${itemLabel}`
-                : `Recovered original... ${countLabel}`
+                : `Recovered original... ${countLabel}`,
+              phase,
+              completed,
+              total
             );
             return;
           }
 
           if (phase === "report-persistence") {
-            setOriginalRecoveryScanProgress("Saving recovery report...");
+            publishOriginalRecoveryApplyProgress("Saving recovery report...", phase, completed, total);
             return;
           }
 
           if (phase === "apply-complete") {
-            setOriginalRecoveryScanProgress("Apply complete.");
+            publishOriginalRecoveryApplyProgress("Apply complete.", phase, completed, total);
           }
         }
       });
