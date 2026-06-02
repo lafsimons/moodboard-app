@@ -406,6 +406,164 @@ test("buildOriginalRecoverySession auto-approves safe vintage legacy weak_only m
   assert.equal(session.matches[0].selectedCandidateId, "candidate-vintage-050");
 });
 
+test("buildOriginalRecoverySession auto-approves vintage weak_only matches with empty sourceNamespace when sourceRelativePath proves vintage identity", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-vintage-path-proof",
+        itemUuid: "uuid-missing-vintage-path-proof",
+        name: "images-050.jpg",
+        tags: ["folder/vintage"],
+        sourceNamespace: "",
+        sourceRelativePath: "vintage/images-050.jpg",
+        sourceOriginalFilename: "images-050.jpg",
+        sourceFilenameAliases: [],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-vintage-050",
+        sourceLabel: "vintage",
+        relativePath: "vintage/vintage-images-050.jpg",
+        fileName: "vintage-images-050.jpg",
+        sourceFileSize: 1329815,
+        sourceImageWidth: 1284,
+        sourceImageHeight: 1555,
+        sourceLastModified: 1777459771014,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "weak_only");
+  assert.equal(session.matches[0].decision, "accepted");
+  assert.equal(session.matches[0].selectedCandidateId, "candidate-vintage-050");
+});
+
+test("buildOriginalRecoverySession auto-approves vintage weak_only matches with empty sourceNamespace when alias proves vintage identity", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-vintage-alias-proof",
+        itemUuid: "uuid-missing-vintage-alias-proof",
+        name: "images-050.jpg",
+        tags: ["folder/vintage"],
+        sourceNamespace: "",
+        sourceRelativePath: "",
+        sourceOriginalFilename: "",
+        sourceFilenameAliases: ["vintage-images-050.jpg"],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-vintage-050",
+        sourceLabel: "vintage",
+        relativePath: "vintage-images-050.jpg",
+        fileName: "vintage-images-050.jpg",
+        sourceFileSize: 1329815,
+        sourceImageWidth: 1284,
+        sourceImageHeight: 1555,
+        sourceLastModified: 1777459771014,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "weak_only");
+  assert.equal(session.matches[0].decision, "accepted");
+  assert.equal(session.matches[0].selectedCandidateId, "candidate-vintage-050");
+});
+
+test("buildOriginalRecoverySession keeps vintage weak_only matches manual when sourceNamespace is empty and no vintage path or alias proves identity", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-vintage-no-proof",
+        itemUuid: "uuid-missing-vintage-no-proof",
+        name: "images-050.jpg",
+        tags: ["folder/vintage"],
+        sourceNamespace: "",
+        sourceRelativePath: "",
+        sourceOriginalFilename: "",
+        sourceFilenameAliases: [],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-vintage-050",
+        sourceLabel: "vintage",
+        relativePath: "vintage-images-050.jpg",
+        fileName: "vintage-images-050.jpg",
+        sourceFileSize: 1329815,
+        sourceImageWidth: 1284,
+        sourceImageHeight: 1555,
+        sourceLastModified: 1777459771014,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].decision, "undecided");
+  assert.equal(session.matches[0].selectedCandidateId, "");
+});
+
+test("buildOriginalRecoverySession keeps vintage weak_only matches manual when sourceRelativePath proves the wrong namespace", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-vintage-wrong-path-proof",
+        itemUuid: "uuid-missing-vintage-wrong-path-proof",
+        name: "images-050.jpg",
+        tags: ["folder/vintage"],
+        sourceNamespace: "",
+        sourceRelativePath: "moodboard/images-050.jpg",
+        sourceOriginalFilename: "",
+        sourceFilenameAliases: ["vintage-images-050.jpg"],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-vintage-050",
+        sourceLabel: "vintage",
+        relativePath: "vintage-images-050.jpg",
+        fileName: "vintage-images-050.jpg",
+        sourceFileSize: 1329815,
+        sourceImageWidth: 1284,
+        sourceImageHeight: 1555,
+        sourceLastModified: 1777459771014,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "weak_only");
+  assert.equal(session.matches[0].decision, "undecided");
+});
+
 test("buildOriginalRecoverySession keeps non-vintage weak_only matches manual", () => {
   const session = buildOriginalRecoverySession({
     items: [

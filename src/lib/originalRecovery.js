@@ -132,6 +132,17 @@ function parseLegacyArchiveCandidate(value) {
   };
 }
 
+function getCandidateNamespace(candidate = {}) {
+  const relativePathNamespace = getPathNamespace(candidate?.relativePath);
+
+  if (relativePathNamespace) {
+    return relativePathNamespace;
+  }
+
+  const sourceLabel = normalizeText(candidate?.sourceLabel).toLowerCase();
+  return LEGACY_SOURCE_NAMESPACES.has(sourceLabel) ? sourceLabel : "";
+}
+
 function isSafeVintageReadyWeakSingle(item, candidateMatches, outcome) {
   if (outcome !== "weak_only" || candidateMatches.length !== 1 || item?.originalPreserved) {
     return false;
@@ -140,10 +151,6 @@ function isSafeVintageReadyWeakSingle(item, candidateMatches, outcome) {
   const normalizedTags = normalizeStringArray(item?.tags).map((entry) => entry.toLowerCase());
 
   if (!normalizedTags.includes("folder/vintage")) {
-    return false;
-  }
-
-  if (normalizeText(item?.sourceNamespace).toLowerCase() !== "vintage") {
     return false;
   }
 
@@ -162,26 +169,31 @@ function isSafeVintageReadyWeakSingle(item, candidateMatches, outcome) {
     return false;
   }
 
-  const candidateNamespace = getPathNamespace(candidate.relativePath);
+  const candidateNamespace = getCandidateNamespace(candidate);
   const candidateBasename = getPathBasename(candidate.relativePath) || normalizeComparableValue(candidate.fileName);
   const expectedRelativePath = `vintage/images-${legacyNumber}${candidateDetails.extension}`;
   const expectedArchiveBasename = `vintage-images-${legacyNumber}${candidateDetails.extension}`;
+  const normalizedSourceNamespace = normalizeText(item?.sourceNamespace).toLowerCase();
   const sourceRelativePath = normalizeText(item?.sourceRelativePath);
+  const normalizedSourceRelativePath = normalizeComparableValue(sourceRelativePath);
   const sourceAliases = normalizeStringArray(item?.sourceFilenameAliases).map(normalizeComparableValue);
+  const hasVintagePathProof = normalizedSourceRelativePath.startsWith("vintage/");
+  const hasVintageAliasProof = sourceAliases.includes(expectedArchiveBasename);
+  const hasVintageNamespaceProof = normalizedSourceNamespace === "vintage";
 
   if (candidateNamespace !== "vintage" || candidateBasename !== expectedArchiveBasename) {
     return false;
   }
 
-  if (sourceRelativePath && normalizeComparableValue(sourceRelativePath) !== expectedRelativePath) {
+  if (sourceRelativePath && normalizedSourceRelativePath !== expectedRelativePath) {
     return false;
   }
 
-  if (sourceAliases.length && !sourceAliases.includes(expectedArchiveBasename)) {
+  if (sourceAliases.length && !hasVintageAliasProof) {
     return false;
   }
 
-  return Boolean(sourceRelativePath || sourceAliases.length);
+  return hasVintageNamespaceProof || hasVintagePathProof || hasVintageAliasProof;
 }
 
 function buildComparableCandidate(candidate) {
