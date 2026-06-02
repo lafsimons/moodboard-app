@@ -111,6 +111,79 @@ function isSafeLegacyReadyPossibleSingle(item, candidateMatches, outcome) {
     && candidateBasename === expectedArchiveBasename;
 }
 
+function getLegacyNumberFromValue(value) {
+  const match = normalizeText(value).match(/images-(\d+)/i);
+  return match ? match[1] : "";
+}
+
+function parseLegacyArchiveCandidate(value) {
+  const normalizedBasename = getPathBasename(value) || normalizeComparableValue(value);
+  const match = normalizedBasename.match(/^(vintage|moodboard|wishlist)-images-(\d+)(\.[a-z0-9]+)$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    namespace: match[1].toLowerCase(),
+    number: match[2],
+    extension: match[3].toLowerCase(),
+    basename: `${match[1].toLowerCase()}-images-${match[2]}${match[3].toLowerCase()}`
+  };
+}
+
+function isSafeVintageReadyWeakSingle(item, candidateMatches, outcome) {
+  if (outcome !== "weak_only" || candidateMatches.length !== 1 || item?.originalPreserved) {
+    return false;
+  }
+
+  const normalizedTags = normalizeStringArray(item?.tags).map((entry) => entry.toLowerCase());
+
+  if (!normalizedTags.includes("folder/vintage")) {
+    return false;
+  }
+
+  if (normalizeText(item?.sourceNamespace).toLowerCase() !== "vintage") {
+    return false;
+  }
+
+  const legacyNumber =
+    getLegacyNumberFromValue(item?.sourceOriginalFilename)
+    || getLegacyNumberFromValue(item?.name);
+
+  if (!legacyNumber) {
+    return false;
+  }
+
+  const candidate = candidateMatches[0];
+  const candidateDetails = parseLegacyArchiveCandidate(candidate?.relativePath || candidate?.fileName);
+
+  if (!candidateDetails || candidateDetails.namespace !== "vintage" || candidateDetails.number !== legacyNumber) {
+    return false;
+  }
+
+  const candidateNamespace = getPathNamespace(candidate.relativePath);
+  const candidateBasename = getPathBasename(candidate.relativePath) || normalizeComparableValue(candidate.fileName);
+  const expectedRelativePath = `vintage/images-${legacyNumber}${candidateDetails.extension}`;
+  const expectedArchiveBasename = `vintage-images-${legacyNumber}${candidateDetails.extension}`;
+  const sourceRelativePath = normalizeText(item?.sourceRelativePath);
+  const sourceAliases = normalizeStringArray(item?.sourceFilenameAliases).map(normalizeComparableValue);
+
+  if (candidateNamespace !== "vintage" || candidateBasename !== expectedArchiveBasename) {
+    return false;
+  }
+
+  if (sourceRelativePath && normalizeComparableValue(sourceRelativePath) !== expectedRelativePath) {
+    return false;
+  }
+
+  if (sourceAliases.length && !sourceAliases.includes(expectedArchiveBasename)) {
+    return false;
+  }
+
+  return Boolean(sourceRelativePath || sourceAliases.length);
+}
+
 function buildComparableCandidate(candidate) {
   return createSourceProvenanceComparableRecord({
     sourceOriginalFilename: normalizeText(candidate.fileName),
@@ -415,7 +488,7 @@ function selectDefaultCandidate(nextCandidates, outcome) {
     return "";
   }
 
-  if (outcome === "exact_single" || outcome === "strong_single" || outcome === "possible_single") {
+  if (outcome === "exact_single" || outcome === "strong_single" || outcome === "possible_single" || outcome === "weak_only") {
     return nextCandidates[0].id;
   }
 
@@ -443,6 +516,10 @@ function deriveNextDecision(previousMatch, item, candidateMatches, outcome, sele
   }
 
   if (selectedCandidateId && isSafeLegacyReadyPossibleSingle(item, candidateMatches, outcome)) {
+    return "accepted";
+  }
+
+  if (selectedCandidateId && isSafeVintageReadyWeakSingle(item, candidateMatches, outcome)) {
     return "accepted";
   }
 

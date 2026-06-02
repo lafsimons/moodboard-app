@@ -367,6 +367,155 @@ test("buildOriginalRecoverySession keeps weak-only matches manual", () => {
   assert.equal(session.matches[0].decision, "undecided");
 });
 
+test("buildOriginalRecoverySession auto-approves safe vintage legacy weak_only matches", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-vintage-1",
+        itemUuid: "uuid-missing-vintage-1",
+        name: "images-050.jpg",
+        tags: ["folder/vintage"],
+        sourceNamespace: "vintage",
+        sourceRelativePath: "vintage/images-050.jpg",
+        sourceOriginalFilename: "",
+        sourceFilenameAliases: ["vintage-images-050.jpg"],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-vintage-050",
+        relativePath: "vintage/vintage-images-050.jpg",
+        fileName: "vintage-images-050.jpg",
+        sourceFileSize: 1329815,
+        sourceImageWidth: 1284,
+        sourceImageHeight: 1555,
+        sourceLastModified: 1777459771014,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "weak_only");
+  assert.equal(session.matches[0].decision, "accepted");
+  assert.equal(session.matches[0].selectedCandidateId, "candidate-vintage-050");
+});
+
+test("buildOriginalRecoverySession keeps non-vintage weak_only matches manual", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-generic-1",
+        itemUuid: "uuid-missing-generic-1",
+        name: "image4.jpg",
+        sourceOriginalFilename: "image4.jpg",
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-discord-image4",
+        relativePath: "Discord/image4.jpg",
+        fileName: "image4.jpg",
+        sourceFileSize: 1000,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "weak_only");
+  assert.equal(session.matches[0].decision, "undecided");
+});
+
+test("buildOriginalRecoverySession keeps wrong-number vintage weak_only matches manual", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-vintage-2",
+        itemUuid: "uuid-missing-vintage-2",
+        name: "images-050.jpg",
+        tags: ["folder/vintage"],
+        sourceNamespace: "vintage",
+        sourceRelativePath: "vintage/images-050.jpg",
+        sourceOriginalFilename: "",
+        sourceFilenameAliases: ["vintage-images-050.jpg"],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-vintage-051",
+        relativePath: "vintage/vintage-images-051.jpg",
+        fileName: "vintage-images-051.jpg",
+        sourceFileSize: 1329815,
+        sourceImageWidth: 1284,
+        sourceImageHeight: 1555,
+        sourceLastModified: 1777459771014,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "no_match");
+  assert.equal(session.matches[0].decision, "undecided");
+});
+
+test("buildOriginalRecoverySession keeps non-vintage tagged weak_only matches manual", () => {
+  const session = buildOriginalRecoverySession({
+    items: [
+      {
+        id: "missing-moodboard-weak-1",
+        itemUuid: "uuid-missing-moodboard-weak-1",
+        name: "images-050.jpg",
+        tags: ["folder/moodboard"],
+        sourceNamespace: "moodboard",
+        sourceRelativePath: "moodboard/images-050.jpg",
+        sourceOriginalFilename: "",
+        sourceFilenameAliases: ["moodboard-images-050.jpg"],
+        sourceFileSize: 0,
+        sourceImageWidth: 0,
+        sourceImageHeight: 0,
+        sourceLastModified: 0,
+        mimeType: "image/webp",
+        originalPreserved: false
+      }
+    ],
+    candidates: [
+      {
+        id: "candidate-moodboard-050",
+        relativePath: "moodboard/moodboard-images-050.jpg",
+        fileName: "moodboard-images-050.jpg",
+        sourceFileSize: 1329815,
+        sourceImageWidth: 1284,
+        sourceImageHeight: 1555,
+        sourceLastModified: 1777459771014,
+        mimeType: "image/jpeg"
+      }
+    ]
+  });
+
+  assert.equal(session.matches[0].outcome, "weak_only");
+  assert.equal(session.matches[0].decision, "undecided");
+});
+
 test("buildOriginalRecoverySession preserves prior accepted decisions only when selected candidate still exists", () => {
   const previousSession = {
     id: "session-1",
