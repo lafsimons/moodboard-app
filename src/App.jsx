@@ -221,6 +221,10 @@ import {
 } from "./lib/originalRecoveryFileSystemAdapter.js";
 import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
 import { createLegacyProvenanceBackfillReport } from "./lib/legacyProvenanceBackfill.js";
+import {
+  applyLinkedOriginalMetadataEnrichmentReport,
+  buildLinkedOriginalMetadataEnrichmentReport
+} from "./repositories/originalMetadataEnrichmentRepository.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
   eager: true,
@@ -3969,6 +3973,9 @@ export default function App() {
   const [legacyProvenanceBackfillReport, setLegacyProvenanceBackfillReport] = useState(null);
   const [legacyProvenanceBackfillFeedback, setLegacyProvenanceBackfillFeedback] = useState("");
   const [isLegacyProvenanceBackfillApplying, setIsLegacyProvenanceBackfillApplying] = useState(false);
+  const [linkedOriginalMetadataEnrichmentReport, setLinkedOriginalMetadataEnrichmentReport] = useState(null);
+  const [linkedOriginalMetadataEnrichmentFeedback, setLinkedOriginalMetadataEnrichmentFeedback] = useState("");
+  const [isLinkedOriginalMetadataEnrichmentApplying, setIsLinkedOriginalMetadataEnrichmentApplying] = useState(false);
   const [selectedReferenceSelection, setSelectedReferenceSelection] = useState({
     ids: {},
     anchorId: null
@@ -5353,6 +5360,58 @@ export default function App() {
     }
   }
 
+  function formatLinkedOriginalMetadataEnrichmentReason(reason) {
+    switch (reason) {
+      case "not_linked":
+        return "Original is not linked";
+      case "missing_original_blob":
+        return "Linked original blob is missing";
+      case "already_enriched":
+        return "Nothing to fill";
+      default:
+        return "Skipped";
+    }
+  }
+
+  function formatLinkedOriginalMetadataEnrichmentField(field) {
+    switch (field) {
+      case "sourceFileSize":
+        return "Source file size";
+      case "sourceImageWidth":
+        return "Source image width";
+      case "sourceImageHeight":
+        return "Source image height";
+      case "sourceLastModified":
+        return "Source last modified";
+      case "mimeType":
+        return "MIME type";
+      case "sourceOriginalFilename":
+        return "Source original filename";
+      case "sourceFilenameAliases":
+        return "Source filename aliases";
+      case "originalRelinkedFilename":
+        return "Original relinked filename";
+      case "originalRelinkedRelativePath":
+        return "Original relinked relative path";
+      case "originalLinkedAt":
+        return "Original linked at";
+      default:
+        return field;
+    }
+  }
+
+  function formatLinkedOriginalMetadataEnrichmentPreviewValue(value) {
+    if (Array.isArray(value)) {
+      return value.length ? value.join(", ") : "None";
+    }
+
+    if (typeof value === "number") {
+      return String(value);
+    }
+
+    return value || "None";
+  }
+
   async function handleLegacyProvenanceBackfillDryRun() {
     const report = createLegacyProvenanceBackfillReport(items, { exampleLimit: 3 });
     setLegacyProvenanceBackfillReport(report);
@@ -5367,6 +5426,86 @@ export default function App() {
     setLegacyProvenanceBackfillFeedback(
       `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts.`
     );
+  }
+
+  async function handleLinkedOriginalMetadataEnrichmentDryRun() {
+    try {
+      const report = await buildLinkedOriginalMetadataEnrichmentReport(items, { exampleLimit: 20 });
+      setLinkedOriginalMetadataEnrichmentReport(report);
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        `Dry run complete. ${report.updatedItemCount} linked originals will be enriched, ${report.skippedItemCount} linked items will be skipped.`
+      );
+    } catch (error) {
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        formatErrorMessage(error, "Linked original metadata dry run failed.")
+      );
+    }
+  }
+
+  async function handleLinkedOriginalMetadataEnrichmentApply() {
+    if (!linkedOriginalMetadataEnrichmentReport?.updatedItemCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply linked original metadata enrichment?",
+      message: `This will update ${linkedOriginalMetadataEnrichmentReport.updatedItemCount} linked items and skip ${linkedOriginalMetadataEnrichmentReport.skippedItemCount}. Apply the dry-run changes now?`,
+      confirmLabel: "Apply enrichment"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsLinkedOriginalMetadataEnrichmentApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: linkedOriginalMetadataEnrichmentReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with linked original metadata enrichment anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const applyResult = await applyLinkedOriginalMetadataEnrichmentReport(linkedOriginalMetadataEnrichmentReport);
+      const updatedItems = Array.isArray(applyResult?.updatedItems) ? applyResult.updatedItems : [];
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+
+      setItems(nextItems);
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+
+      if (updatedItems.length) {
+        markMetadataDirty(updatedItems.map((item) => item.id));
+        applyProvenanceUpdate(
+          (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+          { itemCountSnapshot: items.length }
+        );
+      }
+
+      const nextReport = await buildLinkedOriginalMetadataEnrichmentReport(nextItems, { exampleLimit: 20 });
+      setLinkedOriginalMetadataEnrichmentReport(nextReport);
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        `Enriched ${applyResult.updatedItemCount} linked originals. ${applyResult.skippedItemCount} linked items were skipped.`
+      );
+    } catch (error) {
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        formatErrorMessage(error, "Linked original metadata enrichment failed.")
+      );
+    } finally {
+      setIsLinkedOriginalMetadataEnrichmentApplying(false);
+    }
   }
 
   async function handleLegacyProvenanceBackfillApply() {
@@ -13859,6 +13998,66 @@ export default function App() {
                           >
                             Original recovery
                           </button>
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleLinkedOriginalMetadataEnrichmentDryRun()}
+                            disabled={isLinkedOriginalMetadataEnrichmentApplying}
+                          >
+                            {isLinkedOriginalMetadataEnrichmentApplying
+                              ? "Applying linked original metadata enrichment..."
+                              : "Enrich Linked Original Metadata"}
+                          </button>
+                          {linkedOriginalMetadataEnrichmentReport ? (
+                            <section className="media-integrity-report" aria-label="Linked original metadata enrichment report">
+                              <p className="media-integrity-status">
+                                {linkedOriginalMetadataEnrichmentReport.eligibleLinkedItemCount} eligible linked items · {linkedOriginalMetadataEnrichmentReport.updatedItemCount} updates · {linkedOriginalMetadataEnrichmentReport.skippedItemCount} skipped
+                              </p>
+                              {linkedOriginalMetadataEnrichmentFeedback ? (
+                                <p className="form-success tag-manager-feedback">{linkedOriginalMetadataEnrichmentFeedback}</p>
+                              ) : null}
+                              <div className="media-integrity-summary">
+                                {Object.entries(linkedOriginalMetadataEnrichmentReport.fieldCounts || {})
+                                  .filter(([, count]) => Number(count) > 0)
+                                  .map(([field, count]) => (
+                                    <p key={field} className="media-integrity-summary-row">
+                                      <span>{formatLinkedOriginalMetadataEnrichmentField(field)}</span>
+                                      <strong>{count}</strong>
+                                    </p>
+                                  ))}
+                              </div>
+                              {linkedOriginalMetadataEnrichmentReport.examples.updated.length ? (
+                                <div className="media-integrity-issues">
+                                  {linkedOriginalMetadataEnrichmentReport.examples.updated.map((example) => (
+                                    <div key={`linked-enrichment-updated-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{example.changedFields.map((field) => (
+                                        `${formatLinkedOriginalMetadataEnrichmentField(field)}: ${formatLinkedOriginalMetadataEnrichmentPreviewValue(example.preview?.[field])}`
+                                      )).join(" · ")}</strong>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {linkedOriginalMetadataEnrichmentReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {linkedOriginalMetadataEnrichmentReport.examples.skipped.map((example) => (
+                                    <p key={`linked-enrichment-skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatLinkedOriginalMetadataEnrichmentReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleLinkedOriginalMetadataEnrichmentApply()}
+                                disabled={!linkedOriginalMetadataEnrichmentReport.updatedItemCount || isLinkedOriginalMetadataEnrichmentApplying}
+                              >
+                                Apply linked original metadata enrichment
+                              </button>
+                            </section>
+                          ) : null}
                           <button
                             type="button"
                             className="ghost-button wardrobe-manage-action"

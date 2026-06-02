@@ -64,6 +64,7 @@ export const emptyForm = {
   originalLinkedAt: "",
   originalRelinkedFrom: "",
   originalRelinkedFilename: "",
+  originalRelinkedRelativePath: "",
   originalFilename: "",
   fileExtension: "",
   fileSize: 0,
