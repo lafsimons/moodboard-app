@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildControlledVintageProvenanceBackfillResult,
   buildLegacyProvenanceBackfillResult,
+  createControlledVintageProvenanceBackfillReport,
+  createLegacyArchiveCandidateIndex,
   createLegacyProvenanceBackfillReport
 } from "./legacyProvenanceBackfill.js";
 
@@ -184,4 +187,196 @@ test("createLegacyProvenanceBackfillReport scopes to folder-tagged items and gro
   assert.equal(report.examples.byNamespace.moodboard[0].sourceRelativePath, "moodboard/images-002.png");
   assert.equal(report.examples.byNamespace.wishlist.length, 0);
   assert.equal(report.examples.conflicts[0].reason, "existing_namespace_conflict");
+});
+
+function createVintageCandidateIndex(entries = []) {
+  return createLegacyArchiveCandidateIndex(entries);
+}
+
+test("controlled vintage backfill fills path and alias from matching vintage candidate", () => {
+  const candidateIndex = createVintageCandidateIndex([
+    {
+      fileName: "vintage-images-050.jpg",
+      relativePath: "vintage/vintage-images-050.jpg"
+    }
+  ]);
+  const result = buildControlledVintageProvenanceBackfillResult({
+    id: "vintage-unlinked-1",
+    itemUuid: "uuid-vintage-unlinked-1",
+    name: "images-050",
+    tags: ["folder/vintage"],
+    originalPreserved: false,
+    sourceNamespace: "vintage",
+    sourceRelativePath: "",
+    sourceOriginalFilename: "",
+    sourceFilenameAliases: []
+  }, { candidateIndex });
+
+  assert.equal(result.status, "affected");
+  assert.equal(result.nextItem.sourceRelativePath, "vintage/images-050.jpg");
+  assert.deepEqual(result.nextItem.sourceFilenameAliases, ["vintage-images-050.jpg"]);
+});
+
+test("controlled vintage backfill takes the extension from the candidate file", () => {
+  const candidateIndex = createVintageCandidateIndex([
+    {
+      fileName: "vintage-images-056.png",
+      relativePath: "vintage/vintage-images-056.png"
+    }
+  ]);
+  const result = buildControlledVintageProvenanceBackfillResult({
+    id: "vintage-unlinked-2",
+    itemUuid: "uuid-vintage-unlinked-2",
+    name: "images-056",
+    tags: ["folder/vintage"],
+    originalPreserved: false,
+    sourceNamespace: "vintage",
+    sourceRelativePath: "",
+    sourceOriginalFilename: "",
+    sourceFilenameAliases: []
+  }, { candidateIndex });
+
+  assert.equal(result.status, "affected");
+  assert.equal(result.nextItem.sourceRelativePath, "vintage/images-056.png");
+  assert.deepEqual(result.nextItem.sourceFilenameAliases, ["vintage-images-056.png"]);
+});
+
+test("controlled vintage backfill preserves an existing matching vintage path", () => {
+  const candidateIndex = createVintageCandidateIndex([
+    {
+      fileName: "vintage-images-050.jpg",
+      relativePath: "vintage/vintage-images-050.jpg"
+    }
+  ]);
+  const result = buildControlledVintageProvenanceBackfillResult({
+    id: "vintage-unlinked-3",
+    itemUuid: "uuid-vintage-unlinked-3",
+    name: "images-050",
+    tags: ["folder/vintage"],
+    originalPreserved: false,
+    sourceNamespace: "vintage",
+    sourceRelativePath: "vintage/images-050.jpg",
+    sourceOriginalFilename: "",
+    sourceFilenameAliases: []
+  }, { candidateIndex });
+
+  assert.equal(result.status, "affected");
+  assert.deepEqual(result.changedFields, ["sourceFilenameAliases"]);
+  assert.equal(result.nextItem.sourceRelativePath, "vintage/images-050.jpg");
+});
+
+test("controlled vintage backfill conflicts on mismatched existing path", () => {
+  const candidateIndex = createVintageCandidateIndex([
+    {
+      fileName: "vintage-images-050.jpg",
+      relativePath: "vintage/vintage-images-050.jpg"
+    }
+  ]);
+  const result = buildControlledVintageProvenanceBackfillResult({
+    id: "vintage-unlinked-4",
+    itemUuid: "uuid-vintage-unlinked-4",
+    name: "images-050",
+    tags: ["folder/vintage"],
+    originalPreserved: false,
+    sourceNamespace: "vintage",
+    sourceRelativePath: "vintage/images-050.png",
+    sourceOriginalFilename: "",
+    sourceFilenameAliases: []
+  }, { candidateIndex });
+
+  assert.equal(result.status, "conflict");
+  assert.equal(result.reason, "existing_relative_path_conflict");
+});
+
+test("controlled vintage backfill ignores non-vintage items and linked items", () => {
+  const candidateIndex = createVintageCandidateIndex([
+    {
+      fileName: "vintage-images-050.jpg",
+      relativePath: "vintage/vintage-images-050.jpg"
+    }
+  ]);
+  const nonVintage = buildControlledVintageProvenanceBackfillResult({
+    id: "moodboard-ignored",
+    itemUuid: "uuid-moodboard-ignored",
+    name: "images-050",
+    tags: ["folder/moodboard"],
+    originalPreserved: false
+  }, { candidateIndex });
+  const linked = buildControlledVintageProvenanceBackfillResult({
+    id: "vintage-linked",
+    itemUuid: "uuid-vintage-linked",
+    name: "images-050",
+    tags: ["folder/vintage"],
+    originalPreserved: true
+  }, { candidateIndex });
+
+  assert.equal(nonVintage.status, "skipped");
+  assert.equal(nonVintage.reason, "not_folder_vintage");
+  assert.equal(linked.status, "skipped");
+  assert.equal(linked.reason, "already_linked");
+});
+
+test("controlled vintage backfill deduplicates aliases and does not overwrite sourceOriginalFilename", () => {
+  const candidateIndex = createVintageCandidateIndex([
+    {
+      fileName: "vintage-images-050.jpg",
+      relativePath: "vintage/vintage-images-050.jpg"
+    }
+  ]);
+  const result = buildControlledVintageProvenanceBackfillResult({
+    id: "vintage-unlinked-5",
+    itemUuid: "uuid-vintage-unlinked-5",
+    name: "images-050",
+    tags: ["folder/vintage"],
+    originalPreserved: false,
+    sourceNamespace: "",
+    sourceRelativePath: "",
+    sourceOriginalFilename: "existing-original.jpg",
+    sourceFilenameAliases: ["Vintage-images-050.jpg", "other.jpg"]
+  }, { candidateIndex });
+
+  assert.equal(result.status, "affected");
+  assert.equal(result.nextItem.sourceOriginalFilename, "existing-original.jpg");
+  assert.deepEqual(result.nextItem.sourceFilenameAliases, ["Vintage-images-050.jpg", "other.jpg"]);
+});
+
+test("controlled vintage report counts candidate-backed affected and skipped items", () => {
+  const report = createControlledVintageProvenanceBackfillReport([
+    {
+      id: "item-1",
+      itemUuid: "uuid-1",
+      name: "images-050",
+      tags: ["folder/vintage"],
+      originalPreserved: false,
+      sourceNamespace: "vintage",
+      sourceRelativePath: "",
+      sourceFilenameAliases: []
+    },
+    {
+      id: "item-2",
+      itemUuid: "uuid-2",
+      name: "images-999",
+      tags: ["folder/vintage"],
+      originalPreserved: false,
+      sourceNamespace: "vintage",
+      sourceRelativePath: "",
+      sourceFilenameAliases: []
+    }
+  ], {
+    exampleLimit: 2,
+    candidateEntries: [
+      {
+        fileName: "vintage-images-050.jpg",
+        relativePath: "vintage/vintage-images-050.jpg"
+      }
+    ]
+  });
+
+  assert.equal(report.scopedItemCount, 2);
+  assert.equal(report.affectedCount, 1);
+  assert.equal(report.skippedCount, 1);
+  assert.equal(report.conflictCount, 0);
+  assert.equal(report.candidateFoundCount, 1);
+  assert.equal(report.examples.affected[0].candidateRelativePath, "vintage/vintage-images-050.jpg");
+  assert.equal(report.examples.skipped[0].reason, "candidate_not_found");
 });

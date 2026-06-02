@@ -220,7 +220,10 @@ import {
   scanOriginalRecoveryDirectoryWithFileSystemAccess
 } from "./lib/originalRecoveryFileSystemAdapter.js";
 import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
-import { createLegacyProvenanceBackfillReport } from "./lib/legacyProvenanceBackfill.js";
+import {
+  createControlledVintageProvenanceBackfillReport,
+  createLegacyProvenanceBackfillReport
+} from "./lib/legacyProvenanceBackfill.js";
 import {
   applyLinkedOriginalMetadataEnrichmentReport,
   buildLinkedOriginalMetadataEnrichmentReport
@@ -3973,6 +3976,9 @@ export default function App() {
   const [legacyProvenanceBackfillReport, setLegacyProvenanceBackfillReport] = useState(null);
   const [legacyProvenanceBackfillFeedback, setLegacyProvenanceBackfillFeedback] = useState("");
   const [isLegacyProvenanceBackfillApplying, setIsLegacyProvenanceBackfillApplying] = useState(false);
+  const [controlledVintageBackfillReport, setControlledVintageBackfillReport] = useState(null);
+  const [controlledVintageBackfillFeedback, setControlledVintageBackfillFeedback] = useState("");
+  const [isControlledVintageBackfillApplying, setIsControlledVintageBackfillApplying] = useState(false);
   const [linkedOriginalMetadataEnrichmentReport, setLinkedOriginalMetadataEnrichmentReport] = useState(null);
   const [linkedOriginalMetadataEnrichmentFeedback, setLinkedOriginalMetadataEnrichmentFeedback] = useState("");
   const [isLinkedOriginalMetadataEnrichmentApplying, setIsLinkedOriginalMetadataEnrichmentApplying] = useState(false);
@@ -5360,6 +5366,27 @@ export default function App() {
     }
   }
 
+  function formatControlledVintageBackfillReason(reason) {
+    switch (reason) {
+      case "already_linked":
+        return "Already linked";
+      case "not_folder_vintage":
+        return "Not folder/vintage";
+      case "candidate_not_found":
+        return "No matching vintage candidate found";
+      case "no_legacy_numbered_filename":
+        return "No legacy images-NNN filename";
+      case "existing_namespace_conflict":
+        return "Existing source namespace conflicts";
+      case "existing_relative_path_conflict":
+        return "Existing source relative path conflicts";
+      case "already_backfilled":
+        return "Already backfilled";
+      default:
+        return "Skipped";
+    }
+  }
+
   function formatLinkedOriginalMetadataEnrichmentReason(reason) {
     switch (reason) {
       case "not_linked":
@@ -5426,6 +5453,92 @@ export default function App() {
     setLegacyProvenanceBackfillFeedback(
       `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts.`
     );
+  }
+
+  async function handleControlledVintageBackfillDryRun() {
+    if (!isOriginalRecoveryFileSystemAdapterSupported()) {
+      setControlledVintageBackfillFeedback("Controlled vintage backfill requires File System Access API support.");
+      return;
+    }
+
+    try {
+      const scanResult = await scanOriginalRecoveryDirectoryWithFileSystemAccess();
+      const report = createControlledVintageProvenanceBackfillReport(items, {
+        exampleLimit: 20,
+        candidateEntries: scanResult.entries
+      });
+
+      setControlledVintageBackfillReport(report);
+      setControlledVintageBackfillFeedback(
+        `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts, ${report.candidateFoundCount} matching vintage candidates found.`
+      );
+    } catch (error) {
+      setControlledVintageBackfillFeedback(
+        formatErrorMessage(error, "Controlled vintage provenance dry run failed.")
+      );
+    }
+  }
+
+  async function handleControlledVintageBackfillApply() {
+    if (!controlledVintageBackfillReport?.affectedCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply controlled vintage provenance backfill?",
+      message: `Affects ${controlledVintageBackfillReport.affectedCount} references, skips ${controlledVintageBackfillReport.skippedCount}, and leaves ${controlledVintageBackfillReport.conflictCount} conflicts untouched. Apply the dry-run changes now?`,
+      confirmLabel: "Apply backfill"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsControlledVintageBackfillApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: controlledVintageBackfillReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with controlled vintage provenance backfill anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const updatedItems = controlledVintageBackfillReport.affectedItems;
+      await saveItems(updatedItems);
+
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+      setItems(nextItems);
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      markMetadataDirty(updatedItems.map((item) => item.id));
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+
+      setControlledVintageBackfillReport(null);
+      setControlledVintageBackfillFeedback(
+        `Backfilled ${updatedItems.length} vintage references. ${controlledVintageBackfillReport.skippedCount} were skipped and ${controlledVintageBackfillReport.conflictCount} remained conflicted in the dry run.`
+      );
+    } catch (error) {
+      setControlledVintageBackfillFeedback(
+        formatErrorMessage(error, "Controlled vintage provenance backfill failed.")
+      );
+    } finally {
+      setIsControlledVintageBackfillApplying(false);
+    }
   }
 
   async function handleLinkedOriginalMetadataEnrichmentDryRun() {
@@ -14055,6 +14168,64 @@ export default function App() {
                                 disabled={!linkedOriginalMetadataEnrichmentReport.updatedItemCount || isLinkedOriginalMetadataEnrichmentApplying}
                               >
                                 Apply linked original metadata enrichment
+                              </button>
+                            </section>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleControlledVintageBackfillDryRun()}
+                            disabled={isControlledVintageBackfillApplying}
+                          >
+                            {isControlledVintageBackfillApplying
+                              ? "Applying controlled vintage provenance backfill..."
+                              : "Dry run controlled vintage provenance backfill"}
+                          </button>
+                          {controlledVintageBackfillReport ? (
+                            <section className="media-integrity-report" aria-label="Controlled vintage provenance backfill report">
+                              <p className="media-integrity-status">
+                                {controlledVintageBackfillReport.affectedCount} affected · {controlledVintageBackfillReport.skippedCount} skipped · {controlledVintageBackfillReport.conflictCount} conflicts · {controlledVintageBackfillReport.candidateFoundCount} vintage candidates found
+                              </p>
+                              {controlledVintageBackfillFeedback ? (
+                                <p className="form-success tag-manager-feedback">{controlledVintageBackfillFeedback}</p>
+                              ) : null}
+                              {controlledVintageBackfillReport.examples.affected.length ? (
+                                <div className="media-integrity-summary">
+                                  {controlledVintageBackfillReport.examples.affected.map((example) => (
+                                    <p key={`controlled-vintage-affected-${example.itemId}`} className="media-integrity-summary-row">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{example.sourceRelativePath || example.sourceFilenameAliases[0] || example.candidateRelativePath || "vintage"}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {controlledVintageBackfillReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {controlledVintageBackfillReport.examples.skipped.map((example) => (
+                                    <p key={`controlled-vintage-skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatControlledVintageBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {controlledVintageBackfillReport.examples.conflicts.length ? (
+                                <div className="media-integrity-issues">
+                                  {controlledVintageBackfillReport.examples.conflicts.map((example) => (
+                                    <p key={`controlled-vintage-conflict-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatControlledVintageBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleControlledVintageBackfillApply()}
+                                disabled={!controlledVintageBackfillReport.affectedCount || isControlledVintageBackfillApplying}
+                              >
+                                Apply controlled vintage provenance backfill
                               </button>
                             </section>
                           ) : null}
