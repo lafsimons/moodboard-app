@@ -3,6 +3,7 @@ import {
   createSourceProvenanceComparableRecord,
   getSourceProvenanceMatchDetails
 } from "./sourceProvenanceMatching.js";
+import { normalizeKnownOriginalRelativePath } from "./itemIdentity.js";
 
 const MATCH_PRIORITY = {
   none: 0,
@@ -446,6 +447,7 @@ export function createOriginalRecoveryCandidateRecord(scanEntry, originalAsset =
     id: candidateId,
     sourceLabel: normalizeText(scanEntry?.sourceLabel),
     relativePath: normalizeText(scanEntry?.relativePath),
+    lookupStrategy: normalizeText(scanEntry?.lookupStrategy) || "scan",
     fileName: normalizeText(file?.name) || normalizeText(originalAsset?.originalFilename),
     sourceFileSize: normalizeNumber(file?.size) || normalizeNumber(originalAsset?.fileSize),
     sourceImageWidth: normalizeNumber(originalAsset?.width),
@@ -602,7 +604,9 @@ function createExcludedMatchRecord(item) {
     exclusionReason: item?.originalPreserved ? "already_linked" : "ineligible",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId: "",
+    recoveryStrategy: "",
     sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
@@ -639,7 +643,9 @@ function createMatchRecord(item, candidates, previousMatch = null) {
     exclusionReason: "",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId,
+    recoveryStrategy: "",
     sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
@@ -676,7 +682,9 @@ function createIndexedMatchRecord(item, preparedItem, candidateIndex, previousMa
     exclusionReason: "",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId,
+    recoveryStrategy: "",
     sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
@@ -926,5 +934,54 @@ export function refreshOriginalRecoverySession(session, options = {}) {
     updatedAt: normalizeText(options.updatedAt) || new Date().toISOString(),
     summary: summarizeMatches(nextMatches, session?.summary?.scannedFileCount),
     matches: nextMatches
+  };
+}
+
+export function createDirectPathRecoveryCandidate(item, fileMetadata = {}, options = {}) {
+  const normalizedRelativePath = normalizeKnownOriginalRelativePath(
+    options.relativePath || item?.knownOriginalRelativePath
+  );
+  const basename = normalizedRelativePath.split("/").filter(Boolean).at(-1) ?? "";
+
+  return {
+    id: normalizeText(options.id) || `direct_path_${normalizeText(item?.id)}`,
+    sourceLabel: normalizeText(options.sourceLabel),
+    relativePath: normalizedRelativePath,
+    lookupStrategy: options.lookupStrategy === "exact_path" ? "exact_path" : "direct_path",
+    fileName: normalizeText(fileMetadata?.name) || basename,
+    sourceFileSize: normalizeNumber(fileMetadata?.size),
+    sourceImageWidth: normalizeNumber(item?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(item?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(fileMetadata?.lastModified),
+    mimeType: normalizeText(fileMetadata?.type) || normalizeText(item?.mimeType),
+    fingerprint: ""
+  };
+}
+
+export function createDirectPathMatchRecord(item, candidate, previousMatch = null) {
+  const candidateMatch = createCandidateMatchRecord(item, candidate);
+  const outcome = candidate.lookupStrategy === "exact_path" ? "exact_single" : "strong_single";
+
+  return {
+    itemId: normalizeText(item?.id),
+    itemUuid: normalizeText(item?.itemUuid),
+    itemName: normalizeText(item?.name) || normalizeText(item?.sourceOriginalFilename),
+    outcome,
+    decision: "accepted",
+    exclusionReason: "",
+    relinkStatus: normalizeText(item?.relinkStatus),
+    selectedCandidateId: candidate.id,
+    recoveryStrategy: normalizeText(candidate.lookupStrategy) || "direct_path",
+    sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
+    sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
+    sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
+    sourceFileSize: normalizeNumber(item?.sourceFileSize),
+    sourceImageWidth: normalizeNumber(item?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(item?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(item?.sourceLastModified),
+    mimeType: normalizeText(item?.mimeType),
+    candidates: [candidateMatch],
+    applyResult: previousMatch?.applyResult ?? null
   };
 }

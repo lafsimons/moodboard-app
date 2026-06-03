@@ -23,6 +23,7 @@ import {
   normalizeMediaUpdateIntent,
   normalizeItemImages
 } from "./itemImages.js";
+import { normalizeKnownOriginalRelativePath } from "./itemIdentity.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
@@ -575,6 +576,7 @@ function stripItemInlineMediaFields(record = {}) {
   return {
     ...rest,
     imageUrl: "",
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(rest?.knownOriginalRelativePath),
     images: {
       ...(rest?.images && typeof rest.images === "object" && !Array.isArray(rest.images) ? rest.images : {}),
       original: {
@@ -1714,6 +1716,9 @@ export async function markItemOriginalRecovered(itemOrId, recoveryItem = {}) {
     originalRelinkedFrom: normalizeSyncText(recoveryItem?.originalRelinkedFrom),
     originalRelinkedFilename: normalizeSyncText(recoveryItem?.originalRelinkedFilename),
     updatedAt: normalizeSyncText(recoveryItem?.updatedAt) || normalizeSyncText(existingItem?.updatedAt),
+    knownOriginalRelativePath:
+      normalizeKnownOriginalRelativePath(recoveryItem?.knownOriginalRelativePath)
+      || normalizeKnownOriginalRelativePath(existingItem?.knownOriginalRelativePath),
     sourceFilenameAliases: Array.isArray(recoveryItem?.sourceFilenameAliases)
       ? recoveryItem.sourceFilenameAliases
       : Array.isArray(existingItem?.sourceFilenameAliases)
@@ -2108,7 +2113,12 @@ function prepareBackupItems(items) {
     }
 
     seenIds.add(item.id);
-    return migrateReferenceMetadataToTags(item);
+    const migratedItem = migrateReferenceMetadataToTags(item);
+
+    return {
+      ...migratedItem,
+      knownOriginalRelativePath: normalizeKnownOriginalRelativePath(migratedItem?.knownOriginalRelativePath)
+    };
   });
 }
 
@@ -2242,6 +2252,17 @@ function normalizeOriginalRecoveryReasonList(value) {
     .filter(Boolean);
 }
 
+function normalizeOriginalRecoveryPathLookupSummary(value = {}) {
+  return {
+    checkedCount: normalizeOriginalRecoveryCount(value.checkedCount),
+    readyCount: normalizeOriginalRecoveryCount(value.readyCount),
+    missingCount: normalizeOriginalRecoveryCount(value.missingCount),
+    conflictCount: normalizeOriginalRecoveryCount(value.conflictCount),
+    fallbackItemCount: normalizeOriginalRecoveryCount(value.fallbackItemCount),
+    fallbackMatchCount: normalizeOriginalRecoveryCount(value.fallbackMatchCount)
+  };
+}
+
 function normalizeOriginalRecoveryDecision(value, fallback = "undecided") {
   const normalizedValue = normalizeOriginalRecoveryText(value);
   return ORIGINAL_RECOVERY_DECISIONS.includes(normalizedValue)
@@ -2301,6 +2322,7 @@ function normalizeOriginalRecoveryCandidateRecord(record = {}) {
     id,
     sourceLabel: normalizeOriginalRecoveryText(record.sourceLabel),
     relativePath: normalizeOriginalRecoveryText(record.relativePath),
+    lookupStrategy: normalizeOriginalRecoveryText(record.lookupStrategy),
     fileName: normalizeOriginalRecoveryText(record.fileName),
     sourceFileSize: normalizeOriginalRecoveryCount(record.sourceFileSize),
     sourceImageWidth: normalizeOriginalRecoveryCount(record.sourceImageWidth),
@@ -2329,7 +2351,9 @@ function normalizeOriginalRecoveryMatchRecord(record = {}) {
     exclusionReason: normalizeOriginalRecoveryText(record.exclusionReason),
     relinkStatus: normalizeOriginalRecoveryText(record.relinkStatus),
     selectedCandidateId: normalizeOriginalRecoveryText(record.selectedCandidateId),
+    recoveryStrategy: normalizeOriginalRecoveryText(record.recoveryStrategy),
     sourceRelativePath: normalizeOriginalRecoveryText(record.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(record.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeOriginalRecoveryText(record.sourceOriginalFilename),
     sourceFilenameAliases: normalizeReasonableStringArray(record.sourceFilenameAliases),
     sourceFileSize: normalizeOriginalRecoveryCount(record.sourceFileSize),
@@ -2398,6 +2422,7 @@ function normalizeOriginalRecoverySessionRecord(record = {}) {
     updatedAt,
     status: ORIGINAL_RECOVERY_SESSION_STATUSES.includes(status) ? status : "idle",
     summary: normalizeOriginalRecoverySummary(record.summary),
+    pathLookup: normalizeOriginalRecoveryPathLookupSummary(record.pathLookup),
     matches: (Array.isArray(record.matches) ? record.matches : [])
       .map((match) => normalizeOriginalRecoveryMatchRecord(match))
       .filter(Boolean)

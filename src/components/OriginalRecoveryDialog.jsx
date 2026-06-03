@@ -152,7 +152,7 @@ export default function OriginalRecoveryDialog({
         <div className="original-recovery-header">
           <div>
             <p className="eyebrow">Archive recovery</p>
-            <h2>Original Recovery v2</h2>
+            <h2>Original Recovery v3</h2>
           </div>
           <button type="button" className="ghost-button" onClick={onClose} disabled={scanning || applying}>
             Close
@@ -222,6 +222,11 @@ export default function OriginalRecoveryDialog({
               <p><span>Scanned files</span><strong>{session.summary?.scannedFileCount ?? 0}</strong></p>
               <p><span>Eligible</span><strong>{session.summary?.eligibleItemCount ?? 0}</strong></p>
               <p><span>Excluded</span><strong>{session.summary?.excludedItemCount ?? 0}</strong></p>
+              <p><span>Known paths checked</span><strong>{session.pathLookup?.checkedCount ?? 0}</strong></p>
+              <p><span>Known paths ready</span><strong>{session.pathLookup?.readyCount ?? 0}</strong></p>
+              <p><span>Known paths missing</span><strong>{session.pathLookup?.missingCount ?? 0}</strong></p>
+              <p><span>Path conflicts</span><strong>{session.pathLookup?.conflictCount ?? 0}</strong></p>
+              <p><span>Fallback matches</span><strong>{session.pathLookup?.fallbackMatchCount ?? 0}</strong></p>
               <p><span>Recovered</span><strong>{session.summary?.recoveredCount ?? 0}</strong></p>
               <p><span>Failed</span><strong>{session.summary?.failedCount ?? 0}</strong></p>
             </div>
@@ -260,6 +265,9 @@ export default function OriginalRecoveryDialog({
                         <div className="original-recovery-pill-group">
                           <span className="original-recovery-pill">{match.outcome.replaceAll("_", " ")}</span>
                           <span className="original-recovery-pill">{getDecisionLabel(match.decision)}</span>
+                          {match.recoveryStrategy ? (
+                            <span className="original-recovery-pill">{match.recoveryStrategy.replaceAll("_", " ")}</span>
+                          ) : null}
                           {match.applyResult?.status ? (
                             <span className={`original-recovery-pill is-${match.applyResult.status}`}>{match.applyResult.status}</span>
                           ) : null}
@@ -268,6 +276,7 @@ export default function OriginalRecoveryDialog({
 
                       <div className="original-recovery-provenance">
                         <p><span>Stored filename</span><strong>{match.sourceOriginalFilename || "Unknown"}</strong></p>
+                        <p><span>Known path</span><strong>{match.knownOriginalRelativePath || "None"}</strong></p>
                         <p><span>Aliases</span><strong>{match.sourceFilenameAliases?.join(", ") || "None"}</strong></p>
                         <p><span>Stored size</span><strong>{formatFileSize(match.sourceFileSize)}</strong></p>
                         <p><span>Stored dimensions</span><strong>{match.sourceImageWidth && match.sourceImageHeight ? `${match.sourceImageWidth} × ${match.sourceImageHeight}` : "Unknown"}</strong></p>
@@ -276,6 +285,7 @@ export default function OriginalRecoveryDialog({
                       {selectedCandidate ? (
                         <div className="original-recovery-selected">
                           <p><span>Selected candidate</span><strong>{selectedCandidate.relativePath || selectedCandidate.fileName || "Unknown"}</strong></p>
+                          <p><span>Candidate type</span><strong>{selectedCandidate.lookupStrategy?.replaceAll("_", " ") || "scan"}</strong></p>
                           <p><span>Candidate size</span><strong>{formatFileSize(selectedCandidate.sourceFileSize)}</strong></p>
                           <p><span>Candidate modified</span><strong>{formatTimestamp(selectedCandidate.sourceLastModified)}</strong></p>
                         </div>

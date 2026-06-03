@@ -1,6 +1,217 @@
 # Changelog
 
-## Asset Integrity Hardening
+## MBA 02.06.26
+### Original Reconnection v2
+
+Completed the second-generation Original Recovery system and validated it through a full real-world export/import recovery cycle.
+
+The system can now reconnect original source files to imported MBA items using preserved provenance metadata, namespace-aware matching, recovery reports, metadata enrichment, and controlled recovery workflows.
+
+#### Key Improvements
+
+##### Namespace-Aware Provenance Recovery
+
+Implemented provenance backfill and recovery support for legacy imported libraries.
+
+Added support for:
+
+- `moodboard`
+- `wishlist`
+- `vintage`
+
+legacy image archives.
+
+Recovery can now use:
+
+- source namespace
+- relative source paths
+- filename aliases
+- original filenames
+
+to identify original source files after export/import cycles.
+
+##### Controlled Vintage Recovery
+
+Added a dedicated vintage recovery path for legacy `images-NNN` items.
+
+Features:
+
+- vintage namespace detection
+- legacy filename alias support
+- namespace-aware candidate matching
+- safe auto-approval of verified vintage matches
+- conflict detection and reporting
+
+This resolved the largest remaining unresolved recovery bucket.
+
+##### Metadata Enrichment
+
+Added linked-original metadata enrichment.
+
+For connected originals, MBA can now populate missing provenance metadata including:
+
+- original filename
+- file size
+- image dimensions
+- MIME type
+- recovery provenance fields
+
+without overwriting existing metadata.
+
+This creates a significantly stronger recovery baseline for future reconnect operations.
+
+##### Recovery Reporting & Validation
+
+Recovery reports now provide:
+
+- ready
+- needs review
+- ambiguous
+- no match
+- plausible candidate statistics
+
+allowing recovery decisions to be audited and validated before applying changes.
+
+##### Portable Provenance Preservation
+
+Extended backup export/import workflows to preserve recovery-critical provenance metadata.
+
+Preserved fields include:
+
+- source namespaces
+- relative source paths
+- filename aliases
+- original filenames
+- source metadata
+
+This allows imported libraries to retain enough information for large-scale original reconnection without requiring manual relinking.
+
+##### Provenance Backfill
+
+Implemented controlled provenance backfill workflows for legacy libraries with incomplete source metadata.
+
+Backfill can restore:
+
+- source namespaces
+- relative source paths
+- filename aliases
+
+from known legacy archive structures without modifying media ownership or item identities.
+
+This enabled recovery of large groups of historical imports that previously lacked sufficient provenance for automated matching.
+
+#### Validation Results
+
+Real-world validation was performed on the production MBA library.
+
+Results:
+
+- ~2,044 original files successfully reconnected
+- moodboard archive recovered
+- wishlist archive recovered
+- vintage archive recovered
+- metadata enrichment completed
+- export/import cycle verified
+- post-import recovery verified
+
+Final recovery scan after import:
+
+- 0 ready recoveries remaining
+- only a small number of edge-case unresolved files
+- library successfully restored from exported data and originals folder
+
+#### Large-Scale Validation
+
+The recovery system was validated against a real production library containing more than 2,000 linked originals.
+
+Validation included:
+
+- fresh export
+- clean import
+- original reconnection
+- metadata enrichment
+- repeated recovery scans
+- provenance verification
+
+This confirmed that the recovery architecture functions correctly at real-library scale rather than only in synthetic test scenarios.
+
+#### Architectural Outcome
+
+MBA libraries are now portable and recoverable.
+
+A library can be exported, imported onto another installation, and reconnected to its original source archive while preserving provenance and metadata.
+
+This establishes the first complete end-to-end portability workflow for MBA.
+
+Verified workflow:
+
+Export MBA Library  
+→ Import MBA Library  
+→ Select Originals Folder  
+→ Reconnect Originals  
+→ Restore Source Metadata
+
+This significantly reduces dependency on a single local database state and establishes the foundation for future portable-library, Hub, and multi-entity workflows.
+
+#### Known Remaining Improvements
+
+- Recovery apply throughput remains relatively slow on very large libraries (~700 ms/item observed during large reconnect batches)
+- Recovery resumability UX can be improved
+- Remaining unresolved files are edge-case naming and provenance outliers
+- Future work may add direct-path reconnect optimization and stronger original-path preservation
+- knownOriginalRelativePath / direct-path reconnect workflow audit
+
+## OA 01.06.26
+### **Status & Collections**
+
+Replaced the legacy wardrobe list model with separate **Status** and **Collections** fields.
+
+**Status** now represents an item’s lifecycle state (`Interested`, `Wishlist`, `Incoming`, `Wardrobe`, `Selling`, `Sold`) while **Collections** provide user-defined organizational grouping independent of lifecycle. Collections support multi-select assignment, filtering, editing, and outfit generation workflows.
+
+This change removes the previous coupling between item organization and wardrobe state, allowing users to maintain custom collections without affecting lifecycle tracking.
+
+Additional changes:
+
+- Added bulk status editing.
+- Added bulk collection management (add, remove, clear).
+- Added status and collection filters throughout the wardrobe.
+- Added generation-aware collection support.
+- Preserved migration compatibility with legacy `list` values.
+- Synchronized legacy data during transition to avoid breaking existing libraries.
+
+**Rationale**
+
+- Separate lifecycle management from organization.
+- Reduce hardcoded wardrobe modes.
+- Enable flexible user-defined grouping.
+- Establish a foundation for future multi-library and hub-based organization.
+
+### **Wardrobe Export Improvements**
+
+Expanded wardrobe export capabilities to better support library documentation, archival workflows, and large collections.
+
+New functionality includes:
+
+- Dedicated wardrobe image export mode.
+- Multiple export ordering options.
+- Improved grid layout consistency and spacing.
+- Better handling of large wardrobes during export.
+- Optional labels and configurable export settings.
+- High-quality full-library image export for documentation and offline reference.
+
+Export generation was refined to produce more predictable and readable outputs across different wardrobe sizes while giving users greater control over presentation and organization.
+
+**Rationale**
+
+- Improve wardrobe archiving and backup workflows.
+- Create cleaner visual overviews of large collections.
+- Support external documentation and research use cases.
+- Enable high-quality exports suitable for long-term reference and sharing.
+- Reduce manual work required to create wardrobe overview sheets.
+
+---
+
+## MBA 01.06.26: Asset Integrity Hardening
 
 ### Problem
 
@@ -72,7 +283,7 @@ Metadata-only edits no longer risk media corruption, imported blob-backed assets
 
 ---
 
-## Metadata Autosnapshot Safety System
+## MBA 01.06.26: Metadata Autosnapshot Safety System
 
 ### Motivation
 
@@ -196,7 +407,7 @@ This provides continuous protection for metadata work while preserving the exist
 
 ---
 
-## **Original Reconnection v1**
+## MBA 01.06.26: Original Reconnection v1
 
 **Source Provenance & Reconnection Preparation**
 

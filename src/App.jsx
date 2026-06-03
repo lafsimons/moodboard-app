@@ -101,7 +101,11 @@ import {
   replaceItemImageSet,
   replaceItemOriginalImage
 } from "./lib/itemImages";
-import { normalizeItemSourceIdentity, normalizeSourceFilenameAliases } from "./lib/itemIdentity";
+import {
+  normalizeItemSourceIdentity,
+  normalizeKnownOriginalRelativePath,
+  normalizeSourceFilenameAliases
+} from "./lib/itemIdentity";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
 import TagInput from "./components/TagInput";
 import OriginalRecoveryDialog from "./components/OriginalRecoveryDialog.jsx";
@@ -217,6 +221,9 @@ import {
   getOriginalRecoveryEntryFileWithFileSystemAccess,
   getOriginalRecoveryEntryMetadataWithFileSystemAccess,
   isOriginalRecoveryFileSystemAdapterSupported,
+  pickOriginalRecoveryDirectoryWithFileSystemAccess,
+  resolveOriginalRecoveryEntryByRelativePathWithFileSystemAccess,
+  scanOriginalRecoveryDirectoryHandleWithFileSystemAccess,
   scanOriginalRecoveryDirectoryWithFileSystemAccess
 } from "./lib/originalRecoveryFileSystemAdapter.js";
 import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
@@ -3213,6 +3220,7 @@ function itemNeedsMoodboardMetadataMigration(originalItem, normalizedItem) {
     normalizeFileMetadataText(originalItem.itemUuid) !== normalizedItem.itemUuid ||
     normalizeFileMetadataText(originalItem.sourceNamespace) !== normalizedItem.sourceNamespace ||
     normalizeFileMetadataText(originalItem.sourceRelativePath) !== normalizedItem.sourceRelativePath ||
+    normalizeKnownOriginalRelativePath(originalItem.knownOriginalRelativePath) !== normalizedItem.knownOriginalRelativePath ||
     normalizeFileMetadataText(originalItem.sourceOriginalFilename) !== normalizedItem.sourceOriginalFilename ||
     normalizedOriginalAliases.length !== normalizedNextAliases.length ||
     normalizedOriginalAliases.some((alias, index) => alias !== normalizedNextAliases[index]) ||
@@ -5751,15 +5759,30 @@ export default function App() {
     try {
       const result = await scanOriginalRecoverySource({
         adapter: {
-          scan: (adapterOptions = {}) => scanOriginalRecoveryDirectoryWithFileSystemAccess({
+          selectRoot: (adapterOptions = {}) => pickOriginalRecoveryDirectoryWithFileSystemAccess({
             target: window,
-            ...adapterOptions,
-            onProgress: ({ phase, traversedFileCount, currentPath }) => {
-              if (phase === "traversal") {
-                publishOriginalRecoveryProgress("Traversing", traversedFileCount, 0, currentPath);
+            ...adapterOptions
+          }),
+          scanRoot: (rootContext, adapterOptions = {}) => scanOriginalRecoveryDirectoryHandleWithFileSystemAccess(
+            rootContext?.directoryHandle,
+            {
+              ...adapterOptions,
+              sourceLabel: rootContext?.sourceLabel,
+              onProgress: ({ phase, traversedFileCount, currentPath }) => {
+                if (phase === "traversal") {
+                  publishOriginalRecoveryProgress("Traversing", traversedFileCount, 0, currentPath);
+                }
               }
             }
-          }),
+          ),
+          resolveRelativePath: (rootContext, relativePath, adapterOptions = {}) => resolveOriginalRecoveryEntryByRelativePathWithFileSystemAccess(
+            rootContext?.directoryHandle,
+            relativePath,
+            {
+              ...adapterOptions,
+              sourceLabel: rootContext?.sourceLabel
+            }
+          ),
           getFile: getOriginalRecoveryEntryFileWithFileSystemAccess,
           getFileMetadata: getOriginalRecoveryEntryMetadataWithFileSystemAccess
         },
@@ -5773,6 +5796,8 @@ export default function App() {
 
           const phaseLabel = phase === "matching-filenames"
             ? "Matching filenames"
+            : phase === "direct-path-check"
+              ? "Checking known paths"
             : phase === "reading-candidate-metadata"
               ? "Reading candidate metadata"
               : phase === "decoding-candidate-images"
@@ -5791,9 +5816,10 @@ export default function App() {
       setOriginalRecoveryRuntimeSessionId(result.session.id);
       setOriginalRecoveryCandidateEntriesById(result.candidateEntriesById);
       setOriginalRecoveryBucket("all");
+      const pathLookup = result.session.pathLookup ?? {};
       setOriginalRecoveryFeedback(result.persisted
-        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
-        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
       );
       setOriginalRecoveryScanProgress("");
     } catch (error) {

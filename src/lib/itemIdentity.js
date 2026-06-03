@@ -2,6 +2,29 @@ function normalizeIdentityText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function normalizeKnownOriginalRelativePath(value) {
+  const normalizedValue = normalizeIdentityText(value).replace(/\\/g, "/");
+
+  if (!normalizedValue) {
+    return "";
+  }
+
+  if (
+    normalizedValue.startsWith("/")
+    || /^[a-z]:\//i.test(normalizedValue)
+    || normalizedValue.split("/").some((segment) => segment === "..")
+  ) {
+    return "";
+  }
+
+  const sanitizedSegments = normalizedValue
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment && segment !== ".");
+
+  return sanitizedSegments.join("/");
+}
+
 function normalizeIdentityNumber(value) {
   const numericValue = Number(value);
   return Number.isFinite(numericValue) && numericValue > 0 ? Math.round(numericValue) : 0;
@@ -92,6 +115,7 @@ export function normalizeItemSourceIdentity(item, options = {}) {
     importSource: normalizeIdentityText(item?.importSource),
     sourceNamespace: normalizeIdentityText(item?.sourceNamespace),
     sourceRelativePath: normalizeIdentityText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeIdentityText(item?.sourceOriginalFilename) || fallbackSourceOriginalFilename,
     sourceFilenameAliases: normalizeSourceFilenameAliases(item?.sourceFilenameAliases, {
       excludedValues: [
@@ -111,6 +135,7 @@ export function createImportedSourceIdentity(file, originalAsset = {}) {
     itemUuid: createItemUuid(),
     sourceNamespace: "",
     sourceRelativePath: "",
+    knownOriginalRelativePath: "",
     sourceOriginalFilename: normalizeIdentityText(file?.name) || normalizeIdentityText(originalAsset?.originalFilename),
     sourceFilenameAliases: [],
     sourceFileSize: normalizeIdentityNumber(file?.size),

@@ -325,6 +325,7 @@ test("createMetadataOnlyBackupData strips embedded media while preserving metada
     {
       id: "item-1",
       itemUuid: "uuid-1",
+      knownOriginalRelativePath: "moodboard/moodboard-images-123.png",
       sourceFilenameAliases: ["legacy-alt.jpg"],
       imageUrl: "data:image/webp;base64,preview",
       imageWidth: 1400,
@@ -397,6 +398,7 @@ test("createMetadataOnlyBackupData strips embedded media while preserving metada
   assert.equal(backup.items[0].images.original.src, "");
   assert.equal(backup.items[0].images.preview.src, "");
   assert.equal(backup.items[0].images.thumbnail.src, "");
+  assert.equal(backup.items[0].knownOriginalRelativePath, "moodboard/moodboard-images-123.png");
   assert.deepEqual(backup.items[0].tags, ["archive/look"]);
   assert.equal("imageUrl" in backup.appState.board.images[0], false);
   assert.equal("embeddedItem" in backup.appState.savedOutfits[0].board.images[0], false);
@@ -2798,6 +2800,7 @@ test("backup import export round-trip preserves OA-shaped portable fields except
         id: "item-1",
         itemUuid: "uuid-1",
         importSource: "oa-backup",
+        knownOriginalRelativePath: "portable/path.jpg",
         relinkStatus: "hub-awaiting-rebind",
         sourceFilenameAliases: ["portable-alias.jpg", "preview.webp"],
         styleTags: ["Formal"],
@@ -2851,6 +2854,7 @@ test("backup import export round-trip preserves OA-shaped portable fields except
   const reExported = createLightweightBackupData(prepared.items, prepared.appState);
 
   assert.equal(prepared.items[0].importSource, "oa-backup");
+  assert.equal(prepared.items[0].knownOriginalRelativePath, "portable/path.jpg");
   assert.equal(prepared.items[0].relinkStatus, "hub-awaiting-rebind");
   assert.deepEqual(prepared.items[0].sourceFilenameAliases, ["portable-alias.jpg", "preview.webp"]);
   assert.deepEqual(prepared.items[0].styleTags, ["Formal"]);
@@ -2869,6 +2873,7 @@ test("backup import export round-trip preserves OA-shaped portable fields except
   assert.equal(prepared.items[0].imageHeight, 800);
 
   assert.equal(reExported.items[0].importSource, "oa-backup");
+  assert.equal(reExported.items[0].knownOriginalRelativePath, "portable/path.jpg");
   assert.equal(reExported.items[0].relinkStatus, "hub-awaiting-rebind");
   assert.deepEqual(reExported.items[0].sourceFilenameAliases, ["portable-alias.jpg", "preview.webp"]);
   assert.deepEqual(reExported.items[0].styleTags, ["Formal"]);
@@ -3466,6 +3471,7 @@ test("replaceWithPreparedBackupPackage preserves provenance through startup relo
       {
         id: "item-provenance",
         itemUuid: "uuid-provenance",
+        knownOriginalRelativePath: "archive/source-photo.jpg",
         sourceOriginalFilename: "source-photo.jpg",
         sourceFilenameAliases: ["alt-photo.jpg", "preview.webp"],
         originalPreserved: false,
@@ -3518,6 +3524,7 @@ test("replaceWithPreparedBackupPackage preserves provenance through startup relo
   assert.equal(startupAppState.provenance.lastImportedBackupName, "package-dir");
   assert.equal(startupAppState.provenance.lastImportedBackupSource, "moodboard-app-package");
   assert.equal(startupAppState.provenance.lastImportedBackupSchemaVersion, "1");
+  assert.equal(startupItem.knownOriginalRelativePath, "archive/source-photo.jpg");
   assert.equal(startupItem.sourceOriginalFilename, "source-photo.jpg");
   assert.deepEqual(startupItem.sourceFilenameAliases, ["alt-photo.jpg", "preview.webp"]);
 });

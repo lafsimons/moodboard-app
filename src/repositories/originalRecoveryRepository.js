@@ -7,13 +7,17 @@ import {
 import {
   buildOriginalRecoverySession,
   collectOriginalRecoveryPlausibleCandidateIds,
+  createDirectPathMatchRecord,
+  createDirectPathRecoveryCandidate,
   createOriginalRecoveryCandidateRecord,
   createOriginalRecoveryReport,
   getApprovedOriginalRecoveryMatches,
   mergeOriginalRecoveryApplyResults,
+  refreshOriginalRecoverySession,
   selectOriginalRecoveryCandidate,
   updateOriginalRecoveryMatchDecision
 } from "../lib/originalRecovery.js";
+import { normalizeKnownOriginalRelativePath } from "../lib/itemIdentity.js";
 import { attachRecoveredOriginalForItem, loadItems } from "./itemsRepository.js";
 
 function normalizeText(value) {
@@ -118,11 +122,23 @@ function createRecoveryScanInstrumentation() {
   };
 }
 
+function createPathLookupSummary() {
+  return {
+    checkedCount: 0,
+    readyCount: 0,
+    missingCount: 0,
+    conflictCount: 0,
+    fallbackItemCount: 0,
+    fallbackMatchCount: 0
+  };
+}
+
 function createLightweightCandidateRecord(entry, fileMetadata = {}) {
   return {
     id: normalizeText(entry?.id),
     sourceLabel: normalizeText(entry?.sourceLabel),
     relativePath: normalizeText(entry?.relativePath),
+    lookupStrategy: normalizeText(entry?.lookupStrategy) || "scan",
     fileName: normalizeText(entry?.fileName) || normalizeText(fileMetadata?.name),
     sourceFileSize: normalizeNumber(fileMetadata?.size),
     sourceImageWidth: 0,
@@ -165,6 +181,116 @@ async function resolveScanEntryMetadata(adapter, entry) {
     size: file?.size,
     type: file?.type,
     lastModified: file?.lastModified
+  };
+}
+
+function buildDirectPathConflict(item, fileMetadata = {}, relativePath = "") {
+  const reasons = [];
+  const normalizedRelativePath = normalizeKnownOriginalRelativePath(relativePath);
+  const basename = normalizedRelativePath.split("/").filter(Boolean).at(-1) ?? "";
+  const storedFilename = normalizeText(item?.sourceOriginalFilename);
+  const actualFilename = normalizeText(fileMetadata?.name) || basename;
+  const storedSize = normalizeNumber(item?.sourceFileSize);
+  const actualSize = normalizeNumber(fileMetadata?.size);
+
+  if (storedFilename && actualFilename && storedFilename !== actualFilename) {
+    reasons.push("filename_mismatch");
+  }
+
+  if (storedSize && actualSize && storedSize !== actualSize) {
+    reasons.push("size_mismatch");
+  }
+
+  return {
+    hasConflict: reasons.length > 0,
+    reasons
+  };
+}
+
+async function runDirectPathLookup(items, adapter, rootContext, options = {}) {
+  const pathLookup = createPathLookupSummary();
+  const directMatchesByItemId = new Map();
+  const directEntriesById = {};
+  const missingOrConflictItemIds = new Set();
+  const previousMatchesByItemId = new Map(
+    (Array.isArray(options.previousSession?.matches) ? options.previousSession.matches : [])
+      .filter((match) => normalizeText(match?.itemId))
+      .map((match) => [normalizeText(match.itemId), match])
+  );
+
+  if (typeof adapter?.resolveRelativePath !== "function" || !rootContext) {
+    return {
+      pathLookup,
+      directMatchesByItemId,
+      directEntriesById,
+      missingOrConflictItemIds
+    };
+  }
+
+  const eligibleItems = (Array.isArray(items) ? items : []).filter(
+    (item) => !item?.originalPreserved && normalizeText(item?.itemUuid) && normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath)
+  );
+
+  for (let index = 0; index < eligibleItems.length; index += 1) {
+    const item = eligibleItems[index];
+    const relativePath = normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath);
+
+    if (!relativePath) {
+      continue;
+    }
+
+    pathLookup.checkedCount += 1;
+    options.onProgress?.({
+      phase: "direct-path-check",
+      completed: index + 1,
+      total: eligibleItems.length,
+      currentPath: relativePath
+    });
+
+    const entry = await adapter.resolveRelativePath(rootContext, relativePath, {
+      id: `direct_path_${normalizeText(item?.id)}`,
+      sourceLabel: normalizeText(rootContext?.sourceLabel),
+      lookupStrategy: "direct_path"
+    });
+
+    if (!entry) {
+      pathLookup.missingCount += 1;
+      missingOrConflictItemIds.add(normalizeText(item?.id));
+      continue;
+    }
+
+    const fileMetadata = await resolveScanEntryMetadata(adapter, entry);
+    const conflict = buildDirectPathConflict(item, fileMetadata, relativePath);
+
+    if (conflict.hasConflict) {
+      pathLookup.conflictCount += 1;
+      missingOrConflictItemIds.add(normalizeText(item?.id));
+      continue;
+    }
+
+    const isExactPath = normalizeText(item?.sourceRelativePath) === relativePath;
+    const candidate = createDirectPathRecoveryCandidate(item, fileMetadata, {
+      id: entry.id,
+      sourceLabel: entry.sourceLabel || rootContext?.sourceLabel,
+      relativePath,
+      lookupStrategy: isExactPath ? "exact_path" : "direct_path"
+    });
+    const match = createDirectPathMatchRecord(
+      item,
+      candidate,
+      previousMatchesByItemId.get(normalizeText(item?.id))
+    );
+
+    directMatchesByItemId.set(match.itemId, match);
+    directEntriesById[candidate.id] = entry;
+    pathLookup.readyCount += 1;
+  }
+
+  return {
+    pathLookup,
+    directMatchesByItemId,
+    directEntriesById,
+    missingOrConflictItemIds
   };
 }
 
@@ -247,7 +373,13 @@ export async function scanOriginalRecoverySource({
   now = () => new Date().toISOString(),
   onProgress = null
 } = {}) {
-  if (!adapter || typeof adapter.scan !== "function") {
+  if (
+    !adapter
+    || (
+      typeof adapter.scan !== "function"
+      && !(typeof adapter.selectRoot === "function" && typeof adapter.scanRoot === "function")
+    )
+  ) {
     throw new Error("Original recovery scanning requires a scan adapter.");
   }
 
@@ -258,12 +390,41 @@ export async function scanOriginalRecoverySource({
   const timings = createScanTimingSummary();
   const instrumentation = createRecoveryScanInstrumentation();
   const traversalStartedAtMs = getNowMs();
-  const [items, scanResult] = await Promise.all([
-    loadItems(),
-    adapter.scan({
+  const items = await loadItems();
+  let rootContext = null;
+  let scanResult = null;
+
+  if (typeof adapter.selectRoot === "function") {
+    rootContext = await adapter.selectRoot({
       onProgress: typeof onProgress === "function" ? onProgress : undefined
-    })
-  ]);
+    });
+  }
+
+  const directLookupResult = await runDirectPathLookup(items, adapter, rootContext, {
+    previousSession,
+    onProgress
+  });
+  const remainingItems = items.filter((item) => !directLookupResult.directMatchesByItemId.has(normalizeText(item?.id)));
+  const needsFallbackScan = remainingItems.some(
+    (item) => !item?.originalPreserved && normalizeText(item?.itemUuid)
+  );
+
+  if (needsFallbackScan) {
+    if (typeof adapter.scanRoot === "function" && rootContext) {
+      scanResult = await adapter.scanRoot(rootContext, {
+        onProgress: typeof onProgress === "function" ? onProgress : undefined
+      });
+    } else {
+      scanResult = await adapter.scan({
+        onProgress: typeof onProgress === "function" ? onProgress : undefined
+      });
+    }
+  } else {
+    scanResult = {
+      sourceLabel: normalizeText(rootContext?.sourceLabel),
+      entries: []
+    };
+  }
   timings.traversalMs = buildPhaseTiming(traversalStartedAtMs);
   const candidateEntriesById = {};
   const lightweightCandidates = [];
@@ -293,10 +454,10 @@ export async function scanOriginalRecoverySource({
   onProgress?.({
     phase: "matching-filenames",
     completed: 0,
-    total: items.length
+    total: remainingItems.length
   });
   const indexBuildStartedAtMs = getNowMs();
-  const plausibleCandidateIds = collectOriginalRecoveryPlausibleCandidateIds(items, lightweightCandidates);
+  const plausibleCandidateIds = collectOriginalRecoveryPlausibleCandidateIds(remainingItems, lightweightCandidates);
   timings.indexBuildMs = buildPhaseTiming(indexBuildStartedAtMs);
 
   const decodedCandidates = [];
@@ -353,20 +514,37 @@ export async function scanOriginalRecoverySource({
   onProgress?.({
     phase: "final-scoring",
     completed: 0,
-    total: items.length
+    total: remainingItems.length
   });
   const matchSessionStartedAtMs = getNowMs();
-  const session = buildOriginalRecoverySession({
+  const fallbackSession = buildOriginalRecoverySession({
     sessionId: previousSession?.id,
     app,
     sourceLabel: scanResult?.sourceLabel,
-    items,
+    items: remainingItems,
     candidates: decodedCandidates,
     scannedFileCount: lightweightCandidates.length,
     previousSession,
     now: typeof now === "function" ? now() : new Date().toISOString()
   });
   timings.matchSessionMs = buildPhaseTiming(matchSessionStartedAtMs);
+  directLookupResult.pathLookup.fallbackItemCount = remainingItems.filter(
+    (item) => !item?.originalPreserved && normalizeText(item?.itemUuid)
+  ).length;
+  directLookupResult.pathLookup.fallbackMatchCount = (fallbackSession.matches ?? []).filter(
+    (match) => match.outcome !== "excluded" && Array.isArray(match.candidates) && match.candidates.length > 0
+  ).length;
+  const session = refreshOriginalRecoverySession({
+    ...fallbackSession,
+    matches: [
+      ...directLookupResult.directMatchesByItemId.values(),
+      ...(fallbackSession.matches ?? [])
+    ].sort((left, right) => normalizeText(left.itemName || left.itemId).localeCompare(normalizeText(right.itemName || right.itemId))),
+    pathLookup: directLookupResult.pathLookup
+  }, {
+    status: "scanned",
+    updatedAt: typeof now === "function" ? now() : new Date().toISOString()
+  });
 
   onProgress?.({
     phase: "saving",
@@ -379,7 +557,10 @@ export async function scanOriginalRecoverySource({
 
   return {
     ...saveResult,
-    candidateEntriesById,
+    candidateEntriesById: {
+      ...candidateEntriesById,
+      ...directLookupResult.directEntriesById
+    },
     timings,
     instrumentation
   };

@@ -400,6 +400,141 @@ test("scanOriginalRecoverySource does not call getFile during traversal and skip
   assert.equal(getFileCount, 2);
 });
 
+test("scanOriginalRecoverySource accepts direct knownOriginalRelativePath matches before fallback scan", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-direct-path",
+    itemUuid: "uuid-direct-path",
+    name: "Direct Path",
+    knownOriginalRelativePath: "archive/direct-path.jpg",
+    sourceRelativePath: "archive/direct-path.jpg",
+    sourceOriginalFilename: "direct-path.jpg",
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-direct-path",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  let fallbackScanCount = 0;
+  const file = new File(["1234567890"], "direct-path.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const result = await scanOriginalRecoverySource({
+    adapter: {
+      selectRoot: async () => ({
+        directoryHandle: { name: "ArchiveRoot" },
+        sourceLabel: "ArchiveRoot"
+      }),
+      resolveRelativePath: async () => ({
+        id: "direct_path_item-direct-path",
+        sourceLabel: "ArchiveRoot",
+        relativePath: "archive/direct-path.jpg",
+        fileName: "direct-path.jpg",
+        file
+      }),
+      getFileMetadata: async (entry) => ({
+        name: entry.file.name,
+        size: entry.file.size,
+        type: entry.file.type,
+        lastModified: entry.file.lastModified
+      }),
+      scanRoot: async () => {
+        fallbackScanCount += 1;
+        return {
+          sourceLabel: "ArchiveRoot",
+          entries: []
+        };
+      }
+    },
+    createOriginalImageAsset: async () => {
+      throw new Error("direct-path ready match should not decode during scan");
+    },
+    now: () => "2026-06-01T12:00:00.000Z"
+  });
+
+  assert.equal(fallbackScanCount, 0);
+  assert.equal(result.session.pathLookup.checkedCount, 1);
+  assert.equal(result.session.pathLookup.readyCount, 1);
+  assert.equal(result.session.pathLookup.missingCount, 0);
+  assert.equal(result.session.pathLookup.conflictCount, 0);
+  const match = result.session.matches.find((entry) => entry.itemId === "item-direct-path");
+  assert.equal(match.decision, "accepted");
+  assert.equal(match.recoveryStrategy, "exact_path");
+  assert.equal(match.selectedCandidateId, "direct_path_item-direct-path");
+});
+
+test("scanOriginalRecoverySource falls back safely when direct knownOriginalRelativePath is missing", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-direct-missing",
+    itemUuid: "uuid-direct-missing",
+    name: "Direct Missing",
+    knownOriginalRelativePath: "archive/missing.jpg",
+    sourceOriginalFilename: "fallback.jpg",
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-direct-missing",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  const fallbackFile = new File(["1234567890"], "fallback.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const result = await scanOriginalRecoverySource({
+    adapter: {
+      selectRoot: async () => ({
+        directoryHandle: { name: "ArchiveRoot" },
+        sourceLabel: "ArchiveRoot"
+      }),
+      resolveRelativePath: async () => null,
+      scanRoot: async () => ({
+        sourceLabel: "ArchiveRoot",
+        entries: [
+          { id: "candidate-fallback", sourceLabel: "ArchiveRoot", relativePath: "archive/fallback.jpg", file: fallbackFile }
+        ]
+      })
+    },
+    createOriginalImageAsset: async (file) => ({
+      src: `data:${file.type};base64,ZmFrZQ==`,
+      mimeType: file.type,
+      width: 100,
+      height: 50,
+      fileSize: file.size,
+      originalFilename: file.name
+    }),
+    now: () => "2026-06-01T12:00:00.000Z"
+  });
+
+  assert.equal(result.session.pathLookup.checkedCount, 1);
+  assert.equal(result.session.pathLookup.readyCount, 0);
+  assert.equal(result.session.pathLookup.missingCount, 1);
+  assert.equal(result.session.pathLookup.fallbackMatchCount, 1);
+  const match = result.session.matches.find((entry) => entry.itemId === "item-direct-missing");
+  assert.equal(match.selectedCandidateId, "candidate-fallback");
+});
+
 test("applyOriginalRecoverySession preserves partial progress and marks missing runtime files for re-scan", async () => {
   installFakeIndexedDb();
   await saveItem({

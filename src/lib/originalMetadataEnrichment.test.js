@@ -19,6 +19,7 @@ function createLinkedItem(overrides = {}) {
     mimeType: "",
     sourceOriginalFilename: "",
     sourceFilenameAliases: [],
+    knownOriginalRelativePath: "",
     originalRelinkedFilename: "",
     originalRelinkedRelativePath: "",
     originalLinkedAt: "",
@@ -116,6 +117,36 @@ test("alias is appended and deduped", () => {
   );
 
   assert.deepEqual(result.nextItem.sourceFilenameAliases, ["Linked-Original.jpg", "another.jpg"]);
+});
+
+test("empty knownOriginalRelativePath is filled from trusted recovered path", () => {
+  const result = buildLinkedOriginalMetadataEnrichmentResult(
+    createLinkedItem(),
+    createOriginalEntry(),
+    {
+      relativePath: "archive/linked-original.jpg",
+      appliedAt: "2026-06-02T12:01:00.000Z"
+    }
+  );
+
+  assert.equal(result.nextItem.knownOriginalRelativePath, "archive/linked-original.jpg");
+  assert.equal(result.changedFields.includes("knownOriginalRelativePath"), true);
+});
+
+test("valid knownOriginalRelativePath is not overwritten by enrichment", () => {
+  const result = buildLinkedOriginalMetadataEnrichmentResult(
+    createLinkedItem({
+      knownOriginalRelativePath: "trusted/existing.jpg"
+    }),
+    createOriginalEntry(),
+    {
+      relativePath: "archive/other.jpg",
+      appliedAt: "2026-06-02T12:01:00.000Z"
+    }
+  );
+
+  assert.equal(result.nextItem.knownOriginalRelativePath, "trusted/existing.jpg");
+  assert.equal(result.changedFields.includes("knownOriginalRelativePath"), false);
 });
 
 test("unlinked and missing-original items are skipped", () => {

@@ -1,4 +1,5 @@
 import { createImageAsset } from "./itemImages.js";
+import { normalizeKnownOriginalRelativePath } from "./itemIdentity.js";
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -106,6 +107,7 @@ export function stripItemMediaPayloads(record = {}) {
     itemUuid: normalizeText(record?.itemUuid),
     sourceNamespace: normalizeText(record?.sourceNamespace),
     sourceRelativePath: normalizeText(record?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(record?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeText(record?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeFilenameAliases(record?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(record?.sourceFileSize),
