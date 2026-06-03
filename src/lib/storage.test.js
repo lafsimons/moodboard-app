@@ -318,6 +318,7 @@ test("createLightweightBackupData preserves preview as the portable render asset
   });
   assert.equal("syncState" in backup, false);
   assert.equal("syncMetadata" in backup, false);
+  assert.equal("originalRecoverySessions" in backup, false);
 });
 
 test("createMetadataOnlyBackupData strips embedded media while preserving metadata and sanitized boards", () => {
@@ -399,11 +400,42 @@ test("createMetadataOnlyBackupData strips embedded media while preserving metada
   assert.equal(backup.items[0].images.preview.src, "");
   assert.equal(backup.items[0].images.thumbnail.src, "");
   assert.equal(backup.items[0].knownOriginalRelativePath, "moodboard/moodboard-images-123.png");
+  assert.equal("originalRecoverySessions" in backup, false);
   assert.deepEqual(backup.items[0].tags, ["archive/look"]);
   assert.equal("imageUrl" in backup.appState.board.images[0], false);
   assert.equal("embeddedItem" in backup.appState.savedOutfits[0].board.images[0], false);
   assert.equal("recentOutfits" in backup.appState, false);
   assert.equal("localSafety" in backup.appState, false);
+});
+
+test("normalizeOriginalRecoverySummary preserves alreadyAppliedCount", async () => {
+  installFakeIndexedDb();
+
+  await saveOriginalRecoverySession({
+    id: "session-summary",
+    app: "mba",
+    status: "completed",
+    sourceLabel: "Archive",
+    summary: {
+      scannedFileCount: 5,
+      approvedCount: 0,
+      alreadyAppliedCount: 3
+    },
+    matches: [
+      {
+        itemId: "item-a",
+        outcome: "strong_single",
+        decision: "accepted",
+        selectedCandidateId: "candidate-a",
+        candidates: [{ id: "candidate-a", relativePath: "moodboard/a.jpg" }],
+        applyResult: { status: "recovered" }
+      }
+    ]
+  });
+
+  const latestRecoverySession = await loadLatestOriginalRecoverySession({ resumableOnly: false });
+
+  assert.equal(latestRecoverySession?.summary?.alreadyAppliedCount, 3);
 });
 
 test("createMetadataSnapshot stores a complete metadata-only state using the metadata backup serialization path", async () => {
@@ -865,6 +897,137 @@ test("upgrading a version-7 database missing originalRecoverySessions allows sav
   assert.equal(latestRecoverySession?.id, "session-upgraded");
   assert.equal(latestRecoverySession?.summary?.scannedFileCount, 7);
   assert.equal(debugInfoAfterSave.stores.includes("originalRecoverySessions"), true);
+});
+
+test("loadLatestOriginalRecoverySession prefers the latest pending session over newer completed sessions", async () => {
+  installFakeIndexedDb();
+
+  await saveOriginalRecoverySession({
+    id: "session-pending",
+    app: "mba",
+    status: "reviewed",
+    sourceLabel: "Archive",
+    createdAt: "2026-06-03T10:00:00.000Z",
+    updatedAt: "2026-06-03T10:00:00.000Z",
+    summary: {
+      scannedFileCount: 3,
+      approvedCount: 1
+    },
+    matches: [
+      {
+        itemId: "item-a",
+        outcome: "strong_single",
+        decision: "accepted",
+        selectedCandidateId: "candidate-a",
+        candidates: [{ id: "candidate-a", relativePath: "moodboard/a.jpg" }],
+        applyResult: null
+      }
+    ]
+  });
+  await saveOriginalRecoverySession({
+    id: "session-completed",
+    app: "mba",
+    status: "completed",
+    sourceLabel: "Archive",
+    createdAt: "2026-06-03T11:00:00.000Z",
+    updatedAt: "2026-06-03T11:00:00.000Z",
+    summary: {
+      scannedFileCount: 3,
+      approvedCount: 0,
+      alreadyAppliedCount: 1
+    },
+    matches: [
+      {
+        itemId: "item-b",
+        outcome: "strong_single",
+        decision: "accepted",
+        selectedCandidateId: "candidate-b",
+        candidates: [{ id: "candidate-b", relativePath: "moodboard/b.jpg" }],
+        applyResult: { status: "recovered" }
+      }
+    ]
+  });
+
+  const latestRecoverySession = await loadLatestOriginalRecoverySession();
+  const latestResumableSession = await loadLatestOriginalRecoverySession({ resumableOnly: true });
+
+  assert.equal(latestRecoverySession?.id, "session-pending");
+  assert.equal(latestResumableSession?.id, "session-pending");
+});
+
+test("replaceWithPreparedBackup clears local original recovery sessions", async () => {
+  installFakeIndexedDb();
+
+  await saveOriginalRecoverySession({
+    id: "session-local",
+    app: "mba",
+    status: "reviewed",
+    sourceLabel: "Archive",
+    summary: {
+      approvedCount: 1
+    },
+    matches: [
+      {
+        itemId: "item-a",
+        outcome: "strong_single",
+        decision: "accepted",
+        selectedCandidateId: "candidate-a",
+        candidates: [{ id: "candidate-a", relativePath: "moodboard/a.jpg" }],
+        applyResult: null
+      }
+    ]
+  });
+
+  await replaceWithPreparedBackup({
+    source: "moodboard-app",
+    version: 2,
+    items: [],
+    appState: {
+      savedOutfits: []
+    }
+  });
+
+  const latestRecoverySession = await loadLatestOriginalRecoverySession({ resumableOnly: false });
+
+  assert.equal(latestRecoverySession, null);
+});
+
+test("replaceWithPreparedBackupPackage clears local original recovery sessions", async () => {
+  installFakeIndexedDb();
+
+  await saveOriginalRecoverySession({
+    id: "session-local-package",
+    app: "mba",
+    status: "reviewed",
+    sourceLabel: "Archive",
+    summary: {
+      approvedCount: 1
+    },
+    matches: [
+      {
+        itemId: "item-a",
+        outcome: "strong_single",
+        decision: "accepted",
+        selectedCandidateId: "candidate-a",
+        candidates: [{ id: "candidate-a", relativePath: "moodboard/a.jpg" }],
+        applyResult: null
+      }
+    ]
+  });
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    items: [],
+    appState: {
+      savedOutfits: []
+    },
+    itemMediaAssets: []
+  });
+
+  const latestRecoverySession = await loadLatestOriginalRecoverySession({ resumableOnly: false });
+
+  assert.equal(latestRecoverySession, null);
 });
 
 test("getOrCreateDeviceId creates and reuses a stable local device id", async () => {

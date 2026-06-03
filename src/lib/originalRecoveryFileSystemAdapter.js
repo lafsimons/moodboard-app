@@ -1,4 +1,5 @@
 import { isFileSystemAccessSupported } from "./backupPackage.js";
+import { getApprovedOriginalRecoveryMatches, reconcileOriginalRecoverySessionWithItemsResult } from "./originalRecovery.js";
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -148,5 +149,76 @@ export async function getOriginalRecoveryEntryMetadataWithFileSystemAccess(entry
     size: file?.size,
     type: file?.type,
     lastModified: file?.lastModified
+  };
+}
+
+function getSelectedCandidate(match) {
+  const selectedCandidateId = normalizeText(match?.selectedCandidateId);
+
+  if (!selectedCandidateId) {
+    return null;
+  }
+
+  return (Array.isArray(match?.candidates) ? match.candidates : []).find(
+    (candidate) => normalizeText(candidate?.id) === selectedCandidateId
+  ) ?? null;
+}
+
+export async function resolveRecoverySelectedCandidateHandles(rootHandle, recoverySession, options = {}) {
+  const sourceLabel = normalizeText(options.sourceLabel) || normalizeText(rootHandle?.name) || "Selected folder";
+  const candidateEntriesById = {};
+  const missingMatches = [];
+  const invalidMatches = [];
+  const reconciledSession = options.currentItems
+    ? reconcileOriginalRecoverySessionWithItemsResult(recoverySession, options.currentItems).session
+    : recoverySession;
+  const approvedMatches = getApprovedOriginalRecoveryMatches(reconciledSession);
+
+  for (const match of approvedMatches) {
+    const selectedCandidate = getSelectedCandidate(match);
+    const relativePath = normalizeRelativePath(selectedCandidate?.relativePath);
+
+    if (!selectedCandidate?.id || !relativePath) {
+      invalidMatches.push({
+        itemId: normalizeText(match?.itemId),
+        selectedCandidateId: normalizeText(match?.selectedCandidateId),
+        relativePath: normalizeText(selectedCandidate?.relativePath)
+      });
+      continue;
+    }
+
+    const entry = await resolveOriginalRecoveryEntryByRelativePathWithFileSystemAccess(rootHandle, relativePath, {
+      id: normalizeText(selectedCandidate.id),
+      sourceLabel,
+      lookupStrategy: normalizeText(selectedCandidate.lookupStrategy) || "scan"
+    });
+
+    if (!entry) {
+      missingMatches.push({
+        itemId: normalizeText(match?.itemId),
+        selectedCandidateId: normalizeText(selectedCandidate.id),
+        relativePath
+      });
+      continue;
+    }
+
+    candidateEntriesById[selectedCandidate.id] = {
+      id: entry.id,
+      sourceLabel: entry.sourceLabel,
+      relativePath: entry.relativePath,
+      fileName: entry.fileName,
+      handle: entry.handle,
+      lookupStrategy: entry.lookupStrategy
+    };
+  }
+
+  return {
+    candidateEntriesById,
+    approvedMatchCount: approvedMatches.length,
+    resolvedCount: Object.keys(candidateEntriesById).length,
+    missingCount: missingMatches.length,
+    invalidPathCount: invalidMatches.length,
+    missingMatches,
+    invalidMatches
   };
 }

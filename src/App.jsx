@@ -195,7 +195,9 @@ import {
   createOriginalReconnectionSnapshot,
   deleteItem,
   deleteItems,
+  loadItems,
   loadItemMediaAssetById,
+  loadItemsByIds,
   loadStartupItemMetadata,
   markOriginalMissing,
   prepareLoadedItems,
@@ -222,11 +224,19 @@ import {
   getOriginalRecoveryEntryMetadataWithFileSystemAccess,
   isOriginalRecoveryFileSystemAdapterSupported,
   pickOriginalRecoveryDirectoryWithFileSystemAccess,
+  resolveRecoverySelectedCandidateHandles,
   resolveOriginalRecoveryEntryByRelativePathWithFileSystemAccess,
   scanOriginalRecoveryDirectoryHandleWithFileSystemAccess,
   scanOriginalRecoveryDirectoryWithFileSystemAccess
 } from "./lib/originalRecoveryFileSystemAdapter.js";
-import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
+import {
+  getApprovedOriginalRecoveryMatches,
+  hasUnappliedApprovedOriginalRecoveryMatches,
+  reconcileOriginalRecoverySessionWithItemsResult,
+  refreshOriginalRecoverySession
+} from "./lib/originalRecovery.js";
+import { applyPersistedOriginalMutations } from "./lib/originalRecoveryApplyState.js";
+import { probeOriginalRecoveryImageMetadata } from "./lib/originalRecoveryImageProbe.js";
 import {
   createControlledVintageProvenanceBackfillReport,
   createLegacyProvenanceBackfillReport
@@ -3688,6 +3698,10 @@ function buildSnapshotTrackedAppStateSignature(appState) {
   return JSON.stringify(rest);
 }
 
+function areSemanticallyEqualJsonish(left, right) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 const emptyWeatherSettings = {
   locationName: "",
   latitude: null,
@@ -3981,7 +3995,9 @@ export default function App() {
   const [isOriginalRecoveryApplying, setIsOriginalRecoveryApplying] = useState(false);
   const [originalRecoveryScanProgress, setOriginalRecoveryScanProgress] = useState("");
   const [originalRecoveryRuntimeSessionId, setOriginalRecoveryRuntimeSessionId] = useState("");
-  const [originalRecoveryCandidateEntriesById, setOriginalRecoveryCandidateEntriesById] = useState({});
+  const originalRecoveryCandidateEntriesByIdRef = useRef({});
+  const originalRecoveryRootHandleRef = useRef(null);
+  const [originalRecoveryLiveDescriptorCount, setOriginalRecoveryLiveDescriptorCount] = useState(0);
   const [legacyProvenanceBackfillReport, setLegacyProvenanceBackfillReport] = useState(null);
   const [legacyProvenanceBackfillFeedback, setLegacyProvenanceBackfillFeedback] = useState("");
   const [isLegacyProvenanceBackfillApplying, setIsLegacyProvenanceBackfillApplying] = useState(false);
@@ -5787,10 +5803,19 @@ export default function App() {
     setOriginalRecoveryScanProgress("");
 
     try {
-      const latestSession = await loadLatestOriginalRecoverySession();
-      setOriginalRecoverySession(latestSession);
+      const [latestSession, currentItems] = await Promise.all([
+        loadLatestOriginalRecoverySession(),
+        loadItems()
+      ]);
+      const reconciledLatestSession = latestSession
+        ? reconcileOriginalRecoverySessionWithItemsResult(latestSession, currentItems).session
+        : latestSession;
+      setOriginalRecoverySession(
+        reconciledLatestSession
+      );
       setOriginalRecoveryRuntimeSessionId("");
-      setOriginalRecoveryCandidateEntriesById({});
+      originalRecoveryCandidateEntriesByIdRef.current = {};
+      setOriginalRecoveryLiveDescriptorCount(0);
     } catch (error) {
       setOriginalRecoveryError(formatErrorMessage(error, "Failed to load original recovery report."));
     }
@@ -5850,10 +5875,14 @@ export default function App() {
     try {
       const result = await scanOriginalRecoverySource({
         adapter: {
-          selectRoot: (adapterOptions = {}) => pickOriginalRecoveryDirectoryWithFileSystemAccess({
-            target: window,
-            ...adapterOptions
-          }),
+          selectRoot: async (adapterOptions = {}) => {
+            const rootContext = await pickOriginalRecoveryDirectoryWithFileSystemAccess({
+              target: window,
+              ...adapterOptions
+            });
+            originalRecoveryRootHandleRef.current = rootContext?.directoryHandle ?? null;
+            return rootContext;
+          },
           scanRoot: (rootContext, adapterOptions = {}) => scanOriginalRecoveryDirectoryHandleWithFileSystemAccess(
             rootContext?.directoryHandle,
             {
@@ -5877,7 +5906,7 @@ export default function App() {
           getFile: getOriginalRecoveryEntryFileWithFileSystemAccess,
           getFileMetadata: getOriginalRecoveryEntryMetadataWithFileSystemAccess
         },
-        createOriginalImageAsset,
+        probeRecoveryImageMetadata: probeOriginalRecoveryImageMetadata,
         app: "mba",
         previousSession: originalRecoverySession,
         onProgress: ({ phase, completed, total, currentPath }) => {
@@ -5905,12 +5934,13 @@ export default function App() {
 
       setOriginalRecoverySession(result.session);
       setOriginalRecoveryRuntimeSessionId(result.session.id);
-      setOriginalRecoveryCandidateEntriesById(result.candidateEntriesById);
+      originalRecoveryCandidateEntriesByIdRef.current = result.candidateEntriesById;
+      setOriginalRecoveryLiveDescriptorCount(Object.keys(result.candidateEntriesById ?? {}).length);
       setOriginalRecoveryBucket("all");
       const pathLookup = result.session.pathLookup ?? {};
       setOriginalRecoveryFeedback(result.persisted
-        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
-        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, live descriptors ${result.instrumentation?.liveDescriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, stored candidates ${result.instrumentation?.totalStoredCandidateCount ?? 0}, session bytes ${result.instrumentation?.serializedSessionByteEstimate ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, live descriptors ${result.instrumentation?.liveDescriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, stored candidates ${result.instrumentation?.totalStoredCandidateCount ?? 0}, session bytes ${result.instrumentation?.serializedSessionByteEstimate ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
       );
       setOriginalRecoveryScanProgress("");
     } catch (error) {
@@ -6063,12 +6093,18 @@ export default function App() {
     }
   }
 
-  async function handleApplyOriginalRecovery() {
-    if (!originalRecoverySession?.id) {
+  async function handleApplyOriginalRecovery(options = {}) {
+    const sessionForApply = options.sessionOverride ?? originalRecoverySession;
+
+    if (!sessionForApply?.id) {
       return;
     }
 
-    if (originalRecoveryRuntimeSessionId !== originalRecoverySession.id) {
+    const runtimeSessionId = typeof options.runtimeSessionId === "string"
+      ? options.runtimeSessionId
+      : originalRecoveryRuntimeSessionId;
+
+    if (!options.skipRuntimeSessionCheck && runtimeSessionId !== sessionForApply.id) {
       setOriginalRecoveryError("Re-scan the source before applying approved recoveries.");
       return;
     }
@@ -6107,7 +6143,7 @@ export default function App() {
         ? performance.now()
         : Date.now();
       const snapshotResult = await runMetadataSnapshot("before-repair", {
-        changedItemIds: (originalRecoverySession.matches ?? [])
+        changedItemIds: (sessionForApply.matches ?? [])
           .filter((match) => match.decision === "accepted")
           .map((match) => match.itemId),
         priority: "blocking"
@@ -6134,9 +6170,9 @@ export default function App() {
         }
       }
 
-      const result = await applyOriginalRecoverySession(originalRecoverySession.id, {
-        currentSession: originalRecoverySession,
-        candidateEntriesById: originalRecoveryCandidateEntriesById,
+      const result = await applyOriginalRecoverySession(sessionForApply.id, {
+        currentSession: sessionForApply,
+        candidateEntriesById: options.candidateEntriesById ?? originalRecoveryCandidateEntriesByIdRef.current,
         adapter: {
           getFile: getOriginalRecoveryEntryFileWithFileSystemAccess
         },
@@ -6257,12 +6293,14 @@ export default function App() {
         }
       });
 
-      result.recoveredItems.forEach((savedItem) => {
-        applyPersistedOriginalMutation(savedItem);
-      });
-      if (result.recoveredItems.length) {
-        const changedItemIds = result.recoveredItems.map((item) => item.id).filter(Boolean);
-        markMetadataDirty(changedItemIds);
+      const recoveredItems = await loadItemsByIds(result.recoveredItemIds);
+
+      if (recoveredItems.length) {
+        const mergedState = applyPersistedOriginalMutations(items, recoveredItems, referencePreview, draft);
+        setItems(mergedState.items);
+        setReferencePreview(mergedState.referencePreview);
+        setDraft(mergedState.draft);
+        markMetadataDirty(mergedState.changedItemIds);
         applyProvenanceUpdate(
           (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
           { itemCountSnapshot: items.length }
@@ -6270,13 +6308,73 @@ export default function App() {
       }
       setOriginalRecoverySession(result.session);
       setOriginalRecoveryFeedback(result.persisted
-        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
-        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
+        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms, chunks ${result.timings?.applyChunkCount ?? 0}, max chunk ${result.timings?.maxApplyChunkSize ?? 0}.`
+        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms, chunks ${result.timings?.applyChunkCount ?? 0}, max chunk ${result.timings?.maxApplyChunkSize ?? 0}.`
       );
     } catch (error) {
       setOriginalRecoveryError(formatErrorMessage(error, "Original recovery apply failed."));
     } finally {
       setIsOriginalRecoveryApplying(false);
+    }
+  }
+
+  async function handleResumeOriginalRecoveryApply() {
+    if (!originalRecoverySession?.id || !hasUnappliedApprovedOriginalRecoveryMatches(originalRecoverySession)) {
+      return;
+    }
+
+    if (!isOriginalRecoveryFileSystemAdapterSupported(window)) {
+      setOriginalRecoveryError("Original recovery folder access requires File System Access API support.");
+      return;
+    }
+
+    setOriginalRecoveryError("");
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryScanProgress("Resolving approved candidate paths...");
+
+    try {
+      let rootHandle = originalRecoveryRootHandleRef.current;
+
+      if (!rootHandle) {
+        const rootContext = await pickOriginalRecoveryDirectoryWithFileSystemAccess({ target: window });
+        rootHandle = rootContext?.directoryHandle ?? null;
+        originalRecoveryRootHandleRef.current = rootHandle;
+      }
+
+      const selectedHandleResult = await resolveRecoverySelectedCandidateHandles(
+        rootHandle,
+        originalRecoverySession,
+        {
+          sourceLabel: originalRecoverySession.sourceLabel,
+          currentItems: items
+        }
+      );
+      const reconciledSessionResult = reconcileOriginalRecoverySessionWithItemsResult(originalRecoverySession, items);
+      const reconciledSession = reconciledSessionResult.session;
+
+      originalRecoveryCandidateEntriesByIdRef.current = selectedHandleResult.candidateEntriesById;
+      setOriginalRecoveryLiveDescriptorCount(Object.keys(selectedHandleResult.candidateEntriesById).length);
+      setOriginalRecoveryRuntimeSessionId(reconciledSession.id);
+      if (reconciledSessionResult.changed) {
+        setOriginalRecoverySession(reconciledSession);
+      }
+      await handleApplyOriginalRecovery({
+        candidateEntriesById: selectedHandleResult.candidateEntriesById,
+        runtimeSessionId: reconciledSession.id,
+        skipRuntimeSessionCheck: true,
+        sessionOverride: reconciledSession
+      });
+
+      setOriginalRecoveryFeedback((currentFeedback) => {
+        const resolutionSummary = `Resolved ${selectedHandleResult.resolvedCount} approved files from the selected folder. Missing ${selectedHandleResult.missingCount}, invalid paths ${selectedHandleResult.invalidPathCount}.`;
+        return currentFeedback ? `${resolutionSummary} ${currentFeedback}` : resolutionSummary;
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setOriginalRecoveryFeedback("Resume apply canceled.");
+      } else {
+        setOriginalRecoveryError(formatErrorMessage(error, "Failed to resolve approved recovery files."));
+      }
     }
   }
   const visibleWardrobeItems = useMemo(() => {
@@ -6754,6 +6852,7 @@ export default function App() {
 
     return {
       id: board?.id ?? `board_${Date.now()}`,
+      boardUuid: board?.boardUuid ?? "",
       width: relaidBoard.width,
       height: relaidBoard.height,
       images: relaidBoard.images
@@ -7238,9 +7337,9 @@ export default function App() {
       locked,
       excluded,
       outfit,
-      board: ensureBoardUuid(board),
+      board,
       ignoredImportImages,
-      savedOutfits: savedOutfits.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)),
+      savedOutfits,
       likedOutfitKeys,
       outfitAffinity,
       recentOutfits,
@@ -7545,6 +7644,11 @@ export default function App() {
 
   function applyLocalSafetyUpdate(buildNextLocalSafety) {
     const nextLocalSafety = normalizeLocalSafetyState(buildNextLocalSafety(localSafetyRef.current));
+
+    if (areSemanticallyEqualJsonish(nextLocalSafety, localSafetyRef.current)) {
+      return localSafetyRef.current;
+    }
+
     localSafetyRef.current = nextLocalSafety;
     setLocalSafety(nextLocalSafety);
 
@@ -12455,13 +12559,22 @@ export default function App() {
   const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
   const backupPackageImportProgressLabel = getBackupPackageImportProgressLabel(backupPackageImportProgress);
   const appBuildLabel = formatAppBuildLabel();
+  const resumableOriginalRecoveryMatches = useMemo(
+    () => getApprovedOriginalRecoveryMatches(originalRecoverySession),
+    [originalRecoverySession]
+  );
   const canUseOriginalRecoveryScan = typeof window !== "undefined"
     ? isOriginalRecoveryFileSystemAdapterSupported(window)
     : isOriginalRecoveryFileSystemAdapterSupported();
   const hasLiveOriginalRecoveryCandidates = Boolean(
     originalRecoverySession?.id
     && originalRecoveryRuntimeSessionId === originalRecoverySession.id
-    && Object.keys(originalRecoveryCandidateEntriesById).length
+    && originalRecoveryLiveDescriptorCount
+  );
+  const canResumeOriginalRecoveryApply = Boolean(
+    originalRecoverySession?.id
+    && resumableOriginalRecoveryMatches.length
+    && !hasLiveOriginalRecoveryCandidates
   );
   const fileSystemAccessDebug = typeof window !== "undefined"
     ? getFileSystemAccessDebugSnapshot(window)
@@ -15184,10 +15297,12 @@ export default function App() {
           error={originalRecoveryError}
           canScan={canUseOriginalRecoveryScan}
           hasLiveCandidates={hasLiveOriginalRecoveryCandidates}
+          canResumeApply={canResumeOriginalRecoveryApply}
           bucketFilter={originalRecoveryBucket}
           onClose={closeOriginalRecoveryWorkflow}
           onScan={() => void handleOriginalRecoveryScan()}
           onApplyApproved={() => void handleApplyOriginalRecovery()}
+          onResumeApply={() => void handleResumeOriginalRecoveryApply()}
           onExportReport={() => void handleExportOriginalRecoveryReport()}
           onBucketFilterChange={setOriginalRecoveryBucket}
           onApproveReady={() => void handleApproveReadyOriginalRecoveryMatches()}

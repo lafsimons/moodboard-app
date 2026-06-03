@@ -27,6 +27,19 @@ export async function loadItems() {
   return loadStoredItems();
 }
 
+export async function loadItemsByIds(itemIds = []) {
+  const normalizedItemIds = Array.isArray(itemIds)
+    ? [...new Set(itemIds.map((itemId) => normalizeText(itemId)).filter(Boolean))]
+    : [];
+
+  if (!normalizedItemIds.length) {
+    return [];
+  }
+
+  const items = await Promise.all(normalizedItemIds.map((itemId) => loadStoredItemById(itemId)));
+  return items.filter(Boolean);
+}
+
 export async function loadStartupItemMetadata(options = {}) {
   return loadStoredStartupItemMetadata(options);
 }

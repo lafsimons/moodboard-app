@@ -20,6 +20,8 @@ import {
 import { normalizeKnownOriginalRelativePath } from "../lib/itemIdentity.js";
 import { attachRecoveredOriginalForItem, loadItems } from "./itemsRepository.js";
 
+const DEFAULT_APPLY_CHUNK_SIZE = 200;
+
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -118,7 +120,10 @@ function createRecoveryScanInstrumentation() {
     fileObjectsRetainedCount: 0,
     plausibleCandidateCount: 0,
     decodedCandidateCount: 0,
-    getFileCallCount: 0
+    getFileCallCount: 0,
+    totalStoredCandidateCount: 0,
+    liveDescriptorCount: 0,
+    serializedSessionByteEstimate: 0
   };
 }
 
@@ -282,7 +287,7 @@ async function runDirectPathLookup(items, adapter, rootContext, options = {}) {
     );
 
     directMatchesByItemId.set(match.itemId, match);
-    directEntriesById[candidate.id] = entry;
+    directEntriesById[candidate.id] = createLiveCandidateEntryDescriptor(entry) ?? entry;
     pathLookup.readyCount += 1;
   }
 
@@ -302,6 +307,38 @@ function createTraversalCandidateRecord(entry) {
     ...entry,
     fileName: normalizeText(entry?.fileName) || derivedFileName
   });
+}
+
+function createLiveCandidateEntryDescriptor(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const descriptor = {
+    id: normalizeText(entry.id),
+    sourceLabel: normalizeText(entry.sourceLabel),
+    relativePath: normalizeText(entry.relativePath),
+    fileName: normalizeText(entry.fileName),
+    lookupStrategy: normalizeText(entry.lookupStrategy)
+  };
+
+  if (entry.handle) {
+    descriptor.handle = entry.handle;
+  } else if (entry.file) {
+    descriptor.file = entry.file;
+  }
+
+  return descriptor.id ? descriptor : null;
+}
+
+function estimateSerializedBytes(value) {
+  const payload = JSON.stringify(value ?? null);
+
+  if (typeof TextEncoder === "function") {
+    return new TextEncoder().encode(payload).length;
+  }
+
+  return payload.length;
 }
 
 async function persistRecoverySession(session) {
@@ -335,8 +372,8 @@ export async function loadOriginalRecoverySessions(options = {}) {
   return loadStoredOriginalRecoverySessions(options);
 }
 
-export async function loadLatestOriginalRecoverySession() {
-  return loadLatestStoredOriginalRecoverySession();
+export async function loadLatestOriginalRecoverySession(options = {}) {
+  return loadLatestStoredOriginalRecoverySession(options);
 }
 
 export async function saveOriginalRecoverySession(session) {
@@ -367,7 +404,7 @@ export async function updateOriginalRecoveryCandidateSelection(sessionId, itemId
 
 export async function scanOriginalRecoverySource({
   adapter,
-  createOriginalImageAsset,
+  probeRecoveryImageMetadata,
   app = "mba",
   previousSession = null,
   now = () => new Date().toISOString(),
@@ -383,8 +420,8 @@ export async function scanOriginalRecoverySource({
     throw new Error("Original recovery scanning requires a scan adapter.");
   }
 
-  if (typeof createOriginalImageAsset !== "function") {
-    throw new Error("Original recovery scanning requires an original image asset decoder.");
+  if (typeof probeRecoveryImageMetadata !== "function") {
+    throw new Error("Original recovery scanning requires an image metadata probe.");
   }
 
   const timings = createScanTimingSummary();
@@ -428,7 +465,6 @@ export async function scanOriginalRecoverySource({
   timings.traversalMs = buildPhaseTiming(traversalStartedAtMs);
   const candidateEntriesById = {};
   const lightweightCandidates = [];
-  const scanEntriesById = new Map();
   const metadataEntries = Array.isArray(scanResult?.entries) ? scanResult.entries : [];
   for (let index = 0; index < metadataEntries.length; index += 1) {
     const entry = metadataEntries[index];
@@ -444,12 +480,16 @@ export async function scanOriginalRecoverySource({
     }
 
     lightweightCandidates.push(candidate);
-    scanEntriesById.set(candidate.id, entry);
-    candidateEntriesById[candidate.id] = entry;
+    const liveDescriptor = createLiveCandidateEntryDescriptor(entry);
+
+    if (liveDescriptor) {
+      candidateEntriesById[candidate.id] = liveDescriptor;
+    }
   }
   timings.metadataMs = 0;
   instrumentation.descriptorCount = lightweightCandidates.length;
   instrumentation.fileObjectsRetainedCount = 0;
+  instrumentation.liveDescriptorCount = Object.keys(candidateEntriesById).length;
 
   onProgress?.({
     phase: "matching-filenames",
@@ -467,7 +507,7 @@ export async function scanOriginalRecoverySource({
 
   for (let index = 0; index < plausibleCandidateList.length; index += 1) {
     const lightweightCandidate = plausibleCandidateList[index];
-    const entry = scanEntriesById.get(lightweightCandidate.id);
+    const entry = candidateEntriesById[lightweightCandidate.id];
     const fileMetadata = await resolveScanEntryMetadata(adapter, entry);
 
     if (!isSupportedImageFile(fileMetadata)) {
@@ -492,13 +532,13 @@ export async function scanOriginalRecoverySource({
 
   for (let index = 0; index < plausibleCandidateList.length; index += 1) {
     const lightweightCandidate = plausibleCandidateList[index];
-    const entry = scanEntriesById.get(lightweightCandidate.id);
+    const entry = candidateEntriesById[lightweightCandidate.id];
     const file = await resolveScanEntryFile(adapter, entry);
     instrumentation.getFileCallCount = (instrumentation.getFileCallCount ?? 0) + 1;
-    const originalAsset = await createOriginalImageAsset(file);
+    const originalAsset = await probeRecoveryImageMetadata(file);
     const candidate = createOriginalRecoveryCandidateRecord({
       ...entry,
-      file
+      fileName: lightweightCandidate.fileName
     }, originalAsset);
     decodedCandidates.push(candidate);
     onProgress?.({
@@ -554,6 +594,15 @@ export async function scanOriginalRecoverySource({
   const persistenceStartedAtMs = getNowMs();
   const saveResult = await persistRecoverySession(session);
   timings.persistenceMs = buildPhaseTiming(persistenceStartedAtMs);
+  instrumentation.liveDescriptorCount = Object.keys({
+    ...candidateEntriesById,
+    ...directLookupResult.directEntriesById
+  }).length;
+  instrumentation.totalStoredCandidateCount = (session.matches ?? []).reduce(
+    (total, match) => total + (Array.isArray(match?.candidates) ? match.candidates.length : 0),
+    0
+  );
+  instrumentation.serializedSessionByteEstimate = estimateSerializedBytes(session);
 
   return {
     ...saveResult,
@@ -578,11 +627,16 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
     : {};
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
   const approvedMatches = getApprovedOriginalRecoveryMatches(session);
-  const applyResults = [];
-  const recoveredItems = [];
   const appliedAt = typeof options.now === "function" ? options.now() : new Date().toISOString();
   const timings = createApplyTimingSummary();
   const applyLoopStartedAtMs = getNowMs();
+  const chunkSize = Math.max(1, Math.round(Number(options.chunkSize) || DEFAULT_APPLY_CHUNK_SIZE));
+  const recoveredItemIds = [];
+  const failedResults = [];
+  let workingSession = session;
+  let applyChunkCount = 0;
+  let maxApplyChunkSize = 0;
+  let persisted = true;
 
   onProgress?.({
     phase: "apply-start",
@@ -590,126 +644,145 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
     total: approvedMatches.length
   });
 
-  for (let index = 0; index < approvedMatches.length; index += 1) {
-    const itemStartedAtMs = getNowMs();
-    const match = approvedMatches[index];
-    const selectedCandidateId = normalizeText(match.selectedCandidateId);
-    const selectedCandidate = (Array.isArray(match.candidates) ? match.candidates : []).find(
-      (candidate) => candidate.id === selectedCandidateId
-    );
-    onProgress?.({
-      phase: "candidate-lookup",
-      completed: index,
-      total: approvedMatches.length,
-      itemId: match.itemId,
-      itemName: match.itemName || match.itemId,
-      fileName: selectedCandidate?.fileName || ""
-    });
-    const entry = selectedCandidateId ? candidateEntriesById[selectedCandidateId] : null;
-    const getFileStartedAtMs = getNowMs();
-    const file = entry ? await resolveScanEntryFile(options.adapter ?? null, entry) : null;
-    const getFileMs = buildPhaseTiming(getFileStartedAtMs);
-    timings.getFileMs += getFileMs;
+  for (let chunkStart = 0; chunkStart < approvedMatches.length; chunkStart += chunkSize) {
+    const chunkMatches = approvedMatches.slice(chunkStart, chunkStart + chunkSize);
+    const chunkApplyResults = [];
 
-    if (!selectedCandidateId || !selectedCandidate || !file) {
-      applyResults.push({
-        itemId: match.itemId,
-        status: "skipped",
-        message: "Selected candidate is no longer available. Re-scan before applying.",
-        appliedAt,
-        decision: "needs_rescan"
-      });
+    applyChunkCount += 1;
+    maxApplyChunkSize = Math.max(maxApplyChunkSize, chunkMatches.length);
+
+    for (let chunkIndex = 0; chunkIndex < chunkMatches.length; chunkIndex += 1) {
+      const index = chunkStart + chunkIndex;
+      const itemStartedAtMs = getNowMs();
+      const match = chunkMatches[chunkIndex];
+      const selectedCandidateId = normalizeText(match.selectedCandidateId);
+      const selectedCandidate = (Array.isArray(match.candidates) ? match.candidates : []).find(
+        (candidate) => candidate.id === selectedCandidateId
+      );
       onProgress?.({
-        phase: "candidate-missing",
-        completed: index + 1,
+        phase: "candidate-lookup",
+        completed: index,
         total: approvedMatches.length,
         itemId: match.itemId,
         itemName: match.itemName || match.itemId,
         fileName: selectedCandidate?.fileName || ""
       });
-      continue;
+      const entry = selectedCandidateId ? candidateEntriesById[selectedCandidateId] : null;
+      const getFileStartedAtMs = getNowMs();
+      const file = entry ? await resolveScanEntryFile(options.adapter ?? null, entry) : null;
+      const getFileMs = buildPhaseTiming(getFileStartedAtMs);
+      timings.getFileMs += getFileMs;
+
+      if (!selectedCandidateId || !selectedCandidate || !file) {
+        chunkApplyResults.push({
+          itemId: match.itemId,
+          status: "skipped",
+          message: "Selected candidate is no longer available. Re-scan before applying.",
+          appliedAt,
+          decision: "needs_rescan"
+        });
+        onProgress?.({
+          phase: "candidate-missing",
+          completed: index + 1,
+          total: approvedMatches.length,
+          itemId: match.itemId,
+          itemName: match.itemName || match.itemId,
+          fileName: selectedCandidate?.fileName || ""
+        });
+        continue;
+      }
+
+      try {
+        const result = await attachRecoveredOriginalForItem(
+          match.itemId,
+          file,
+          selectedCandidate,
+          {
+            createOriginalImageAsset: options.createOriginalImageAsset,
+            now: options.now,
+            onProgress: (event) => {
+              onProgress?.({
+                ...event,
+                completed: index,
+                total: approvedMatches.length,
+                itemName: match.itemName || match.itemId
+              });
+            }
+          }
+        );
+        timings.blobWriteMs += Number(result?.timings?.blobWriteMs) || 0;
+        timings.itemMetadataSaveMs += Number(result?.timings?.itemMetadataSaveMs) || 0;
+        timings.appliedItemCount += 1;
+        timings.averagePerItemMs = Math.max(
+          0,
+          Math.round((((Number(timings.averagePerItemMs) * Math.max(0, timings.appliedItemCount - 1))
+            + buildPhaseTiming(itemStartedAtMs)) / timings.appliedItemCount) * 100) / 100
+        );
+        recoveredItemIds.push(result.item.id);
+        chunkApplyResults.push({
+          itemId: match.itemId,
+          status: "recovered",
+          message: `Recovered ${selectedCandidate.fileName || match.itemName || match.itemId}.`,
+          appliedAt,
+          decision: "accepted"
+        });
+        onProgress?.({
+          phase: "item-recovered",
+          completed: index + 1,
+          total: approvedMatches.length,
+          itemId: match.itemId,
+          itemName: match.itemName || match.itemId,
+          fileName: selectedCandidate.fileName || ""
+        });
+      } catch (error) {
+        const message = typeof error?.message === "string" ? error.message : "Original recovery failed.";
+
+        timings.appliedItemCount += 1;
+        timings.averagePerItemMs = Math.max(
+          0,
+          Math.round((((Number(timings.averagePerItemMs) * Math.max(0, timings.appliedItemCount - 1))
+            + buildPhaseTiming(itemStartedAtMs)) / timings.appliedItemCount) * 100) / 100
+        );
+        chunkApplyResults.push({
+          itemId: match.itemId,
+          status: "failed",
+          message,
+          appliedAt,
+          decision: "accepted"
+        });
+        failedResults.push({
+          itemId: match.itemId,
+          message
+        });
+        onProgress?.({
+          phase: "item-failed",
+          completed: index + 1,
+          total: approvedMatches.length,
+          itemId: match.itemId,
+          itemName: match.itemName || match.itemId,
+          fileName: selectedCandidate.fileName || "",
+          error: message
+        });
+      }
     }
 
-    try {
-      const result = await attachRecoveredOriginalForItem(
-        match.itemId,
-        file,
-        selectedCandidate,
-        {
-          createOriginalImageAsset: options.createOriginalImageAsset,
-          now: options.now,
-          onProgress: (event) => {
-            onProgress?.({
-              ...event,
-              completed: index,
-              total: approvedMatches.length,
-              itemName: match.itemName || match.itemId
-            });
-          }
-        }
-      );
-      timings.blobWriteMs += Number(result?.timings?.blobWriteMs) || 0;
-      timings.itemMetadataSaveMs += Number(result?.timings?.itemMetadataSaveMs) || 0;
-      timings.appliedItemCount += 1;
-      timings.averagePerItemMs = Math.max(
-        0,
-        Math.round((((Number(timings.averagePerItemMs) * Math.max(0, timings.appliedItemCount - 1))
-          + buildPhaseTiming(itemStartedAtMs)) / timings.appliedItemCount) * 100) / 100
-      );
-      recoveredItems.push(result.item);
-      applyResults.push({
-        itemId: match.itemId,
-        status: "recovered",
-        message: `Recovered ${selectedCandidate.fileName || match.itemName || match.itemId}.`,
-        appliedAt,
-        decision: "accepted"
-      });
-      onProgress?.({
-        phase: "item-recovered",
-        completed: index + 1,
-        total: approvedMatches.length,
-        itemId: match.itemId,
-        itemName: match.itemName || match.itemId,
-        fileName: selectedCandidate.fileName || ""
-      });
-    } catch (error) {
-      timings.appliedItemCount += 1;
-      timings.averagePerItemMs = Math.max(
-        0,
-        Math.round((((Number(timings.averagePerItemMs) * Math.max(0, timings.appliedItemCount - 1))
-          + buildPhaseTiming(itemStartedAtMs)) / timings.appliedItemCount) * 100) / 100
-      );
-      applyResults.push({
-        itemId: match.itemId,
-        status: "failed",
-        message: typeof error?.message === "string" ? error.message : "Original recovery failed.",
-        appliedAt,
-        decision: "accepted"
-      });
-      onProgress?.({
-        phase: "item-failed",
-        completed: index + 1,
-        total: approvedMatches.length,
-        itemId: match.itemId,
-        itemName: match.itemName || match.itemId,
-        fileName: selectedCandidate.fileName || "",
-        error: typeof error?.message === "string" ? error.message : "Original recovery failed."
-      });
-    }
+    workingSession = mergeOriginalRecoveryApplyResults(workingSession, chunkApplyResults, {
+      updatedAt: appliedAt
+    });
+    onProgress?.({
+      phase: "report-persistence",
+      completed: Math.min(chunkStart + chunkMatches.length, approvedMatches.length),
+      total: approvedMatches.length
+    });
+    const chunkPersistenceStartedAtMs = getNowMs();
+    const chunkSaveResult = await persistRecoverySession(workingSession);
+    timings.reportPersistenceMs += buildPhaseTiming(chunkPersistenceStartedAtMs);
+    workingSession = chunkSaveResult.session;
+    persisted = persisted && chunkSaveResult.persisted;
   }
   timings.applyLoopMs = buildPhaseTiming(applyLoopStartedAtMs);
-
-  const nextSession = mergeOriginalRecoveryApplyResults(session, applyResults, {
-    updatedAt: appliedAt
-  });
-  onProgress?.({
-    phase: "report-persistence",
-    completed: approvedMatches.length,
-    total: approvedMatches.length
-  });
-  const persistenceStartedAtMs = getNowMs();
-  const saveResult = await persistRecoverySession(nextSession);
-  timings.reportPersistenceMs = buildPhaseTiming(persistenceStartedAtMs);
+  timings.applyChunkCount = applyChunkCount;
+  timings.maxApplyChunkSize = maxApplyChunkSize;
   onProgress?.({
     phase: "apply-complete",
     completed: approvedMatches.length,
@@ -717,9 +790,10 @@ export async function applyOriginalRecoverySession(sessionId, options = {}) {
   });
 
   return {
-    ...saveResult,
-    recoveredItems,
-    applyResults,
+    session: workingSession,
+    persisted,
+    recoveredItemIds,
+    failedResults,
     timings
   };
 }

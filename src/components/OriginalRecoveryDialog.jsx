@@ -103,10 +103,12 @@ export default function OriginalRecoveryDialog({
   error = "",
   canScan = false,
   hasLiveCandidates = false,
+  canResumeApply = false,
   bucketFilter = "all",
   onClose,
   onScan,
   onApplyApproved,
+  onResumeApply,
   onExportReport,
   onBucketFilterChange,
   onApproveReady,
@@ -183,6 +185,14 @@ export default function OriginalRecoveryDialog({
           <button
             type="button"
             className="ghost-button"
+            onClick={onResumeApply}
+            disabled={applying || scanning || !canResumeApply}
+          >
+            Resume apply from existing session
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
             onClick={onExportReport}
             disabled={!session}
           >
@@ -227,6 +237,8 @@ export default function OriginalRecoveryDialog({
               <p><span>Known paths missing</span><strong>{session.pathLookup?.missingCount ?? 0}</strong></p>
               <p><span>Path conflicts</span><strong>{session.pathLookup?.conflictCount ?? 0}</strong></p>
               <p><span>Fallback matches</span><strong>{session.pathLookup?.fallbackMatchCount ?? 0}</strong></p>
+              <p><span>Remaining to apply</span><strong>{session.summary?.approvedCount ?? 0}</strong></p>
+              <p><span>Already applied</span><strong>{session.summary?.alreadyAppliedCount ?? 0}</strong></p>
               <p><span>Recovered</span><strong>{session.summary?.recoveredCount ?? 0}</strong></p>
               <p><span>Failed</span><strong>{session.summary?.failedCount ?? 0}</strong></p>
             </div>
@@ -234,6 +246,11 @@ export default function OriginalRecoveryDialog({
             {!hasLiveCandidates ? (
               <p className="image-preservation-note">
                 This report is persisted, but live scan files are not. Re-scan the source before applying approved recoveries.
+              </p>
+            ) : null}
+            {!hasLiveCandidates && canResumeApply ? (
+              <p className="original-recovery-subtle">
+                Select the same originals folder. MBA will resolve only already-approved files instead of scanning the whole folder.
               </p>
             ) : null}
 

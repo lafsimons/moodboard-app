@@ -2,6 +2,8 @@ import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 
 import { __setIndexedDbFactoryForTests } from "../lib/storage.js";
+import { resolveRecoverySelectedCandidateHandles } from "../lib/originalRecoveryFileSystemAdapter.js";
+import { reconcileOriginalRecoverySessionWithItems } from "../lib/originalRecovery.js";
 import { saveItem } from "./itemsRepository.js";
 import {
   applyOriginalRecoverySession,
@@ -206,12 +208,12 @@ test("scanOriginalRecoverySource persists a report and skips non-image files", a
         ]
       })
     },
-    createOriginalImageAsset: async (file) => ({
-      src: `data:${file.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (file) => ({
       mimeType: file.type,
       width: 100,
       height: 50,
       fileSize: file.size,
+      lastModified: file.lastModified,
       originalFilename: file.name
     }),
     now: () => "2026-06-01T12:00:00.000Z"
@@ -289,15 +291,15 @@ test("scanOriginalRecoverySource separates traversal metadata and decode phases 
         };
       }
     },
-    createOriginalImageAsset: async (file) => {
+    probeRecoveryImageMetadata: async (file) => {
       decodedFiles.push(file.name);
 
       return {
-        src: `data:${file.type};base64,ZmFrZQ==`,
         mimeType: file.type,
         width: 100,
         height: 50,
         fileSize: file.size,
+        lastModified: file.lastModified,
         originalFilename: file.name
       };
     },
@@ -379,14 +381,14 @@ test("scanOriginalRecoverySource does not call getFile during traversal and skip
         return entry.handle.getFile();
       }
     },
-    createOriginalImageAsset: async (file) => {
+    probeRecoveryImageMetadata: async (file) => {
       decodeCount += 1;
       return {
-        src: `data:${file.type};base64,ZmFrZQ==`,
         mimeType: file.type,
         width: 100,
         height: 50,
         fileSize: file.size,
+        lastModified: file.lastModified,
         originalFilename: file.name
       };
     }
@@ -457,7 +459,7 @@ test("scanOriginalRecoverySource accepts direct knownOriginalRelativePath matche
         };
       }
     },
-    createOriginalImageAsset: async () => {
+    probeRecoveryImageMetadata: async () => {
       throw new Error("direct-path ready match should not decode during scan");
     },
     now: () => "2026-06-01T12:00:00.000Z"
@@ -516,12 +518,12 @@ test("scanOriginalRecoverySource falls back safely when direct knownOriginalRela
         ]
       })
     },
-    createOriginalImageAsset: async (file) => ({
-      src: `data:${file.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (file) => ({
       mimeType: file.type,
       width: 100,
       height: 50,
       fileSize: file.size,
+      lastModified: file.lastModified,
       originalFilename: file.name
     }),
     now: () => "2026-06-01T12:00:00.000Z"
@@ -596,12 +598,12 @@ test("applyOriginalRecoverySession preserves partial progress and marks missing 
         ]
       })
     },
-    createOriginalImageAsset: async (file) => ({
-      src: `data:${file.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (file) => ({
       mimeType: file.type,
       width: 100,
       height: 50,
       fileSize: file.size,
+      lastModified: file.lastModified,
       originalFilename: file.name
     })
   });
@@ -627,7 +629,7 @@ test("applyOriginalRecoverySession preserves partial progress and marks missing 
     now: () => "2026-06-01T12:34:56.000Z"
   });
 
-  assert.equal(applyResult.recoveredItems.length, 1);
+  assert.equal(applyResult.recoveredItemIds.length, 1);
   assert.equal(applyResult.session.summary.recoveredCount, 1);
   assert.equal(applyResult.session.summary.needsRescanCount, 1);
   assert.equal(
@@ -672,12 +674,12 @@ test("applyOriginalRecoverySession reports per-item progress stages and report p
         ]
       })
     },
-    createOriginalImageAsset: async (selectedFile) => ({
-      src: `data:${selectedFile.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (selectedFile) => ({
       mimeType: selectedFile.type,
       width: 100,
       height: 50,
       fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
       originalFilename: selectedFile.name
     }),
     now: () => "2026-06-01T12:00:00.000Z"
@@ -756,12 +758,12 @@ test("applyOriginalRecoverySession skips createOriginalImageAsset on the normal 
         ]
       })
     },
-    createOriginalImageAsset: async (candidateFile) => ({
-      src: `data:${candidateFile.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (candidateFile) => ({
       mimeType: candidateFile.type,
       width: 100,
       height: 50,
       fileSize: candidateFile.size,
+      lastModified: candidateFile.lastModified,
       originalFilename: candidateFile.name
     }),
     now: () => "2026-06-01T12:00:00.000Z"
@@ -829,12 +831,12 @@ test("scan approve and apply still work with in-memory session when persistence 
         ]
       })
     },
-    createOriginalImageAsset: async (file) => ({
-      src: `data:${file.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (file) => ({
       mimeType: file.type,
       width: 100,
       height: 50,
       fileSize: file.size,
+      lastModified: file.lastModified,
       originalFilename: file.name
     })
   });
@@ -863,7 +865,7 @@ test("scan approve and apply still work with in-memory session when persistence 
   });
 
   assert.equal(applyResult.persisted, false);
-  assert.equal(applyResult.recoveredItems.length, 1);
+  assert.equal(applyResult.recoveredItemIds.length, 1);
   assert.equal(applyResult.session.summary.recoveredCount, 1);
 });
 
@@ -903,12 +905,12 @@ test("persisted session missing but current in-memory session exists still appli
         ]
       })
     },
-    createOriginalImageAsset: async (selectedFile) => ({
-      src: `data:${selectedFile.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (selectedFile) => ({
       mimeType: selectedFile.type,
       width: 100,
       height: 50,
       fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
       originalFilename: selectedFile.name
     })
   });
@@ -926,7 +928,7 @@ test("persisted session missing but current in-memory session exists still appli
     })
   });
 
-  assert.equal(applyResult.recoveredItems.length, 1);
+  assert.equal(applyResult.recoveredItemIds.length, 1);
   assert.equal(applyResult.session.summary.recoveredCount, 1);
 });
 
@@ -985,12 +987,12 @@ test("after recovery-store availability save load and apply from persisted sessi
         ]
       })
     },
-    createOriginalImageAsset: async (selectedFile) => ({
-      src: `data:${selectedFile.type};base64,ZmFrZQ==`,
+    probeRecoveryImageMetadata: async (selectedFile) => ({
       mimeType: selectedFile.type,
       width: 100,
       height: 50,
       fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
       originalFilename: selectedFile.name
     })
   });
@@ -1016,5 +1018,319 @@ test("after recovery-store availability save load and apply from persisted sessi
   });
 
   assert.equal(applyResult.persisted, true);
-  assert.equal(applyResult.recoveredItems.length, 1);
+  assert.equal(applyResult.recoveredItemIds.length, 1);
+});
+
+test("scanOriginalRecoverySource keeps FSA live descriptors compact without retaining file objects", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-compact",
+    itemUuid: "uuid-compact",
+    name: "Compact",
+    sourceOriginalFilename: "compact.jpg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-compact",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  const handle = {
+    async getFile() {
+      return new File(["1234567890"], "compact.jpg", {
+        type: "image/jpeg",
+        lastModified: 1717236000000
+      });
+    }
+  };
+
+  const scanResult = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async () => ({
+        sourceLabel: "Archive",
+        entries: [
+          { id: "candidate-compact", sourceLabel: "Archive", relativePath: "archive/compact.jpg", fileName: "compact.jpg", handle }
+        ]
+      }),
+      getFile(entry) {
+        return entry.handle.getFile();
+      }
+    },
+    probeRecoveryImageMetadata: async (selectedFile) => ({
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
+      originalFilename: selectedFile.name
+    })
+  });
+
+  assert.equal("file" in scanResult.candidateEntriesById["candidate-compact"], false);
+  assert.equal(scanResult.candidateEntriesById["candidate-compact"].handle, handle);
+  assert.equal(scanResult.instrumentation.liveDescriptorCount, 1);
+});
+
+test("applyOriginalRecoverySession persists progress in chunks and resume is bounded", async () => {
+  installFakeIndexedDb();
+  for (const itemId of ["item-a", "item-b"]) {
+    await saveItem({
+      id: itemId,
+      itemUuid: `uuid-${itemId}`,
+      name: itemId,
+      sourceOriginalFilename: `${itemId}.jpg`,
+      sourceFileSize: 10,
+      sourceImageWidth: 100,
+      sourceImageHeight: 50,
+      sourceLastModified: 1717236000000,
+      mimeType: "image/jpeg",
+      originalPreserved: false,
+      images: {
+        preview: {
+          src: `data:image/webp;base64,preview-${itemId}`,
+          mimeType: "image/webp",
+          width: 100,
+          height: 50
+        }
+      }
+    });
+  }
+
+  const fileA = new File(["1234567890"], "item-a.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const fileB = new File(["1234567890"], "item-b.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+
+  const scanResult = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async () => ({
+        sourceLabel: "Archive",
+        entries: [
+          { id: "candidate-a", sourceLabel: "Archive", relativePath: "archive/item-a.jpg", file: fileA },
+          { id: "candidate-b", sourceLabel: "Archive", relativePath: "archive/item-b.jpg", file: fileB }
+        ]
+      })
+    },
+    probeRecoveryImageMetadata: async (selectedFile) => ({
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
+      originalFilename: selectedFile.name
+    })
+  });
+
+  const phases = [];
+  const applyResult = await applyOriginalRecoverySession(scanResult.session.id, {
+    currentSession: scanResult.session,
+    candidateEntriesById: scanResult.candidateEntriesById,
+    createOriginalImageAsset: async (selectedFile) => ({
+      src: `data:${selectedFile.type};base64,ZmFrZQ==`,
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      originalFilename: selectedFile.name
+    }),
+    chunkSize: 1,
+    onProgress: (event) => {
+      phases.push(`${event.phase}:${event.completed}/${event.total}`);
+    }
+  });
+
+  assert.equal(applyResult.recoveredItemIds.length, 2);
+  assert.equal(applyResult.timings.applyChunkCount, 2);
+  assert.equal(applyResult.timings.maxApplyChunkSize, 1);
+  assert.equal(phases.filter((entry) => entry.startsWith("report-persistence:")).length, 2);
+
+  const resumedApplyResult = await applyOriginalRecoverySession(scanResult.session.id, {
+    currentSession: applyResult.session,
+    candidateEntriesById: scanResult.candidateEntriesById,
+    createOriginalImageAsset: async () => {
+      throw new Error("already recovered items should not be re-applied");
+    },
+    chunkSize: 1
+  });
+
+  assert.equal(resumedApplyResult.recoveredItemIds.length, 0);
+  assert.equal(resumedApplyResult.session.summary.recoveredCount, 2);
+});
+
+test("applyOriginalRecoverySession can continue from resolved selected handles without full scan", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-resume",
+    itemUuid: "uuid-resume",
+    name: "Resume",
+    sourceOriginalFilename: "resume.jpg",
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-resume",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  const file = new File(["1234567890"], "resume.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const scanResult = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async () => ({
+        sourceLabel: "Archive",
+        entries: [
+          { id: "candidate-resume", sourceLabel: "Archive", relativePath: "archive/resume.jpg", file }
+        ]
+      })
+    },
+    probeRecoveryImageMetadata: async (selectedFile) => ({
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
+      originalFilename: selectedFile.name
+    })
+  });
+
+  let scanAttempted = false;
+  const rootHandle = {
+    name: "Archive",
+    async getDirectoryHandle(name) {
+      if (name !== "archive") {
+        const error = new Error("missing directory");
+        error.name = "NotFoundError";
+        throw error;
+      }
+
+      return {
+        async getFileHandle(fileName) {
+          if (fileName !== "resume.jpg") {
+            const error = new Error("missing file");
+            error.name = "NotFoundError";
+            throw error;
+          }
+
+          return {
+            async getFile() {
+              return file;
+            }
+          };
+        }
+      };
+    }
+  };
+  const selectedHandleResult = await resolveRecoverySelectedCandidateHandles(rootHandle, scanResult.session);
+
+  const applyResult = await applyOriginalRecoverySession(scanResult.session.id, {
+    currentSession: scanResult.session,
+    candidateEntriesById: selectedHandleResult.candidateEntriesById,
+    adapter: {
+      scan: async () => {
+        scanAttempted = true;
+        return { sourceLabel: "Archive", entries: [] };
+      }
+    },
+    createOriginalImageAsset: async (selectedFile) => ({
+      src: `data:${selectedFile.type};base64,ZmFrZQ==`,
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      originalFilename: selectedFile.name
+    })
+  });
+
+  assert.equal(scanAttempted, false);
+  assert.equal(applyResult.recoveredItemIds.length, 1);
+  assert.equal(applyResult.session.summary.recoveredCount, 1);
+});
+
+test("applyOriginalRecoverySession does not rewrite already linked items after session reconciliation", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-linked-skip",
+    itemUuid: "uuid-linked-skip",
+    name: "Linked Skip",
+    sourceOriginalFilename: "linked-skip.jpg",
+    sourceFileSize: 10,
+    sourceImageWidth: 100,
+    sourceImageHeight: 50,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-linked-skip",
+        mimeType: "image/webp",
+        width: 100,
+        height: 50
+      }
+    }
+  });
+
+  const file = new File(["1234567890"], "linked-skip.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const scanResult = await scanOriginalRecoverySource({
+    adapter: {
+      scan: async () => ({
+        sourceLabel: "Archive",
+        entries: [
+          { id: "candidate-linked-skip", sourceLabel: "Archive", relativePath: "archive/linked-skip.jpg", file }
+        ]
+      })
+    },
+    probeRecoveryImageMetadata: async (selectedFile) => ({
+      mimeType: selectedFile.type,
+      width: 100,
+      height: 50,
+      fileSize: selectedFile.size,
+      lastModified: selectedFile.lastModified,
+      originalFilename: selectedFile.name
+    })
+  });
+
+  const reconciledSession = reconcileOriginalRecoverySessionWithItems(scanResult.session, [
+    {
+      id: "item-linked-skip",
+      originalPreserved: true,
+      relinkStatus: "linked",
+      knownOriginalRelativePath: "archive/linked-skip.jpg"
+    }
+  ]);
+
+  let decodeCount = 0;
+  const applyResult = await applyOriginalRecoverySession(reconciledSession.id, {
+    currentSession: reconciledSession,
+    candidateEntriesById: scanResult.candidateEntriesById,
+    createOriginalImageAsset: async () => {
+      decodeCount += 1;
+      throw new Error("already linked item should not be rewritten");
+    }
+  });
+
+  assert.equal(decodeCount, 0);
+  assert.equal(applyResult.recoveredItemIds.length, 0);
+  assert.equal(applyResult.session.summary.approvedCount, 0);
+  assert.equal(applyResult.session.summary.alreadyAppliedCount, 1);
 });

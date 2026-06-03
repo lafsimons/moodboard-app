@@ -2375,6 +2375,7 @@ function normalizeOriginalRecoverySummary(summary = {}) {
     excludedItemCount: normalizeOriginalRecoveryCount(summary.excludedItemCount),
     scannedFileCount: normalizeOriginalRecoveryCount(summary.scannedFileCount),
     approvedCount: normalizeOriginalRecoveryCount(summary.approvedCount),
+    alreadyAppliedCount: normalizeOriginalRecoveryCount(summary.alreadyAppliedCount),
     unresolvedCount: normalizeOriginalRecoveryCount(summary.unresolvedCount),
     recoveredCount: normalizeOriginalRecoveryCount(summary.recoveredCount),
     failedCount: normalizeOriginalRecoveryCount(summary.failedCount),
@@ -2429,8 +2430,16 @@ function normalizeOriginalRecoverySessionRecord(record = {}) {
   };
 }
 
+function isNormalizedOriginalRecoverySessionResumable(session = {}) {
+  return (Array.isArray(session?.matches) ? session.matches : []).some(
+    (match) => normalizeOriginalRecoveryText(match?.decision) === "accepted"
+      && normalizeOriginalRecoveryText(match?.applyResult?.status) !== "recovered"
+  );
+}
+
 export async function loadOriginalRecoverySessions(options = {}) {
   const limit = normalizeOriginalRecoveryCount(options.limit);
+  const resumableOnly = options.resumableOnly === true;
   const sessions = await withOptionalStore(
     ORIGINAL_RECOVERY_STORE,
     "readonly",
@@ -2449,11 +2458,26 @@ export async function loadOriginalRecoverySessions(options = {}) {
       return right.id.localeCompare(left.id);
     });
 
-  return limit > 0 ? normalizedSessions.slice(0, limit) : normalizedSessions;
+  const filteredSessions = resumableOnly
+    ? normalizedSessions.filter((session) => isNormalizedOriginalRecoverySessionResumable(session))
+    : normalizedSessions;
+
+  return limit > 0 ? filteredSessions.slice(0, limit) : filteredSessions;
 }
 
-export async function loadLatestOriginalRecoverySession() {
-  const [latestSession] = await loadOriginalRecoverySessions({ limit: 1 });
+export async function loadLatestOriginalRecoverySession(options = {}) {
+  if (options.resumableOnly !== true) {
+    const [latestResumableSession] = await loadOriginalRecoverySessions({ limit: 1, resumableOnly: true });
+
+    if (latestResumableSession) {
+      return latestResumableSession;
+    }
+  }
+
+  const [latestSession] = await loadOriginalRecoverySessions({
+    limit: 1,
+    resumableOnly: options.resumableOnly === true
+  });
   return latestSession ?? null;
 }
 
