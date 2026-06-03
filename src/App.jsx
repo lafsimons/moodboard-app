@@ -231,6 +231,7 @@ import {
   createControlledVintageProvenanceBackfillReport,
   createLegacyProvenanceBackfillReport
 } from "./lib/legacyProvenanceBackfill.js";
+import { createKnownOriginalRelativePathBackfillReport } from "./lib/knownOriginalRelativePathBackfill.js";
 import {
   applyLinkedOriginalMetadataEnrichmentReport,
   buildLinkedOriginalMetadataEnrichmentReport
@@ -3984,6 +3985,9 @@ export default function App() {
   const [legacyProvenanceBackfillReport, setLegacyProvenanceBackfillReport] = useState(null);
   const [legacyProvenanceBackfillFeedback, setLegacyProvenanceBackfillFeedback] = useState("");
   const [isLegacyProvenanceBackfillApplying, setIsLegacyProvenanceBackfillApplying] = useState(false);
+  const [knownOriginalRelativePathBackfillReport, setKnownOriginalRelativePathBackfillReport] = useState(null);
+  const [knownOriginalRelativePathBackfillFeedback, setKnownOriginalRelativePathBackfillFeedback] = useState("");
+  const [isKnownOriginalRelativePathBackfillApplying, setIsKnownOriginalRelativePathBackfillApplying] = useState(false);
   const [controlledVintageBackfillReport, setControlledVintageBackfillReport] = useState(null);
   const [controlledVintageBackfillFeedback, setControlledVintageBackfillFeedback] = useState("");
   const [isControlledVintageBackfillApplying, setIsControlledVintageBackfillApplying] = useState(false);
@@ -5445,6 +5449,93 @@ export default function App() {
     }
 
     return value || "None";
+  }
+
+  function formatKnownOriginalRelativePathBackfillReason(reason) {
+    switch (reason) {
+      case "not_preserved":
+        return "Original is not preserved";
+      case "already_backfilled":
+        return "Known original path already exists";
+      case "missing_original_relinked_relative_path":
+        return "No original relinked relative path";
+      case "invalid_original_relinked_relative_path":
+        return "Original relinked relative path is invalid";
+      default:
+        return "Skipped";
+    }
+  }
+
+  async function handleKnownOriginalRelativePathBackfillDryRun() {
+    const report = createKnownOriginalRelativePathBackfillReport(items, { exampleLimit: 20 });
+    setKnownOriginalRelativePathBackfillReport(report);
+    setKnownOriginalRelativePathBackfillFeedback(
+      `Dry run complete. ${report.eligiblePreservedItemCount} eligible preserved items, ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.invalidPathCount} invalid paths.`
+    );
+  }
+
+  async function handleKnownOriginalRelativePathBackfillApply() {
+    if (!knownOriginalRelativePathBackfillReport?.affectedCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply known original path backfill?",
+      message: `This will update ${knownOriginalRelativePathBackfillReport.affectedCount} preserved items, skip ${knownOriginalRelativePathBackfillReport.skippedCount}, and ignore ${knownOriginalRelativePathBackfillReport.invalidPathCount} invalid paths. Apply the dry-run changes now?`,
+      confirmLabel: "Apply backfill"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsKnownOriginalRelativePathBackfillApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: knownOriginalRelativePathBackfillReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with known original path backfill anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const updatedItems = knownOriginalRelativePathBackfillReport.affectedItems;
+      await saveItems(updatedItems);
+
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+
+      setItems(nextItems);
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      markMetadataDirty(updatedItems.map((item) => item.id));
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+
+      const nextReport = createKnownOriginalRelativePathBackfillReport(nextItems, { exampleLimit: 20 });
+      setKnownOriginalRelativePathBackfillReport(nextReport);
+      setKnownOriginalRelativePathBackfillFeedback(
+        `Backfilled ${updatedItems.length} preserved items. ${nextReport.eligiblePreservedItemCount} eligible preserved items remain, ${nextReport.skippedCount} skipped, ${nextReport.invalidPathCount} invalid paths.`
+      );
+    } catch (error) {
+      setKnownOriginalRelativePathBackfillFeedback(
+        formatErrorMessage(error, "Known original path backfill failed.")
+      );
+    } finally {
+      setIsKnownOriginalRelativePathBackfillApplying(false);
+    }
   }
 
   async function handleLegacyProvenanceBackfillDryRun() {
@@ -14137,6 +14228,64 @@ export default function App() {
                           >
                             Original recovery
                           </button>
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleKnownOriginalRelativePathBackfillDryRun()}
+                            disabled={isKnownOriginalRelativePathBackfillApplying}
+                          >
+                            {isKnownOriginalRelativePathBackfillApplying
+                              ? "Applying known original path backfill..."
+                              : "Dry run known original path backfill"}
+                          </button>
+                          {knownOriginalRelativePathBackfillReport ? (
+                            <section className="media-integrity-report" aria-label="Known original path backfill report">
+                              <p className="media-integrity-status">
+                                {knownOriginalRelativePathBackfillReport.eligiblePreservedItemCount} eligible preserved items · {knownOriginalRelativePathBackfillReport.affectedCount} affected · {knownOriginalRelativePathBackfillReport.skippedCount} skipped · {knownOriginalRelativePathBackfillReport.invalidPathCount} invalid paths
+                              </p>
+                              {knownOriginalRelativePathBackfillFeedback ? (
+                                <p className="form-success tag-manager-feedback">{knownOriginalRelativePathBackfillFeedback}</p>
+                              ) : null}
+                              {knownOriginalRelativePathBackfillReport.examples.affected.length ? (
+                                <div className="media-integrity-summary">
+                                  {knownOriginalRelativePathBackfillReport.examples.affected.map((example) => (
+                                    <p key={`known-original-path-affected-${example.itemId}`} className="media-integrity-summary-row">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{example.preview?.sanitizedKnownOriginalRelativePath || "None"}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {knownOriginalRelativePathBackfillReport.examples.invalid.length ? (
+                                <div className="media-integrity-issues">
+                                  {knownOriginalRelativePathBackfillReport.examples.invalid.map((example) => (
+                                    <p key={`known-original-path-invalid-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatKnownOriginalRelativePathBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {knownOriginalRelativePathBackfillReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {knownOriginalRelativePathBackfillReport.examples.skipped.map((example) => (
+                                    <p key={`known-original-path-skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatKnownOriginalRelativePathBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleKnownOriginalRelativePathBackfillApply()}
+                                disabled={!knownOriginalRelativePathBackfillReport.affectedCount || isKnownOriginalRelativePathBackfillApplying}
+                              >
+                                Apply known original path backfill
+                              </button>
+                            </section>
+                          ) : null}
                           <button
                             type="button"
                             className="ghost-button wardrobe-manage-action"
