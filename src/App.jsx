@@ -8342,9 +8342,18 @@ export default function App() {
       loadStartupItemMetadata(),
       loadStartupAppState()
     ]);
+    const actualItemCount = persistedItems?.length ?? 0;
 
-    if ((persistedItems?.length ?? 0) !== expectedItemCount) {
-      throw new Error(`Imported library persistence verification failed: expected ${expectedItemCount} items but found ${persistedItems?.length ?? 0}.`);
+    if (expectedItemCount <= 0) {
+      throw new Error(`Imported scalable backup package is empty: expected ${expectedItemCount} items and found ${actualItemCount} after commit.`);
+    }
+
+    if (actualItemCount !== expectedItemCount) {
+      throw new Error(`Imported library persistence verification failed after commit: expected ${expectedItemCount} items but found ${actualItemCount}.`);
+    }
+
+    if (actualItemCount === 0) {
+      throw new Error(`Imported library persistence verification failed after commit: expected ${expectedItemCount} items but found 0.`);
     }
 
     if (!persistedAppState) {
@@ -8588,6 +8597,10 @@ export default function App() {
       const preparedPackage = await prepareBackupPackageImportFromDirectory(directoryHandle, {
         onProgress: updateBackupPackageImportProgress
       });
+
+      if ((preparedPackage.items?.length ?? 0) <= 0) {
+        throw new Error("Scalable backup package import failed: parsed 0 items from the selected package.");
+      }
       const importedAppState = buildImportedAppStateWithProvenance(preparedPackage.appState, {
         importedAt: new Date().toISOString(),
         lastImportedBackupName: preparedPackage.backupName || directoryHandle?.name || "",
@@ -8641,7 +8654,9 @@ export default function App() {
         return;
       }
 
-      window.alert(error?.message || "This scalable backup package could not be imported.");
+      const failureMessage = error?.message || "This scalable backup package could not be imported.";
+      setBackupExportStatus(`Scalable backup package import failed: ${failureMessage}`);
+      window.alert(failureMessage);
     } finally {
       importCommitInFlightRef.current = false;
       setIsBackupPackageImporting(false);

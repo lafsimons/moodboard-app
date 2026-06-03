@@ -322,6 +322,10 @@ export async function prepareBackupPackageImportFromDirectory(rootHandle, option
   publishPackageImportProgress(onProgress, { phase: "reading-manifest", completed: 0, total: 0 });
   const manifest = await readManifestFile(rootHandle);
 
+  if (manifest.itemCount <= 0) {
+    throw new Error("Backup package contains 0 items and cannot be imported.");
+  }
+
   publishPackageImportProgress(onProgress, { phase: "reading-app-state", completed: 0, total: 0 });
   const appState = await readAppStateFile(rootHandle);
 
