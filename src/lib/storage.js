@@ -89,6 +89,56 @@ let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
 let activeMetadataSnapshotRequest = null;
 let pendingMetadataSnapshotRequest = null;
+let startupStorageDebugPhase = "idle";
+
+function isStartupStorageDebugEnabled() {
+  return true;
+}
+
+function setStartupStorageDebugPhaseValue(nextPhase = "idle") {
+  startupStorageDebugPhase = typeof nextPhase === "string" && nextPhase.trim()
+    ? nextPhase.trim()
+    : "idle";
+}
+
+function logStartupStorageDebug(event, details = {}) {
+  if (!isStartupStorageDebugEnabled()) {
+    return;
+  }
+
+  const payload = {
+    phase: startupStorageDebugPhase,
+    ...details
+  };
+
+  console.debug(`[storage-startup] ${event}`, payload);
+}
+
+function instrumentStoreWriteCounters(store, writeCounts) {
+  if (!store || typeof store !== "object") {
+    return store;
+  }
+
+  return {
+    ...store,
+    put(value) {
+      writeCounts.put += 1;
+      return store.put(value);
+    },
+    add(value, key) {
+      writeCounts.add += 1;
+      return typeof store.add === "function" ? store.add(value, key) : store.put(value);
+    },
+    delete(key) {
+      writeCounts.delete += 1;
+      return store.delete(key);
+    },
+    clear() {
+      writeCounts.clear += 1;
+      return store.clear();
+    }
+  };
+}
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
@@ -722,6 +772,10 @@ function requestToPromise(request) {
   });
 }
 
+export function setStartupStorageDebugPhase(phase = "idle") {
+  setStartupStorageDebugPhaseValue(phase);
+}
+
 function getIndexedDb() {
   const indexedDb = indexedDbFactory();
 
@@ -902,9 +956,22 @@ async function withStore(storeName, mode, run) {
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
-    const store = transaction.objectStore(storeName);
+    const writeCounts = {
+      put: 0,
+      add: 0,
+      delete: 0,
+      clear: 0
+    };
+    const store = mode === "readwrite"
+      ? instrumentStoreWriteCounters(transaction.objectStore(storeName), writeCounts)
+      : transaction.objectStore(storeName);
 
     let resultPromise;
+
+    logStartupStorageDebug("transaction-start", {
+      stores: [storeName],
+      mode
+    });
 
     try {
       const result = run(store);
@@ -917,6 +984,11 @@ async function withStore(storeName, mode, run) {
     }
 
     transaction.oncomplete = () => {
+      logStartupStorageDebug("transaction-complete", {
+        stores: [storeName],
+        mode,
+        writeCounts
+      });
       resultPromise
         .then(resolve)
         .catch(reject)
@@ -926,6 +998,13 @@ async function withStore(storeName, mode, run) {
     };
 
     transaction.onerror = () => {
+      logStartupStorageDebug("transaction-error", {
+        stores: [storeName],
+        mode,
+        writeCounts,
+        errorName: transaction.error?.name ?? "",
+        errorMessage: transaction.error?.message ?? ""
+      });
       reject(transaction.error);
       db.close();
     };
@@ -937,9 +1016,23 @@ async function withStoreWithoutMigration(storeName, mode, run) {
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
-    const store = transaction.objectStore(storeName);
+    const writeCounts = {
+      put: 0,
+      add: 0,
+      delete: 0,
+      clear: 0
+    };
+    const store = mode === "readwrite"
+      ? instrumentStoreWriteCounters(transaction.objectStore(storeName), writeCounts)
+      : transaction.objectStore(storeName);
 
     let resultPromise;
+
+    logStartupStorageDebug("transaction-start", {
+      stores: [storeName],
+      mode,
+      withoutMigration: true
+    });
 
     try {
       const result = run(store);
@@ -952,6 +1045,12 @@ async function withStoreWithoutMigration(storeName, mode, run) {
     }
 
     transaction.oncomplete = () => {
+      logStartupStorageDebug("transaction-complete", {
+        stores: [storeName],
+        mode,
+        withoutMigration: true,
+        writeCounts
+      });
       resultPromise
         .then(resolve)
         .catch(reject)
@@ -961,6 +1060,14 @@ async function withStoreWithoutMigration(storeName, mode, run) {
     };
 
     transaction.onerror = () => {
+      logStartupStorageDebug("transaction-error", {
+        stores: [storeName],
+        mode,
+        withoutMigration: true,
+        writeCounts,
+        errorName: transaction.error?.name ?? "",
+        errorMessage: transaction.error?.message ?? ""
+      });
       reject(transaction.error);
       db.close();
     };
@@ -1021,8 +1128,24 @@ async function withStores(storeNames, mode, run) {
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeNames, mode);
-    const stores = Object.fromEntries(storeNames.map((storeName) => [storeName, transaction.objectStore(storeName)]));
+    const writeCountsByStore = Object.fromEntries(storeNames.map((storeName) => [storeName, {
+      put: 0,
+      add: 0,
+      delete: 0,
+      clear: 0
+    }]));
+    const stores = Object.fromEntries(storeNames.map((storeName) => [
+      storeName,
+      mode === "readwrite"
+        ? instrumentStoreWriteCounters(transaction.objectStore(storeName), writeCountsByStore[storeName])
+        : transaction.objectStore(storeName)
+    ]));
     let resultPromise;
+
+    logStartupStorageDebug("transaction-start", {
+      stores: storeNames,
+      mode
+    });
 
     try {
       resultPromise = Promise.resolve(run(stores));
@@ -1033,6 +1156,11 @@ async function withStores(storeNames, mode, run) {
     }
 
     transaction.oncomplete = () => {
+      logStartupStorageDebug("transaction-complete", {
+        stores: storeNames,
+        mode,
+        writeCountsByStore
+      });
       resultPromise
         .then(resolve)
         .catch(reject)
@@ -1042,6 +1170,13 @@ async function withStores(storeNames, mode, run) {
     };
 
     transaction.onerror = () => {
+      logStartupStorageDebug("transaction-error", {
+        stores: storeNames,
+        mode,
+        writeCountsByStore,
+        errorName: transaction.error?.name ?? "",
+        errorMessage: transaction.error?.message ?? ""
+      });
       reject(transaction.error);
       db.close();
     };

@@ -107,6 +107,7 @@ import {
   normalizeSourceFilenameAliases
 } from "./lib/itemIdentity";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
+import { setStartupStorageDebugPhase } from "./lib/storage.js";
 import TagInput from "./components/TagInput";
 import OriginalRecoveryDialog from "./components/OriginalRecoveryDialog.jsx";
 import {
@@ -7157,6 +7158,7 @@ export default function App() {
       let fallbackItems = [];
 
       try {
+        setStartupStorageDebugPhase("bootstrap:load-startup-state");
         const [storedAppState, startupItems, latestMetadataSnapshotInfoResult] = await Promise.all([
           loadStartupAppState(),
           loadStartupItemMetadata(),
@@ -7261,6 +7263,7 @@ export default function App() {
           setFitpics(storedAppState.fitpics ?? []);
 
           try {
+            setStartupStorageDebugPhase("bootstrap:backfill-local-sync-metadata:stored-app-state");
             await backfillLocalSyncMetadata(effectiveItems, hydratedSavedBoards);
           } catch (syncMetadataError) {
             console.error("Failed to initialize local sync metadata.", syncMetadataError);
@@ -7269,6 +7272,7 @@ export default function App() {
           applyDefaultBootstrapState(effectiveItems);
 
           try {
+            setStartupStorageDebugPhase("bootstrap:backfill-local-sync-metadata:default-state");
             await backfillLocalSyncMetadata(effectiveItems, []);
           } catch (syncMetadataError) {
             console.error("Failed to initialize local sync metadata.", syncMetadataError);
@@ -7276,6 +7280,7 @@ export default function App() {
         }
 
       } catch (error) {
+        setStartupStorageDebugPhase("bootstrap:error");
         if (cancelled) {
           return;
         }
@@ -7286,6 +7291,7 @@ export default function App() {
       }
 
       if (!cancelled) {
+        setStartupStorageDebugPhase("bootstrap:complete");
         setLoading(false);
         pendingPersistenceReadyRef.current = true;
       }
@@ -7295,6 +7301,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      setStartupStorageDebugPhase("bootstrap:cancelled");
     };
   }, []);
 
@@ -7580,6 +7587,7 @@ export default function App() {
         while (pendingAppStateSaveRef.current) {
           const stateToSave = pendingAppStateSaveRef.current;
           pendingAppStateSaveRef.current = null;
+          setStartupStorageDebugPhase(`app-state-save:${reason}`);
           await saveAppState(stateToSave);
         }
       } finally {
