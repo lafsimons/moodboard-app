@@ -15,13 +15,17 @@ import {
   exportBackup,
   getOrCreateDeviceId,
   loadLatestMetadataSnapshotInfo,
+  loadIndexedDbDebugInfo,
+  loadItemById,
   loadMetadataSnapshots,
+  loadLatestOriginalRecoverySession,
   getSyncMetadata,
   hasOriginalImageBlob,
   loadAppState,
   loadItemMediaAssetById,
   loadItems,
   markFullBackupExported,
+  markItemOriginalRecovered,
   markMetadataChanged,
   loadOriginalImageBlob,
   loadOriginalImageBlobEntry,
@@ -36,6 +40,7 @@ import {
   resetToDefaults,
   saveAppState,
   saveItem,
+  saveOriginalRecoverySession,
   saveOriginalImageBlob,
   deleteItem,
   upsertSyncMetadata
@@ -670,11 +675,12 @@ test("db upgrade creates sync stores", async () => {
   await getOrCreateDeviceId();
 
   const database = indexedDb.getDatabase("moodboard-app-db");
-  assert.equal(database.version, 6);
+  assert.equal(database.version, 8);
   assert.equal(database.stores.has("itemMediaAssets"), true);
   assert.equal(database.stores.has("syncState"), true);
   assert.equal(database.stores.has("syncMetadata"), true);
   assert.equal(database.stores.has("metadataSnapshots"), true);
+  assert.equal(database.stores.has("originalRecoverySessions"), true);
 });
 
 test("startup loaders upgrade an older database and create metadataSnapshots without losing stored library data", async () => {
@@ -706,7 +712,7 @@ test("startup loaders upgrade an older database and create metadataSnapshots wit
     loadLatestMetadataSnapshotInfo()
   ]);
 
-  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).version, 6);
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).version, 8);
   assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).stores.has("metadataSnapshots"), true);
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "Imported item");
@@ -745,6 +751,118 @@ test("missing metadataSnapshots store returns empty snapshot info without breaki
   assert.equal(items[0].title, "Persisted item");
   assert.equal(appState?.localSafety?.metadataDirtySinceSnapshot, true);
   assert.deepEqual(appState?.localSafety?.changedItemIdsSinceSnapshot, ["item-1"]);
+});
+
+test("startup loaders upgrade an older database and create originalRecoverySessions without losing stored library data", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 7);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.createObjectStore("itemMediaAssets", { keyPath: "key" });
+  database.createObjectStore("syncState", { keyPath: "key" });
+  database.createObjectStore("syncMetadata", { keyPath: "key" });
+  database.createObjectStore("metadataSnapshots", { keyPath: "id" });
+  database.stores.get("items").records.set("item-1", {
+    id: "item-1",
+    itemUuid: "uuid-1",
+    title: "Persisted item"
+  });
+  database.stores.get("appState").records.set("state", {
+    key: "state",
+    value: {
+      savedOutfits: []
+    }
+  });
+
+  const [items, latestRecoverySession] = await Promise.all([
+    loadStartupItemMetadata(),
+    loadLatestOriginalRecoverySession()
+  ]);
+
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).version, 8);
+  assert.equal(indexedDb.getDatabase(INDEXED_DB_NAME).stores.has("originalRecoverySessions"), true);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, "Persisted item");
+  assert.equal(latestRecoverySession, null);
+});
+
+test("missing originalRecoverySessions store returns empty recovery state and does not fail saves", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 8);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.createObjectStore("itemMediaAssets", { keyPath: "key" });
+  database.createObjectStore("syncState", { keyPath: "key" });
+  database.createObjectStore("syncMetadata", { keyPath: "key" });
+  database.createObjectStore("metadataSnapshots", { keyPath: "id" });
+
+  const latestRecoverySessionBeforeSave = await loadLatestOriginalRecoverySession();
+  const savedRecoverySession = await saveOriginalRecoverySession({
+    id: "session-1",
+    app: "mba",
+    status: "scanned",
+    sourceLabel: "Archive",
+    summary: {
+      scannedFileCount: 5
+    },
+    matches: []
+  });
+  const latestRecoverySessionAfterSave = await loadLatestOriginalRecoverySession();
+
+  assert.equal(latestRecoverySessionBeforeSave, null);
+  assert.equal(savedRecoverySession.id, "session-1");
+  assert.equal(savedRecoverySession.summary.scannedFileCount, 5);
+  assert.equal(latestRecoverySessionAfterSave, null);
+});
+
+test("loadIndexedDbDebugInfo reports upgraded version and originalRecoverySessions store", async () => {
+  installFakeIndexedDb();
+
+  await getOrCreateDeviceId();
+
+  const debugInfo = await loadIndexedDbDebugInfo();
+
+  assert.equal(debugInfo.name, INDEXED_DB_NAME);
+  assert.equal(debugInfo.version, 8);
+  assert.equal(debugInfo.stores.includes("originalRecoverySessions"), true);
+});
+
+test("upgrading a version-7 database missing originalRecoverySessions allows save load and refresh recovery session flow", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const database = seedDatabase(indexedDb, INDEXED_DB_NAME, 7);
+
+  database.createObjectStore("items", { keyPath: "id" });
+  database.createObjectStore("appState", { keyPath: "key" });
+  database.createObjectStore("originalImageBlobs", { keyPath: "itemUuid" });
+  database.createObjectStore("itemMediaAssets", { keyPath: "key" });
+  database.createObjectStore("syncState", { keyPath: "key" });
+  database.createObjectStore("syncMetadata", { keyPath: "key" });
+  database.createObjectStore("metadataSnapshots", { keyPath: "id" });
+
+  const debugInfoAfterUpgrade = await loadIndexedDbDebugInfo();
+  const savedSession = await saveOriginalRecoverySession({
+    id: "session-upgraded",
+    app: "mba",
+    status: "scanned",
+    sourceLabel: "Archive",
+    summary: {
+      scannedFileCount: 7
+    },
+    matches: []
+  });
+  const latestRecoverySession = await loadLatestOriginalRecoverySession();
+  const debugInfoAfterSave = await loadIndexedDbDebugInfo();
+
+  assert.equal(debugInfoAfterUpgrade.version, 8);
+  assert.equal(debugInfoAfterUpgrade.stores.includes("originalRecoverySessions"), true);
+  assert.equal(savedSession.id, "session-upgraded");
+  assert.equal(latestRecoverySession?.id, "session-upgraded");
+  assert.equal(latestRecoverySession?.summary?.scannedFileCount, 7);
+  assert.equal(debugInfoAfterSave.stores.includes("originalRecoverySessions"), true);
 });
 
 test("getOrCreateDeviceId creates and reuses a stable local device id", async () => {
@@ -979,6 +1097,108 @@ test("reference create and update mark metadata pending upload", async () => {
   });
 
   const updatedMetadata = await getSyncMetadata("mba:reference:uuid-1");
+  assert.equal(updatedMetadata.syncStatus, "pending_upload");
+  assert.equal(updatedMetadata.recordVersion, 5);
+  assert.equal(updatedMetadata.lastSyncedAt, "2026-05-18T12:00:00.000Z");
+  assert.equal(updatedMetadata.lastSyncError, "");
+  assert.equal(updatedMetadata.pendingDelete, false);
+});
+
+test("markItemOriginalRecovered updates only original metadata and bumps sync metadata without materializing media", async () => {
+  installFakeIndexedDb();
+
+  await saveItem({
+    id: "item-recovery-metadata",
+    itemUuid: "uuid-recovery-metadata",
+    name: "Recovery Metadata",
+    sourceOriginalFilename: "",
+    sourceFilenameAliases: ["archive-copy.jpg"],
+    originalPreserved: false,
+    relinkStatus: "missing",
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-recovery",
+        mimeType: "image/webp",
+        width: 640,
+        height: 480,
+        originalFilename: "preview-recovery.webp"
+      },
+      thumbnail: {
+        src: "data:image/webp;base64,thumb-recovery",
+        mimeType: "image/webp",
+        width: 320,
+        height: 240,
+        originalFilename: "thumb-recovery.webp"
+      }
+    }
+  });
+
+  const createdMetadata = await getSyncMetadata("mba:reference:uuid-recovery-metadata");
+  await upsertSyncMetadata({
+    ...createdMetadata,
+    syncStatus: "synced",
+    recordVersion: 4,
+    lastSyncedAt: "2026-05-18T12:00:00.000Z",
+    lastSyncError: "old-error"
+  });
+
+  const existingItem = await loadItemById("item-recovery-metadata");
+  const originalConsoleLog = console.log;
+  let consoleLogCount = 0;
+  console.log = () => {
+    consoleLogCount += 1;
+  };
+
+  let recoveredItem;
+  try {
+    recoveredItem = await markItemOriginalRecovered(existingItem, {
+      relinkStatus: "linked",
+      originalLinkedAt: "2026-06-01T12:34:56.000Z",
+      originalRelinkedFrom: "original-recovery",
+      originalRelinkedFilename: "recovered-fast.jpg",
+      updatedAt: "2026-06-01T12:34:56.000Z",
+      sourceOriginalFilename: "recovered-fast.jpg",
+      sourceFilenameAliases: ["archive-copy.jpg", "preview-recovery.webp", "recovered-fast.jpg"],
+      images: {
+        original: {
+          mimeType: "image/jpeg",
+          width: 1200,
+          height: 800,
+          fileSize: 1234,
+          originalFilename: "recovered-fast.jpg"
+        }
+      }
+    });
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  assert.equal(consoleLogCount, 0);
+  assert.equal(recoveredItem.originalPreserved, true);
+  assert.equal(recoveredItem.relinkStatus, "linked");
+  assert.equal(recoveredItem.sourceOriginalFilename, "recovered-fast.jpg");
+  assert.deepEqual(recoveredItem.sourceFilenameAliases, ["archive-copy.jpg", "preview-recovery.webp", "recovered-fast.jpg"]);
+  assert.equal(recoveredItem.images.preview.src, "");
+  assert.equal(recoveredItem.images.thumbnail.src, "");
+  assert.equal(recoveredItem.images.original.src, "");
+  assert.equal(recoveredItem.images.original.width, 1200);
+  assert.equal(recoveredItem.images.original.height, 800);
+
+  const savedItem = await loadItemById("item-recovery-metadata");
+  assert.equal(savedItem.originalPreserved, true);
+  assert.equal(savedItem.relinkStatus, "linked");
+  assert.equal(savedItem.originalRelinkedFrom, "original-recovery");
+  assert.equal(savedItem.images.preview.src, "");
+  assert.equal(savedItem.images.thumbnail.src, "");
+  assert.equal(savedItem.images.original.src, "");
+  assert.equal(savedItem.images.original.originalFilename, "recovered-fast.jpg");
+
+  const resolvedPreview = await loadItemMediaAssetById("item-recovery-metadata", "preview");
+  const resolvedThumbnail = await loadItemMediaAssetById("item-recovery-metadata", "thumbnail");
+  assert.equal(resolvedPreview?.src, "data:image/webp;base64,preview-recovery");
+  assert.equal(resolvedThumbnail?.src, "data:image/webp;base64,thumb-recovery");
+
+  const updatedMetadata = await getSyncMetadata("mba:reference:uuid-recovery-metadata");
   assert.equal(updatedMetadata.syncStatus, "pending_upload");
   assert.equal(updatedMetadata.recordVersion, 5);
   assert.equal(updatedMetadata.lastSyncedAt, "2026-05-18T12:00:00.000Z");

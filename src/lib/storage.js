@@ -26,7 +26,7 @@ import {
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
-const DB_VERSION = 6;
+const DB_VERSION = 8;
 export const BACKUP_VERSION = 2;
 export const BACKUP_EXPORT_WARN_BYTES = 150 * 1024 * 1024;
 export const BACKUP_IMPORT_MAX_BYTES = 250 * 1024 * 1024;
@@ -41,6 +41,7 @@ const ORIGINAL_STORE = "originalImageBlobs";
 const SYNC_STATE_STORE = "syncState";
 const SYNC_METADATA_STORE = "syncMetadata";
 const METADATA_SNAPSHOT_STORE = "metadataSnapshots";
+const ORIGINAL_RECOVERY_STORE = "originalRecoverySessions";
 const SYNC_STATE_KEY = "state";
 const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
@@ -57,6 +58,31 @@ const SNAPSHOT_REASON_PRIORITY = {
   "before-dedupe": 3,
   manual: 4
 };
+const ORIGINAL_RECOVERY_SESSION_STATUSES = [
+  "idle",
+  "scanned",
+  "reviewed",
+  "applying",
+  "completed",
+  "completed_with_errors"
+];
+const ORIGINAL_RECOVERY_MATCH_OUTCOMES = [
+  "exact_single",
+  "strong_single",
+  "possible_single",
+  "ambiguous_multiple",
+  "weak_only",
+  "no_match",
+  "excluded"
+];
+const ORIGINAL_RECOVERY_DECISIONS = [
+  "accepted",
+  "rejected",
+  "skipped",
+  "undecided",
+  "needs_rescan"
+];
+const ORIGINAL_RECOVERY_APPLY_RESULTS = ["recovered", "failed", "skipped"];
 
 let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
@@ -365,6 +391,32 @@ function buildReferenceSyncMetadata(item, deviceId, existingRecord = null) {
     lastSyncError: "",
     lastLocalChangeAt: ""
   });
+}
+
+async function markReferenceSyncMetadataDirtyForItem(item) {
+  const stableKey = normalizeSyncText(item?.itemUuid);
+
+  if (!stableKey) {
+    return null;
+  }
+
+  const [deviceId, existingRecord] = await Promise.all([
+    getOrCreateDeviceId(),
+    getSyncMetadata(createReferenceSyncMetadataKey(stableKey))
+  ]);
+
+  const nextRecord = createNextDirtySyncMetadataRecord({
+    key: createReferenceSyncMetadataKey(stableKey),
+    entityType: "mbaReference",
+    stableKey,
+    localId: normalizeSyncText(item?.id),
+    existingRecord,
+    deviceId,
+    pendingDelete: false
+  });
+
+  await upsertSyncMetadata(nextRecord);
+  return nextRecord;
 }
 
 function buildSavedBoardSyncMetadata(savedOutfit, deviceId, existingRecord = null) {
@@ -712,6 +764,10 @@ function openDatabaseByName(name) {
       if (!db.objectStoreNames.contains(METADATA_SNAPSHOT_STORE)) {
         db.createObjectStore(METADATA_SNAPSHOT_STORE, { keyPath: "id" });
       }
+
+      if (!db.objectStoreNames.contains(ORIGINAL_RECOVERY_STORE)) {
+        db.createObjectStore(ORIGINAL_RECOVERY_STORE, { keyPath: "id" });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -721,6 +777,18 @@ function openDatabaseByName(name) {
 
 function hasObjectStore(database, storeName) {
   return Boolean(database?.objectStoreNames?.contains?.(storeName));
+}
+
+function getObjectStoreNames(database) {
+  if (database?.objectStoreNames && typeof database.objectStoreNames[Symbol.iterator] === "function") {
+    return Array.from(database.objectStoreNames);
+  }
+
+  if (database?.stores instanceof Map) {
+    return [...database.stores.keys()];
+  }
+
+  return [];
 }
 
 function isMissingObjectStoreError(error) {
@@ -811,6 +879,20 @@ async function openDatabase() {
 
 async function openDatabaseWithoutMigration() {
   return openDatabaseByName(INDEXED_DB_NAME);
+}
+
+export async function loadIndexedDbDebugInfo() {
+  const db = await openDatabase();
+
+  try {
+    return {
+      name: INDEXED_DB_NAME,
+      version: db.version,
+      stores: getObjectStoreNames(db)
+    };
+  } finally {
+    db.close();
+  }
 }
 
 async function withStore(storeName, mode, run) {
@@ -1459,6 +1541,28 @@ export async function loadItemMediaAssetById(itemId, variant = "preview") {
   return null;
 }
 
+export async function loadItemById(itemId, options = {}) {
+  const normalizedItemId = typeof itemId === "string" ? itemId.trim() : "";
+
+  if (!normalizedItemId) {
+    return null;
+  }
+
+  const item = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(normalizedItemId));
+
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+
+  const migratedItem = migrateReferenceMetadataToTags(item);
+
+  if (options.includeMediaPayloads) {
+    return materializeStoredItemMedia(migratedItem);
+  }
+
+  return stripItemInlineMediaFields(migratedItem);
+}
+
 export async function loadMediaIntegritySnapshot() {
   return withStores([ITEM_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE], "readonly", async ({ items, itemMediaAssets, originalImageBlobs }) => {
     const [itemRecords, itemMediaRecords, originalBlobRecords] = await Promise.all([
@@ -1575,7 +1679,6 @@ export async function saveItem(item) {
     }
   }
 
-  const stableKey = normalizeSyncText(storedItem?.itemUuid);
   const materializedMergedItem = await materializeStoredItemMedia(mergedItem);
   const afterSnapshot = await createSaveMediaDebugSnapshot(storedItem);
 
@@ -1585,28 +1688,64 @@ export async function saveItem(item) {
     snapshot: afterSnapshot
   });
 
-  if (!stableKey) {
-    return materializedMergedItem;
-  }
-
-  const [deviceId, existingRecord] = await Promise.all([
-    getOrCreateDeviceId(),
-    getSyncMetadata(createReferenceSyncMetadataKey(stableKey))
-  ]);
-
-  await upsertSyncMetadata(
-    createNextDirtySyncMetadataRecord({
-      key: createReferenceSyncMetadataKey(stableKey),
-      entityType: "mbaReference",
-      stableKey,
-      localId: normalizeSyncText(storedItem?.id),
-      existingRecord,
-      deviceId,
-      pendingDelete: false
-    })
-  );
+  await markReferenceSyncMetadataDirtyForItem(storedItem);
 
   return materializedMergedItem;
+}
+
+export async function markItemOriginalRecovered(itemOrId, recoveryItem = {}) {
+  const existingItem = itemOrId && typeof itemOrId === "object"
+    ? itemOrId
+    : await loadItemById(itemOrId);
+
+  if (!existingItem?.id) {
+    throw new Error("Reference could not be found.");
+  }
+
+  const normalizedExistingImages = normalizeItemImages(existingItem);
+  const incomingImages = normalizeItemImages(recoveryItem);
+  const nextItem = {
+    ...existingItem,
+    originalPreserved: true,
+    relinkStatus: typeof recoveryItem?.relinkStatus === "string" && recoveryItem.relinkStatus.trim()
+      ? recoveryItem.relinkStatus.trim()
+      : "linked",
+    originalLinkedAt: normalizeSyncText(recoveryItem?.originalLinkedAt),
+    originalRelinkedFrom: normalizeSyncText(recoveryItem?.originalRelinkedFrom),
+    originalRelinkedFilename: normalizeSyncText(recoveryItem?.originalRelinkedFilename),
+    updatedAt: normalizeSyncText(recoveryItem?.updatedAt) || normalizeSyncText(existingItem?.updatedAt),
+    sourceFilenameAliases: Array.isArray(recoveryItem?.sourceFilenameAliases)
+      ? recoveryItem.sourceFilenameAliases
+      : Array.isArray(existingItem?.sourceFilenameAliases)
+        ? existingItem.sourceFilenameAliases
+        : [],
+    sourceOriginalFilename: normalizeSyncText(existingItem?.sourceOriginalFilename) || normalizeSyncText(recoveryItem?.sourceOriginalFilename),
+    images: {
+      ...(existingItem?.images && typeof existingItem.images === "object" && !Array.isArray(existingItem.images)
+        ? existingItem.images
+        : {}),
+      preview: normalizedExistingImages.preview,
+      thumbnail: normalizedExistingImages.thumbnail,
+      original: incomingImages.original
+    }
+  };
+  const storedItem = stripItemInlineMediaFields(nextItem);
+
+  await withStore(ITEM_STORE, "readwrite", (store) => store.put(storedItem));
+  await markReferenceSyncMetadataDirtyForItem(storedItem);
+
+  return {
+    ...nextItem,
+    images: {
+      ...(nextItem?.images && typeof nextItem.images === "object" && !Array.isArray(nextItem.images) ? nextItem.images : {}),
+      preview: normalizedExistingImages.preview,
+      thumbnail: normalizedExistingImages.thumbnail,
+      original: {
+        ...incomingImages.original,
+        src: ""
+      }
+    }
+  };
 }
 
 export async function deleteItemsByIds(ids) {
@@ -2069,6 +2208,267 @@ function markMetadataSnapshotFailed(localSafety, error) {
   });
 }
 
+function createOriginalRecoverySessionId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `original_recovery_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function normalizeOriginalRecoveryText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeOriginalRecoveryCount(value) {
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) && parsedValue >= 0 ? Math.round(parsedValue) : 0;
+}
+
+function normalizeOriginalRecoveryTimestamp(value) {
+  const trimmedValue = normalizeOriginalRecoveryText(value);
+
+  if (!trimmedValue) {
+    return "";
+  }
+
+  const parsedValue = Date.parse(trimmedValue);
+  return Number.isFinite(parsedValue) ? new Date(parsedValue).toISOString() : "";
+}
+
+function normalizeOriginalRecoveryReasonList(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((reason) => normalizeOriginalRecoveryText(reason))
+    .filter(Boolean);
+}
+
+function normalizeOriginalRecoveryDecision(value, fallback = "undecided") {
+  const normalizedValue = normalizeOriginalRecoveryText(value);
+  return ORIGINAL_RECOVERY_DECISIONS.includes(normalizedValue)
+    ? normalizedValue
+    : ORIGINAL_RECOVERY_DECISIONS.includes(fallback)
+      ? fallback
+      : "undecided";
+}
+
+function normalizeOriginalRecoveryMatchOutcome(value, fallback = "no_match") {
+  const normalizedValue = normalizeOriginalRecoveryText(value);
+  return ORIGINAL_RECOVERY_MATCH_OUTCOMES.includes(normalizedValue)
+    ? normalizedValue
+    : ORIGINAL_RECOVERY_MATCH_OUTCOMES.includes(fallback)
+      ? fallback
+      : "no_match";
+}
+
+function normalizeOriginalRecoveryApplyResult(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return null;
+  }
+
+  const status = normalizeOriginalRecoveryText(record.status);
+
+  if (!ORIGINAL_RECOVERY_APPLY_RESULTS.includes(status)) {
+    return null;
+  }
+
+  return {
+    status,
+    message: normalizeOriginalRecoveryText(record.message),
+    appliedAt: normalizeOriginalRecoveryTimestamp(record.appliedAt)
+  };
+}
+
+function normalizeOriginalRecoveryMatchFlags(match = {}) {
+  return {
+    classification: normalizeOriginalRecoveryText(match.classification),
+    filenameMatch: Boolean(match.filenameMatch),
+    sizeMatch: Boolean(match.sizeMatch),
+    dimensionMatch: Boolean(match.dimensionMatch),
+    lastModifiedMatch: Boolean(match.lastModifiedMatch),
+    mimeTypeMatch: Boolean(match.mimeTypeMatch),
+    supportingMatches: normalizeOriginalRecoveryCount(match.supportingMatches)
+  };
+}
+
+function normalizeOriginalRecoveryCandidateRecord(record = {}) {
+  const id = normalizeOriginalRecoveryText(record.id);
+
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    sourceLabel: normalizeOriginalRecoveryText(record.sourceLabel),
+    relativePath: normalizeOriginalRecoveryText(record.relativePath),
+    fileName: normalizeOriginalRecoveryText(record.fileName),
+    sourceFileSize: normalizeOriginalRecoveryCount(record.sourceFileSize),
+    sourceImageWidth: normalizeOriginalRecoveryCount(record.sourceImageWidth),
+    sourceImageHeight: normalizeOriginalRecoveryCount(record.sourceImageHeight),
+    sourceLastModified: normalizeOriginalRecoveryCount(record.sourceLastModified),
+    mimeType: normalizeOriginalRecoveryText(record.mimeType),
+    fingerprint: normalizeOriginalRecoveryText(record.fingerprint),
+    match: normalizeOriginalRecoveryMatchFlags(record.match),
+    reasons: normalizeOriginalRecoveryReasonList(record.reasons)
+  };
+}
+
+function normalizeOriginalRecoveryMatchRecord(record = {}) {
+  const itemId = normalizeOriginalRecoveryText(record.itemId);
+
+  if (!itemId) {
+    return null;
+  }
+
+  return {
+    itemId,
+    itemUuid: normalizeOriginalRecoveryText(record.itemUuid),
+    itemName: normalizeOriginalRecoveryText(record.itemName),
+    outcome: normalizeOriginalRecoveryMatchOutcome(record.outcome, "excluded"),
+    decision: normalizeOriginalRecoveryDecision(record.decision),
+    exclusionReason: normalizeOriginalRecoveryText(record.exclusionReason),
+    relinkStatus: normalizeOriginalRecoveryText(record.relinkStatus),
+    selectedCandidateId: normalizeOriginalRecoveryText(record.selectedCandidateId),
+    sourceRelativePath: normalizeOriginalRecoveryText(record.sourceRelativePath),
+    sourceOriginalFilename: normalizeOriginalRecoveryText(record.sourceOriginalFilename),
+    sourceFilenameAliases: normalizeReasonableStringArray(record.sourceFilenameAliases),
+    sourceFileSize: normalizeOriginalRecoveryCount(record.sourceFileSize),
+    sourceImageWidth: normalizeOriginalRecoveryCount(record.sourceImageWidth),
+    sourceImageHeight: normalizeOriginalRecoveryCount(record.sourceImageHeight),
+    sourceLastModified: normalizeOriginalRecoveryCount(record.sourceLastModified),
+    mimeType: normalizeOriginalRecoveryText(record.mimeType),
+    candidates: (Array.isArray(record.candidates) ? record.candidates : [])
+      .map((candidate) => normalizeOriginalRecoveryCandidateRecord(candidate))
+      .filter(Boolean),
+    applyResult: normalizeOriginalRecoveryApplyResult(record.applyResult)
+  };
+}
+
+function normalizeOriginalRecoverySummary(summary = {}) {
+  return {
+    itemCount: normalizeOriginalRecoveryCount(summary.itemCount),
+    eligibleItemCount: normalizeOriginalRecoveryCount(summary.eligibleItemCount),
+    excludedItemCount: normalizeOriginalRecoveryCount(summary.excludedItemCount),
+    scannedFileCount: normalizeOriginalRecoveryCount(summary.scannedFileCount),
+    approvedCount: normalizeOriginalRecoveryCount(summary.approvedCount),
+    unresolvedCount: normalizeOriginalRecoveryCount(summary.unresolvedCount),
+    recoveredCount: normalizeOriginalRecoveryCount(summary.recoveredCount),
+    failedCount: normalizeOriginalRecoveryCount(summary.failedCount),
+    needsRescanCount: normalizeOriginalRecoveryCount(summary.needsRescanCount),
+    outcomeCounts: Object.fromEntries(
+      Object.entries(summary.outcomeCounts && typeof summary.outcomeCounts === "object" ? summary.outcomeCounts : {}).map(
+        ([key, value]) => [normalizeOriginalRecoveryText(key), normalizeOriginalRecoveryCount(value)]
+      )
+    ),
+    decisionCounts: Object.fromEntries(
+      Object.entries(summary.decisionCounts && typeof summary.decisionCounts === "object" ? summary.decisionCounts : {}).map(
+        ([key, value]) => [normalizeOriginalRecoveryText(key), normalizeOriginalRecoveryCount(value)]
+      )
+    )
+  };
+}
+
+function normalizeReasonableStringArray(value) {
+  const seen = new Set();
+
+  return (Array.isArray(value) ? value : [])
+    .map((entry) => normalizeOriginalRecoveryText(entry))
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) {
+        return false;
+      }
+
+      seen.add(entry);
+      return true;
+    });
+}
+
+function normalizeOriginalRecoverySessionRecord(record = {}) {
+  const id = normalizeOriginalRecoveryText(record.id) || createOriginalRecoverySessionId();
+  const now = new Date().toISOString();
+  const createdAt = normalizeOriginalRecoveryTimestamp(record.createdAt) || normalizeOriginalRecoveryTimestamp(record.updatedAt) || now;
+  const updatedAt = normalizeOriginalRecoveryTimestamp(record.updatedAt) || createdAt;
+  const status = normalizeOriginalRecoveryText(record.status);
+
+  return {
+    id,
+    app: normalizeOriginalRecoveryText(record.app),
+    sourceLabel: normalizeOriginalRecoveryText(record.sourceLabel),
+    createdAt,
+    updatedAt,
+    status: ORIGINAL_RECOVERY_SESSION_STATUSES.includes(status) ? status : "idle",
+    summary: normalizeOriginalRecoverySummary(record.summary),
+    matches: (Array.isArray(record.matches) ? record.matches : [])
+      .map((match) => normalizeOriginalRecoveryMatchRecord(match))
+      .filter(Boolean)
+  };
+}
+
+export async function loadOriginalRecoverySessions(options = {}) {
+  const limit = normalizeOriginalRecoveryCount(options.limit);
+  const sessions = await withOptionalStore(
+    ORIGINAL_RECOVERY_STORE,
+    "readonly",
+    () => [],
+    (store) => store.getAll()
+  );
+  const normalizedSessions = (Array.isArray(sessions) ? sessions : [])
+    .map((session) => normalizeOriginalRecoverySessionRecord(session))
+    .sort((left, right) => {
+      const timeDelta = Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0);
+
+      if (timeDelta !== 0) {
+        return timeDelta;
+      }
+
+      return right.id.localeCompare(left.id);
+    });
+
+  return limit > 0 ? normalizedSessions.slice(0, limit) : normalizedSessions;
+}
+
+export async function loadLatestOriginalRecoverySession() {
+  const [latestSession] = await loadOriginalRecoverySessions({ limit: 1 });
+  return latestSession ?? null;
+}
+
+export async function loadOriginalRecoverySessionById(sessionId) {
+  const normalizedSessionId = normalizeOriginalRecoveryText(sessionId);
+
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const session = await withOptionalStore(
+    ORIGINAL_RECOVERY_STORE,
+    "readonly",
+    () => null,
+    (store) => store.get(normalizedSessionId)
+  );
+
+  return session ? normalizeOriginalRecoverySessionRecord(session) : null;
+}
+
+export async function saveOriginalRecoverySession(session) {
+  const normalizedSession = normalizeOriginalRecoverySessionRecord(session);
+
+  await withOptionalStore(
+    ORIGINAL_RECOVERY_STORE,
+    "readwrite",
+    () => {
+      console.warn("Original recovery store is unavailable; continuing without persisted recovery sessions.");
+      return undefined;
+    },
+    (store) => store.put(normalizedSession)
+  );
+
+  return normalizedSession;
+}
+
+export async function clearOriginalRecoverySessions() {
+  await withOptionalStore(ORIGINAL_RECOVERY_STORE, "readwrite", () => undefined, (store) => store.clear());
+}
+
 export async function pruneMetadataSnapshots(options = {}) {
   const retainCount = Math.max(1, normalizeSnapshotCount(options.retainCount) || METADATA_SNAPSHOT_RETENTION_COUNT);
   const snapshots = await loadMetadataSnapshots();
@@ -2302,14 +2702,15 @@ export async function replaceWithPreparedBackup(backup) {
   const validatedBackup = validatePreparedBackupForReplacement(backup);
 
   await withStores(
-    [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE],
+    [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE, ORIGINAL_RECOVERY_STORE],
     "readwrite",
-    ({ items, appState, itemMediaAssets, originalImageBlobs, syncMetadata }) => {
+    ({ items, appState, itemMediaAssets, originalImageBlobs, syncMetadata, originalRecoverySessions }) => {
     items.clear();
     appState.clear();
     itemMediaAssets.clear();
     originalImageBlobs.clear();
     syncMetadata.clear();
+    originalRecoverySessions.clear();
 
     validatedBackup.items.forEach((item) => items.put(item));
     appState.put({
@@ -2326,14 +2727,15 @@ export async function replaceWithPreparedBackupPackage(preparedPackage) {
   const validatedPackage = validatePreparedBackupPackageForReplacement(preparedPackage);
 
   await withStores(
-    [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE],
+    [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE, ORIGINAL_RECOVERY_STORE],
     "readwrite",
-    ({ items, appState, itemMediaAssets, originalImageBlobs, syncMetadata }) => {
+    ({ items, appState, itemMediaAssets, originalImageBlobs, syncMetadata, originalRecoverySessions }) => {
       items.clear();
       appState.clear();
       itemMediaAssets.clear();
       originalImageBlobs.clear();
       syncMetadata.clear();
+      originalRecoverySessions.clear();
 
       validatedPackage.items.forEach((item) => items.put(item));
       validatedPackage.itemMediaAssets.forEach((assetRecord) => itemMediaAssets.put(assetRecord));

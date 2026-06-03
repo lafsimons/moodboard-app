@@ -116,6 +116,7 @@ export function stripItemMediaPayloads(record = {}) {
     originalLinkedAt: normalizeText(record?.originalLinkedAt),
     originalRelinkedFrom: normalizeText(record?.originalRelinkedFrom),
     originalRelinkedFilename: normalizeText(record?.originalRelinkedFilename),
+    originalRelinkedRelativePath: normalizeText(record?.originalRelinkedRelativePath),
     originalFilename: normalizeText(record?.originalFilename),
     fileExtension: normalizeText(record?.fileExtension),
     fileSize: normalizeNumber(record?.fileSize),

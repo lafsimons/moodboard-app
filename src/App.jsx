@@ -104,6 +104,7 @@ import {
 import { normalizeItemSourceIdentity, normalizeSourceFilenameAliases } from "./lib/itemIdentity";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
 import TagInput from "./components/TagInput";
+import OriginalRecoveryDialog from "./components/OriginalRecoveryDialog.jsx";
 import {
   getAllTags,
   migrateReferenceMetadataToTags,
@@ -203,6 +204,30 @@ import {
 } from "./repositories/itemsRepository.js";
 import { loadStartupAppState, saveAppState } from "./repositories/appStateRepository.js";
 import { backfillLocalSyncMetadata } from "./repositories/syncRepository.js";
+import {
+  applyOriginalRecoverySession,
+  exportOriginalRecoveryReport,
+  loadLatestOriginalRecoverySession,
+  scanOriginalRecoverySource,
+  saveOriginalRecoverySession,
+  updateOriginalRecoveryCandidateSelection,
+  updateOriginalRecoveryDecision
+} from "./repositories/originalRecoveryRepository.js";
+import {
+  getOriginalRecoveryEntryFileWithFileSystemAccess,
+  getOriginalRecoveryEntryMetadataWithFileSystemAccess,
+  isOriginalRecoveryFileSystemAdapterSupported,
+  scanOriginalRecoveryDirectoryWithFileSystemAccess
+} from "./lib/originalRecoveryFileSystemAdapter.js";
+import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
+import {
+  createControlledVintageProvenanceBackfillReport,
+  createLegacyProvenanceBackfillReport
+} from "./lib/legacyProvenanceBackfill.js";
+import {
+  applyLinkedOriginalMetadataEnrichmentReport,
+  buildLinkedOriginalMetadataEnrichmentReport
+} from "./repositories/originalMetadataEnrichmentRepository.js";
 
 const imageAssets = import.meta.glob("../images/*.{png,jpg,jpeg,webp,avif}", {
   eager: true,
@@ -3938,6 +3963,25 @@ export default function App() {
   const [confirmation, setConfirmation] = useState(null);
   const [originalReconnectionDialog, setOriginalReconnectionDialog] = useState(null);
   const [originalReconnectionFeedback, setOriginalReconnectionFeedback] = useState("");
+  const [originalRecoveryDialogOpen, setOriginalRecoveryDialogOpen] = useState(false);
+  const [originalRecoverySession, setOriginalRecoverySession] = useState(null);
+  const [originalRecoveryBucket, setOriginalRecoveryBucket] = useState("all");
+  const [originalRecoveryFeedback, setOriginalRecoveryFeedback] = useState("");
+  const [originalRecoveryError, setOriginalRecoveryError] = useState("");
+  const [isOriginalRecoveryScanning, setIsOriginalRecoveryScanning] = useState(false);
+  const [isOriginalRecoveryApplying, setIsOriginalRecoveryApplying] = useState(false);
+  const [originalRecoveryScanProgress, setOriginalRecoveryScanProgress] = useState("");
+  const [originalRecoveryRuntimeSessionId, setOriginalRecoveryRuntimeSessionId] = useState("");
+  const [originalRecoveryCandidateEntriesById, setOriginalRecoveryCandidateEntriesById] = useState({});
+  const [legacyProvenanceBackfillReport, setLegacyProvenanceBackfillReport] = useState(null);
+  const [legacyProvenanceBackfillFeedback, setLegacyProvenanceBackfillFeedback] = useState("");
+  const [isLegacyProvenanceBackfillApplying, setIsLegacyProvenanceBackfillApplying] = useState(false);
+  const [controlledVintageBackfillReport, setControlledVintageBackfillReport] = useState(null);
+  const [controlledVintageBackfillFeedback, setControlledVintageBackfillFeedback] = useState("");
+  const [isControlledVintageBackfillApplying, setIsControlledVintageBackfillApplying] = useState(false);
+  const [linkedOriginalMetadataEnrichmentReport, setLinkedOriginalMetadataEnrichmentReport] = useState(null);
+  const [linkedOriginalMetadataEnrichmentFeedback, setLinkedOriginalMetadataEnrichmentFeedback] = useState("");
+  const [isLinkedOriginalMetadataEnrichmentApplying, setIsLinkedOriginalMetadataEnrichmentApplying] = useState(false);
   const [selectedReferenceSelection, setSelectedReferenceSelection] = useState({
     ids: {},
     anchorId: null
@@ -5112,16 +5156,38 @@ export default function App() {
     };
   }
 
+  function mergeOriginalMutationIntoItem(currentItem, savedItem) {
+    if (!currentItem?.id || currentItem.id !== savedItem?.id) {
+      return currentItem;
+    }
+
+    return {
+      ...currentItem,
+      originalPreserved: Boolean(savedItem?.originalPreserved),
+      relinkStatus: savedItem?.relinkStatus ?? currentItem.relinkStatus,
+      sourceOriginalFilename: savedItem?.sourceOriginalFilename ?? currentItem.sourceOriginalFilename,
+      sourceFilenameAliases: Array.isArray(savedItem?.sourceFilenameAliases) ? savedItem.sourceFilenameAliases : currentItem.sourceFilenameAliases,
+      originalLinkedAt: savedItem?.originalLinkedAt ?? currentItem.originalLinkedAt ?? "",
+      originalRelinkedFrom: savedItem?.originalRelinkedFrom ?? currentItem.originalRelinkedFrom ?? "",
+      originalRelinkedFilename: savedItem?.originalRelinkedFilename ?? currentItem.originalRelinkedFilename ?? "",
+      updatedAt: savedItem?.updatedAt ?? currentItem.updatedAt,
+      images: {
+        ...(currentItem?.images && typeof currentItem.images === "object" ? currentItem.images : {}),
+        original: createImageAsset(savedItem?.images?.original)
+      }
+    };
+  }
+
   function applyPersistedOriginalMutation(savedItem) {
     if (!savedItem?.id) {
       return;
     }
 
     setItems((current) =>
-      current.map((item) => item.id === savedItem.id ? mergeItemImageState(item, savedItem) : item)
+      current.map((item) => item.id === savedItem.id ? mergeOriginalMutationIntoItem(item, savedItem) : item)
     );
     setReferencePreview((current) =>
-      current?.id === savedItem.id ? mergeItemImageState(current, savedItem) : current
+      current?.id === savedItem.id ? mergeOriginalMutationIntoItem(current, savedItem) : current
     );
     setDraft((current) => mergeOriginalMutationIntoDraft(current, savedItem));
   }
@@ -5278,6 +5344,822 @@ export default function App() {
       showOriginalOperationFeedback(item.id, "Original marked as missing.");
     } catch (error) {
       showOriginalOperationFeedback(item.id, formatErrorMessage(error, "Failed to mark original as missing."), "error");
+    }
+  }
+
+  function formatLegacyProvenanceBackfillReason(reason) {
+    switch (reason) {
+      case "no_supported_folder_tag":
+        return "No supported folder/* tag";
+      case "conflicting_folder_tags":
+        return "Conflicting folder tags";
+      case "existing_namespace_conflict":
+        return "Existing source namespace conflicts";
+      case "existing_relative_path_conflict":
+        return "Existing source relative path conflicts";
+      case "no_legacy_numbered_filename":
+        return "No legacy images-NNN filename";
+      case "already_backfilled":
+        return "Already backfilled";
+      default:
+        return "Skipped";
+    }
+  }
+
+  function formatControlledVintageBackfillReason(reason) {
+    switch (reason) {
+      case "already_linked":
+        return "Already linked";
+      case "not_folder_vintage":
+        return "Not folder/vintage";
+      case "candidate_not_found":
+        return "No matching vintage candidate found";
+      case "no_legacy_numbered_filename":
+        return "No legacy images-NNN filename";
+      case "existing_namespace_conflict":
+        return "Existing source namespace conflicts";
+      case "existing_relative_path_conflict":
+        return "Existing source relative path conflicts";
+      case "already_backfilled":
+        return "Already backfilled";
+      default:
+        return "Skipped";
+    }
+  }
+
+  function formatLinkedOriginalMetadataEnrichmentReason(reason) {
+    switch (reason) {
+      case "not_linked":
+        return "Original is not linked";
+      case "missing_original_blob":
+        return "Linked original blob is missing";
+      case "already_enriched":
+        return "Nothing to fill";
+      default:
+        return "Skipped";
+    }
+  }
+
+  function formatLinkedOriginalMetadataEnrichmentField(field) {
+    switch (field) {
+      case "sourceFileSize":
+        return "Source file size";
+      case "sourceImageWidth":
+        return "Source image width";
+      case "sourceImageHeight":
+        return "Source image height";
+      case "sourceLastModified":
+        return "Source last modified";
+      case "mimeType":
+        return "MIME type";
+      case "sourceOriginalFilename":
+        return "Source original filename";
+      case "sourceFilenameAliases":
+        return "Source filename aliases";
+      case "originalRelinkedFilename":
+        return "Original relinked filename";
+      case "originalRelinkedRelativePath":
+        return "Original relinked relative path";
+      case "originalLinkedAt":
+        return "Original linked at";
+      default:
+        return field;
+    }
+  }
+
+  function formatLinkedOriginalMetadataEnrichmentPreviewValue(value) {
+    if (Array.isArray(value)) {
+      return value.length ? value.join(", ") : "None";
+    }
+
+    if (typeof value === "number") {
+      return String(value);
+    }
+
+    return value || "None";
+  }
+
+  async function handleLegacyProvenanceBackfillDryRun() {
+    const report = createLegacyProvenanceBackfillReport(items, { exampleLimit: 3 });
+    setLegacyProvenanceBackfillReport(report);
+
+    if (!report.affectedCount) {
+      setLegacyProvenanceBackfillFeedback(
+        `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts.`
+      );
+      return;
+    }
+
+    setLegacyProvenanceBackfillFeedback(
+      `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts.`
+    );
+  }
+
+  async function handleControlledVintageBackfillDryRun() {
+    if (!isOriginalRecoveryFileSystemAdapterSupported()) {
+      setControlledVintageBackfillFeedback("Controlled vintage backfill requires File System Access API support.");
+      return;
+    }
+
+    try {
+      const scanResult = await scanOriginalRecoveryDirectoryWithFileSystemAccess();
+      const report = createControlledVintageProvenanceBackfillReport(items, {
+        exampleLimit: 20,
+        candidateEntries: scanResult.entries
+      });
+
+      setControlledVintageBackfillReport(report);
+      setControlledVintageBackfillFeedback(
+        `Dry run complete. ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.conflictCount} conflicts, ${report.candidateFoundCount} matching vintage candidates found.`
+      );
+    } catch (error) {
+      setControlledVintageBackfillFeedback(
+        formatErrorMessage(error, "Controlled vintage provenance dry run failed.")
+      );
+    }
+  }
+
+  async function handleControlledVintageBackfillApply() {
+    if (!controlledVintageBackfillReport?.affectedCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply controlled vintage provenance backfill?",
+      message: `Affects ${controlledVintageBackfillReport.affectedCount} references, skips ${controlledVintageBackfillReport.skippedCount}, and leaves ${controlledVintageBackfillReport.conflictCount} conflicts untouched. Apply the dry-run changes now?`,
+      confirmLabel: "Apply backfill"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsControlledVintageBackfillApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: controlledVintageBackfillReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with controlled vintage provenance backfill anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const updatedItems = controlledVintageBackfillReport.affectedItems;
+      await saveItems(updatedItems);
+
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+      setItems(nextItems);
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      markMetadataDirty(updatedItems.map((item) => item.id));
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+
+      setControlledVintageBackfillReport(null);
+      setControlledVintageBackfillFeedback(
+        `Backfilled ${updatedItems.length} vintage references. ${controlledVintageBackfillReport.skippedCount} were skipped and ${controlledVintageBackfillReport.conflictCount} remained conflicted in the dry run.`
+      );
+    } catch (error) {
+      setControlledVintageBackfillFeedback(
+        formatErrorMessage(error, "Controlled vintage provenance backfill failed.")
+      );
+    } finally {
+      setIsControlledVintageBackfillApplying(false);
+    }
+  }
+
+  async function handleLinkedOriginalMetadataEnrichmentDryRun() {
+    try {
+      const report = await buildLinkedOriginalMetadataEnrichmentReport(items, { exampleLimit: 20 });
+      setLinkedOriginalMetadataEnrichmentReport(report);
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        `Dry run complete. ${report.updatedItemCount} linked originals will be enriched, ${report.skippedItemCount} linked items will be skipped.`
+      );
+    } catch (error) {
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        formatErrorMessage(error, "Linked original metadata dry run failed.")
+      );
+    }
+  }
+
+  async function handleLinkedOriginalMetadataEnrichmentApply() {
+    if (!linkedOriginalMetadataEnrichmentReport?.updatedItemCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply linked original metadata enrichment?",
+      message: `This will update ${linkedOriginalMetadataEnrichmentReport.updatedItemCount} linked items and skip ${linkedOriginalMetadataEnrichmentReport.skippedItemCount}. Apply the dry-run changes now?`,
+      confirmLabel: "Apply enrichment"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsLinkedOriginalMetadataEnrichmentApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: linkedOriginalMetadataEnrichmentReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with linked original metadata enrichment anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const applyResult = await applyLinkedOriginalMetadataEnrichmentReport(linkedOriginalMetadataEnrichmentReport);
+      const updatedItems = Array.isArray(applyResult?.updatedItems) ? applyResult.updatedItems : [];
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+
+      setItems(nextItems);
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+
+      if (updatedItems.length) {
+        markMetadataDirty(updatedItems.map((item) => item.id));
+        applyProvenanceUpdate(
+          (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+          { itemCountSnapshot: items.length }
+        );
+      }
+
+      const nextReport = await buildLinkedOriginalMetadataEnrichmentReport(nextItems, { exampleLimit: 20 });
+      setLinkedOriginalMetadataEnrichmentReport(nextReport);
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        `Enriched ${applyResult.updatedItemCount} linked originals. ${applyResult.skippedItemCount} linked items were skipped.`
+      );
+    } catch (error) {
+      setLinkedOriginalMetadataEnrichmentFeedback(
+        formatErrorMessage(error, "Linked original metadata enrichment failed.")
+      );
+    } finally {
+      setIsLinkedOriginalMetadataEnrichmentApplying(false);
+    }
+  }
+
+  async function handleLegacyProvenanceBackfillApply() {
+    if (!legacyProvenanceBackfillReport?.affectedCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply legacy provenance backfill?",
+      message: `Affects ${legacyProvenanceBackfillReport.affectedCount} references, skips ${legacyProvenanceBackfillReport.skippedCount}, and leaves ${legacyProvenanceBackfillReport.conflictCount} conflicts untouched. Apply the dry-run changes now?`,
+      confirmLabel: "Apply backfill"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsLegacyProvenanceBackfillApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: legacyProvenanceBackfillReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with legacy provenance backfill anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const updatedItems = legacyProvenanceBackfillReport.affectedItems;
+      await saveItems(updatedItems);
+
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      markMetadataDirty(updatedItems.map((item) => item.id));
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+      setLegacyProvenanceBackfillReport(createLegacyProvenanceBackfillReport(nextItems, { exampleLimit: 3 }));
+      setLegacyProvenanceBackfillFeedback(
+        `Backfilled ${updatedItems.length} references. ${legacyProvenanceBackfillReport.skippedCount} were skipped and ${legacyProvenanceBackfillReport.conflictCount} remained conflicted in the dry run.`
+      );
+    } catch (error) {
+      setLegacyProvenanceBackfillFeedback(formatErrorMessage(error, "Legacy provenance backfill failed."));
+    } finally {
+      setIsLegacyProvenanceBackfillApplying(false);
+    }
+  }
+
+  async function openOriginalRecoveryWorkflow() {
+    setOriginalRecoveryDialogOpen(true);
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryError("");
+    setOriginalRecoveryScanProgress("");
+
+    try {
+      const latestSession = await loadLatestOriginalRecoverySession();
+      setOriginalRecoverySession(latestSession);
+      setOriginalRecoveryRuntimeSessionId("");
+      setOriginalRecoveryCandidateEntriesById({});
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to load original recovery report."));
+    }
+  }
+
+  function closeOriginalRecoveryWorkflow() {
+    if (isOriginalRecoveryScanning || isOriginalRecoveryApplying) {
+      return;
+    }
+
+    setOriginalRecoveryDialogOpen(false);
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryError("");
+    setOriginalRecoveryScanProgress("");
+  }
+
+  async function handleOriginalRecoveryScan() {
+    if (!isOriginalRecoveryFileSystemAdapterSupported(window)) {
+      setOriginalRecoveryError("Original recovery folder scanning requires File System Access API support.");
+      return;
+    }
+
+    setOriginalRecoveryError("");
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryScanProgress("");
+    setIsOriginalRecoveryScanning(true);
+    let lastProgressUpdateAt = 0;
+    let lastProgressPhase = "";
+    let lastProgressCompleted = -1;
+
+    const publishOriginalRecoveryProgress = (phase, completed, total, currentPath = "") => {
+      const nowMs = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+      const shouldUpdate =
+        phase !== lastProgressPhase
+        || total <= 0
+        || completed === total
+        || completed === 0
+        || completed - lastProgressCompleted >= 25
+        || nowMs - lastProgressUpdateAt >= 120;
+
+      if (!shouldUpdate) {
+        return;
+      }
+
+      lastProgressUpdateAt = nowMs;
+      lastProgressPhase = phase;
+      lastProgressCompleted = completed;
+      setOriginalRecoveryScanProgress(
+        currentPath
+          ? `${phase}... ${total > 0 ? `${completed}/${total}` : completed} ${currentPath}`
+          : `${phase}... ${total > 0 ? `${completed}/${total}` : completed}`
+      );
+    };
+
+    try {
+      const result = await scanOriginalRecoverySource({
+        adapter: {
+          scan: (adapterOptions = {}) => scanOriginalRecoveryDirectoryWithFileSystemAccess({
+            target: window,
+            ...adapterOptions,
+            onProgress: ({ phase, traversedFileCount, currentPath }) => {
+              if (phase === "traversal") {
+                publishOriginalRecoveryProgress("Traversing", traversedFileCount, 0, currentPath);
+              }
+            }
+          }),
+          getFile: getOriginalRecoveryEntryFileWithFileSystemAccess,
+          getFileMetadata: getOriginalRecoveryEntryMetadataWithFileSystemAccess
+        },
+        createOriginalImageAsset,
+        app: "mba",
+        previousSession: originalRecoverySession,
+        onProgress: ({ phase, completed, total, currentPath }) => {
+          if (phase === "traversal") {
+            return;
+          }
+
+          const phaseLabel = phase === "matching-filenames"
+            ? "Matching filenames"
+            : phase === "reading-candidate-metadata"
+              ? "Reading candidate metadata"
+              : phase === "decoding-candidate-images"
+                ? "Decoding candidate images"
+                : phase === "final-scoring"
+                  ? "Final scoring"
+                  : phase === "saving"
+                    ? "Saving report"
+                    : "Processing";
+
+          publishOriginalRecoveryProgress(phaseLabel, completed, total, currentPath);
+        }
+      });
+
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryRuntimeSessionId(result.session.id);
+      setOriginalRecoveryCandidateEntriesById(result.candidateEntriesById);
+      setOriginalRecoveryBucket("all");
+      setOriginalRecoveryFeedback(result.persisted
+        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+      );
+      setOriginalRecoveryScanProgress("");
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setOriginalRecoveryFeedback("Original recovery scan canceled.");
+      } else {
+        setOriginalRecoveryError(formatErrorMessage(error, "Original recovery scan failed."));
+      }
+    } finally {
+      setIsOriginalRecoveryScanning(false);
+    }
+  }
+
+  async function handleOriginalRecoveryDecisionChange(itemId, decision) {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const result = await updateOriginalRecoveryDecision(originalRecoverySession.id, itemId, decision, {
+        currentSession: originalRecoverySession
+      });
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryError("");
+      if (!result.persisted) {
+        setOriginalRecoveryFeedback("Recovery report could not be saved; this session cannot be resumed after reload.");
+      }
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to update recovery decision."));
+    }
+  }
+
+  async function handleOriginalRecoveryCandidateSelection(itemId, candidateId) {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const result = await updateOriginalRecoveryCandidateSelection(originalRecoverySession.id, itemId, candidateId, {
+        currentSession: originalRecoverySession
+      });
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryError("");
+      if (!result.persisted) {
+        setOriginalRecoveryFeedback("Recovery report could not be saved; this session cannot be resumed after reload.");
+      }
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to select recovery candidate."));
+    }
+  }
+
+  async function handleApproveReadyOriginalRecoveryMatches() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const nextSession = refreshOriginalRecoverySession({
+        ...originalRecoverySession,
+        matches: (originalRecoverySession.matches ?? []).map((match) => (
+          match.outcome === "exact_single" || match.outcome === "strong_single"
+            ? {
+                ...match,
+                decision: match.selectedCandidateId ? "accepted" : match.decision
+              }
+            : match
+        ))
+      }, {
+        status: "reviewed"
+      });
+      const result = await saveOriginalRecoverySession(nextSession);
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryFeedback(result.persisted
+        ? "Ready matches approved."
+        : "Ready matches approved. Recovery report could not be saved; this session cannot be resumed after reload."
+      );
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to approve ready recovery matches."));
+    }
+  }
+
+  async function handleResetVisibleOriginalRecoveryMatches() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const nextSession = refreshOriginalRecoverySession({
+        ...originalRecoverySession,
+        matches: (originalRecoverySession.matches ?? []).map((match) => {
+          const matchBucket = match.outcome === "excluded"
+            ? "excluded"
+            : match.outcome === "exact_single"
+                || match.outcome === "strong_single"
+                || (match.outcome === "possible_single" && match.decision === "accepted")
+              ? "ready"
+              : match.outcome === "possible_single"
+                ? "review"
+                : match.outcome === "ambiguous_multiple"
+                  ? "ambiguous"
+                  : "no_match";
+
+          if (originalRecoveryBucket !== "all" && matchBucket !== originalRecoveryBucket) {
+            return match;
+          }
+
+          if (match.outcome === "excluded") {
+            return match;
+          }
+
+          return {
+            ...match,
+            decision: "undecided"
+          };
+        })
+      }, {
+        status: "reviewed"
+      });
+      const result = await saveOriginalRecoverySession(nextSession);
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryFeedback(result.persisted
+        ? "Visible recovery decisions reset to undecided."
+        : "Visible recovery decisions reset to undecided. Recovery report could not be saved; this session cannot be resumed after reload."
+      );
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to reset visible recovery decisions."));
+    }
+  }
+
+  async function handleExportOriginalRecoveryReport() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    try {
+      const report = await exportOriginalRecoveryReport(originalRecoverySession.id, {
+        currentSession: originalRecoverySession
+      });
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+      const date = new Date().toISOString().slice(0, 10);
+      const exportResult = await downloadBlobFile(blob, `moodboard-original-recovery-${date}.json`, {
+        mimeType: "application/json"
+      });
+
+      if (exportResult !== "cancelled") {
+        setOriginalRecoveryFeedback("Original recovery report exported.");
+      }
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Failed to export original recovery report."));
+    }
+  }
+
+  async function handleApplyOriginalRecovery() {
+    if (!originalRecoverySession?.id) {
+      return;
+    }
+
+    if (originalRecoveryRuntimeSessionId !== originalRecoverySession.id) {
+      setOriginalRecoveryError("Re-scan the source before applying approved recoveries.");
+      return;
+    }
+
+    setOriginalRecoveryError("");
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryScanProgress("Preparing metadata autosnapshot...");
+    setIsOriginalRecoveryApplying(true);
+
+    try {
+      let lastApplyProgressPhase = "";
+      let lastApplyProgressCompleted = -1;
+      let lastApplyProgressUpdateAt = 0;
+      const publishOriginalRecoveryApplyProgress = (message, phase = "", completed = 0, total = 0) => {
+        const nowMs = typeof performance !== "undefined" && typeof performance.now === "function"
+          ? performance.now()
+          : Date.now();
+        const shouldUpdate =
+          phase !== lastApplyProgressPhase
+          || completed === total
+          || completed === 0
+          || completed - lastApplyProgressCompleted >= 5
+          || nowMs - lastApplyProgressUpdateAt >= 250;
+
+        if (!shouldUpdate) {
+          return;
+        }
+
+        lastApplyProgressPhase = phase;
+        lastApplyProgressCompleted = completed;
+        lastApplyProgressUpdateAt = nowMs;
+        setOriginalRecoveryScanProgress(message);
+      };
+
+      const autosnapshotStartedAt = typeof performance !== "undefined" && typeof performance.now === "function"
+        ? performance.now()
+        : Date.now();
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        changedItemIds: (originalRecoverySession.matches ?? [])
+          .filter((match) => match.decision === "accepted")
+          .map((match) => match.itemId),
+        priority: "blocking"
+      });
+      const autosnapshotMs = Math.max(
+        0,
+        Math.round(
+          ((typeof performance !== "undefined" && typeof performance.now === "function"
+            ? performance.now()
+            : Date.now()) - autosnapshotStartedAt) * 100
+        ) / 100
+      );
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with original recovery anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          setIsOriginalRecoveryApplying(false);
+          return;
+        }
+      }
+
+      const result = await applyOriginalRecoverySession(originalRecoverySession.id, {
+        currentSession: originalRecoverySession,
+        candidateEntriesById: originalRecoveryCandidateEntriesById,
+        adapter: {
+          getFile: getOriginalRecoveryEntryFileWithFileSystemAccess
+        },
+        createOriginalImageAsset,
+        onProgress: ({ phase, completed, total, itemName, fileName, error: progressError }) => {
+          const itemLabel = itemName || fileName || "";
+          const countLabel = total > 0 ? `${Math.min(completed, total)}/${total}` : `${completed}`;
+
+          if (phase === "apply-start") {
+            publishOriginalRecoveryApplyProgress(`Applying approved recoveries... ${countLabel}`, phase, completed, total);
+            return;
+          }
+
+          if (phase === "candidate-lookup") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Preparing candidate file... ${countLabel} ${itemLabel}`
+                : `Preparing candidate file... ${countLabel}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "file-read") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Reading source file... ${countLabel} ${itemLabel}`
+                : `Reading source file... ${countLabel}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "decoded") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Decoding original... ${countLabel} ${itemLabel}`
+                : `Decoding original... ${countLabel}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "blob-write") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Writing original blob... ${countLabel} ${itemLabel}`
+                : `Writing original blob... ${countLabel}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "item-save") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Saving item metadata... ${countLabel} ${itemLabel}`
+                : `Saving item metadata... ${countLabel}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "candidate-missing") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Candidate missing, marking for re-scan... ${countLabel} ${itemLabel}`
+                : `Candidate missing, marking for re-scan... ${countLabel}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "item-failed") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Recovery failed, continuing... ${countLabel} ${itemLabel}${progressError ? ` (${progressError})` : ""}`
+                : `Recovery failed, continuing... ${countLabel}${progressError ? ` (${progressError})` : ""}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "item-recovered") {
+            publishOriginalRecoveryApplyProgress(
+              itemLabel
+                ? `Recovered original... ${countLabel} ${itemLabel}`
+                : `Recovered original... ${countLabel}`,
+              phase,
+              completed,
+              total
+            );
+            return;
+          }
+
+          if (phase === "report-persistence") {
+            publishOriginalRecoveryApplyProgress("Saving recovery report...", phase, completed, total);
+            return;
+          }
+
+          if (phase === "apply-complete") {
+            publishOriginalRecoveryApplyProgress("Apply complete.", phase, completed, total);
+          }
+        }
+      });
+
+      result.recoveredItems.forEach((savedItem) => {
+        applyPersistedOriginalMutation(savedItem);
+      });
+      if (result.recoveredItems.length) {
+        const changedItemIds = result.recoveredItems.map((item) => item.id).filter(Boolean);
+        markMetadataDirty(changedItemIds);
+        applyProvenanceUpdate(
+          (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+          { itemCountSnapshot: items.length }
+        );
+      }
+      setOriginalRecoverySession(result.session);
+      setOriginalRecoveryFeedback(result.persisted
+        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
+        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
+      );
+    } catch (error) {
+      setOriginalRecoveryError(formatErrorMessage(error, "Original recovery apply failed."));
+    } finally {
+      setIsOriginalRecoveryApplying(false);
     }
   }
   const visibleWardrobeItems = useMemo(() => {
@@ -11456,6 +12338,14 @@ export default function App() {
   const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
   const backupPackageImportProgressLabel = getBackupPackageImportProgressLabel(backupPackageImportProgress);
   const appBuildLabel = formatAppBuildLabel();
+  const canUseOriginalRecoveryScan = typeof window !== "undefined"
+    ? isOriginalRecoveryFileSystemAdapterSupported(window)
+    : isOriginalRecoveryFileSystemAdapterSupported();
+  const hasLiveOriginalRecoveryCandidates = Boolean(
+    originalRecoverySession?.id
+    && originalRecoveryRuntimeSessionId === originalRecoverySession.id
+    && Object.keys(originalRecoveryCandidateEntriesById).length
+  );
   const fileSystemAccessDebug = typeof window !== "undefined"
     ? getFileSystemAccessDebugSnapshot(window)
     : getFileSystemAccessDebugSnapshot();
@@ -13217,6 +14107,191 @@ export default function App() {
                           <button
                             type="button"
                             className="ghost-button wardrobe-manage-action"
+                            onClick={() => void openOriginalRecoveryWorkflow()}
+                          >
+                            Original recovery
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleLinkedOriginalMetadataEnrichmentDryRun()}
+                            disabled={isLinkedOriginalMetadataEnrichmentApplying}
+                          >
+                            {isLinkedOriginalMetadataEnrichmentApplying
+                              ? "Applying linked original metadata enrichment..."
+                              : "Enrich Linked Original Metadata"}
+                          </button>
+                          {linkedOriginalMetadataEnrichmentReport ? (
+                            <section className="media-integrity-report" aria-label="Linked original metadata enrichment report">
+                              <p className="media-integrity-status">
+                                {linkedOriginalMetadataEnrichmentReport.eligibleLinkedItemCount} eligible linked items · {linkedOriginalMetadataEnrichmentReport.updatedItemCount} updates · {linkedOriginalMetadataEnrichmentReport.skippedItemCount} skipped
+                              </p>
+                              {linkedOriginalMetadataEnrichmentFeedback ? (
+                                <p className="form-success tag-manager-feedback">{linkedOriginalMetadataEnrichmentFeedback}</p>
+                              ) : null}
+                              <div className="media-integrity-summary">
+                                {Object.entries(linkedOriginalMetadataEnrichmentReport.fieldCounts || {})
+                                  .filter(([, count]) => Number(count) > 0)
+                                  .map(([field, count]) => (
+                                    <p key={field} className="media-integrity-summary-row">
+                                      <span>{formatLinkedOriginalMetadataEnrichmentField(field)}</span>
+                                      <strong>{count}</strong>
+                                    </p>
+                                  ))}
+                              </div>
+                              {linkedOriginalMetadataEnrichmentReport.examples.updated.length ? (
+                                <div className="media-integrity-issues">
+                                  {linkedOriginalMetadataEnrichmentReport.examples.updated.map((example) => (
+                                    <div key={`linked-enrichment-updated-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{example.changedFields.map((field) => (
+                                        `${formatLinkedOriginalMetadataEnrichmentField(field)}: ${formatLinkedOriginalMetadataEnrichmentPreviewValue(example.preview?.[field])}`
+                                      )).join(" · ")}</strong>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {linkedOriginalMetadataEnrichmentReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {linkedOriginalMetadataEnrichmentReport.examples.skipped.map((example) => (
+                                    <p key={`linked-enrichment-skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatLinkedOriginalMetadataEnrichmentReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleLinkedOriginalMetadataEnrichmentApply()}
+                                disabled={!linkedOriginalMetadataEnrichmentReport.updatedItemCount || isLinkedOriginalMetadataEnrichmentApplying}
+                              >
+                                Apply linked original metadata enrichment
+                              </button>
+                            </section>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleControlledVintageBackfillDryRun()}
+                            disabled={isControlledVintageBackfillApplying}
+                          >
+                            {isControlledVintageBackfillApplying
+                              ? "Applying controlled vintage provenance backfill..."
+                              : "Dry run controlled vintage provenance backfill"}
+                          </button>
+                          {controlledVintageBackfillReport ? (
+                            <section className="media-integrity-report" aria-label="Controlled vintage provenance backfill report">
+                              <p className="media-integrity-status">
+                                {controlledVintageBackfillReport.affectedCount} affected · {controlledVintageBackfillReport.skippedCount} skipped · {controlledVintageBackfillReport.conflictCount} conflicts · {controlledVintageBackfillReport.candidateFoundCount} vintage candidates found
+                              </p>
+                              {controlledVintageBackfillFeedback ? (
+                                <p className="form-success tag-manager-feedback">{controlledVintageBackfillFeedback}</p>
+                              ) : null}
+                              {controlledVintageBackfillReport.examples.affected.length ? (
+                                <div className="media-integrity-summary">
+                                  {controlledVintageBackfillReport.examples.affected.map((example) => (
+                                    <p key={`controlled-vintage-affected-${example.itemId}`} className="media-integrity-summary-row">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{example.sourceRelativePath || example.sourceFilenameAliases[0] || example.candidateRelativePath || "vintage"}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {controlledVintageBackfillReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {controlledVintageBackfillReport.examples.skipped.map((example) => (
+                                    <p key={`controlled-vintage-skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatControlledVintageBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {controlledVintageBackfillReport.examples.conflicts.length ? (
+                                <div className="media-integrity-issues">
+                                  {controlledVintageBackfillReport.examples.conflicts.map((example) => (
+                                    <p key={`controlled-vintage-conflict-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatControlledVintageBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleControlledVintageBackfillApply()}
+                                disabled={!controlledVintageBackfillReport.affectedCount || isControlledVintageBackfillApplying}
+                              >
+                                Apply controlled vintage provenance backfill
+                              </button>
+                            </section>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleLegacyProvenanceBackfillDryRun()}
+                            disabled={isLegacyProvenanceBackfillApplying}
+                          >
+                            {isLegacyProvenanceBackfillApplying ? "Applying legacy provenance backfill..." : "Dry run legacy provenance backfill"}
+                          </button>
+                          {legacyProvenanceBackfillReport ? (
+                            <section className="media-integrity-report" aria-label="Legacy provenance backfill report">
+                              <p className="media-integrity-status">
+                                {legacyProvenanceBackfillReport.affectedCount} affected · {legacyProvenanceBackfillReport.skippedCount} skipped · {legacyProvenanceBackfillReport.conflictCount} conflicts
+                              </p>
+                              {legacyProvenanceBackfillFeedback ? (
+                                <p className="form-success tag-manager-feedback">{legacyProvenanceBackfillFeedback}</p>
+                              ) : null}
+                              {legacyProvenanceBackfillReport.examples.byNamespace.vintage.length
+                                || legacyProvenanceBackfillReport.examples.byNamespace.moodboard.length
+                                || legacyProvenanceBackfillReport.examples.byNamespace.wishlist.length ? (
+                                <div className="media-integrity-summary">
+                                  {["vintage", "moodboard", "wishlist"].map((namespace) => (
+                                    legacyProvenanceBackfillReport.examples.byNamespace[namespace].map((example) => (
+                                      <p key={`affected-${namespace}-${example.itemId}`} className="media-integrity-summary-row">
+                                        <span>{example.itemName || example.itemId}</span>
+                                        <strong>{example.sourceRelativePath || example.sourceFilenameAliases[0] || namespace}</strong>
+                                      </p>
+                                    ))
+                                  ))}
+                                </div>
+                              ) : null}
+                              {legacyProvenanceBackfillReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {legacyProvenanceBackfillReport.examples.skipped.map((example) => (
+                                    <p key={`skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatLegacyProvenanceBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {legacyProvenanceBackfillReport.examples.conflicts.length ? (
+                                <div className="media-integrity-issues">
+                                  {legacyProvenanceBackfillReport.examples.conflicts.map((example) => (
+                                    <p key={`conflict-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatLegacyProvenanceBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleLegacyProvenanceBackfillApply()}
+                                disabled={!legacyProvenanceBackfillReport.affectedCount || isLegacyProvenanceBackfillApplying}
+                              >
+                                Apply legacy provenance backfill
+                              </button>
+                            </section>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
                             onClick={handleRunMediaIntegrityCheck}
                             disabled={isMediaIntegrityChecking}
                           >
@@ -13923,6 +14998,28 @@ export default function App() {
             ) : null}
           </div>
         ) : null}
+
+        <OriginalRecoveryDialog
+          isOpen={originalRecoveryDialogOpen}
+          session={originalRecoverySession}
+          scanning={isOriginalRecoveryScanning}
+          scanProgress={originalRecoveryScanProgress}
+          applying={isOriginalRecoveryApplying}
+          feedback={originalRecoveryFeedback}
+          error={originalRecoveryError}
+          canScan={canUseOriginalRecoveryScan}
+          hasLiveCandidates={hasLiveOriginalRecoveryCandidates}
+          bucketFilter={originalRecoveryBucket}
+          onClose={closeOriginalRecoveryWorkflow}
+          onScan={() => void handleOriginalRecoveryScan()}
+          onApplyApproved={() => void handleApplyOriginalRecovery()}
+          onExportReport={() => void handleExportOriginalRecoveryReport()}
+          onBucketFilterChange={setOriginalRecoveryBucket}
+          onApproveReady={() => void handleApproveReadyOriginalRecoveryMatches()}
+          onResetVisible={() => void handleResetVisibleOriginalRecoveryMatches()}
+          onSelectCandidate={(itemId, candidateId) => void handleOriginalRecoveryCandidateSelection(itemId, candidateId)}
+          onDecisionChange={(itemId, decision) => void handleOriginalRecoveryDecisionChange(itemId, decision)}
+        />
 
         {originalReconnectionDialog ? (
           <div className="floating-backdrop confirm-backdrop" onClick={() => {

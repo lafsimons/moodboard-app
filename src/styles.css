@@ -4626,6 +4626,155 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   margin: 0;
 }
 
+.original-recovery-dialog {
+  width: min(1100px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+}
+
+.original-recovery-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.original-recovery-subtle {
+  color: var(--muted-strong);
+}
+
+.original-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.original-recovery-summary,
+.original-recovery-provenance,
+.original-recovery-selected {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.original-recovery-summary p,
+.original-recovery-provenance p,
+.original-recovery-selected p {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.original-recovery-summary span,
+.original-recovery-provenance span,
+.original-recovery-selected span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.original-recovery-buckets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.original-recovery-bucket.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.original-recovery-results {
+  display: grid;
+  gap: 12px;
+}
+
+.original-recovery-match-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-raised, var(--surface));
+}
+
+.original-recovery-match-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.original-recovery-pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.original-recovery-pill {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted-strong);
+  font-size: 0.68rem;
+  text-transform: capitalize;
+}
+
+.original-recovery-pill.is-recovered {
+  color: var(--success, #3b8f5a);
+}
+
+.original-recovery-pill.is-failed {
+  color: var(--danger, #b14b4b);
+}
+
+.original-recovery-pill.is-skipped {
+  color: var(--muted);
+}
+
+.original-recovery-decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.original-recovery-candidates {
+  display: grid;
+  gap: 10px;
+}
+
+.original-recovery-candidates summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.original-recovery-candidate-list {
+  display: grid;
+  gap: 8px;
+}
+
+.original-recovery-candidate {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.original-recovery-candidate.is-selected {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .fitpic-preview-overlay {
   max-width: min(980px, calc(100vw - 40px));
   max-height: calc(100vh - 40px);

@@ -11,13 +11,132 @@ function normalizeMimeType(value) {
   return normalizeText(value).toLowerCase();
 }
 
+const LEGACY_SOURCE_NAMESPACES = new Set(["vintage", "moodboard", "wishlist"]);
+const LEGACY_NUMBERED_IMAGE_PATTERN = /^images-(\d+)(\.[a-z0-9]+)?$/i;
+
 export function normalizeComparableFilename(value) {
-  return normalizeText(value).toLowerCase();
+  return normalizeText(value).replace(/\\/g, "/").toLowerCase();
+}
+
+function getNormalizedLegacyNumberKey(value) {
+  const parsedNamespacedFilename = parseLegacyNamespacedFilename(value);
+
+  if (parsedNamespacedFilename) {
+    return `images-${parsedNamespacedFilename.number}${parsedNamespacedFilename.extension}`.toLowerCase();
+  }
+
+  const parsedNumberedFilename = parseLegacyNumberedFilename(value);
+
+  if (!parsedNumberedFilename) {
+    return "";
+  }
+
+  return `images-${parsedNumberedFilename.number}${parsedNumberedFilename.extension}`.toLowerCase();
+}
+
+function getPathSegments(value) {
+  return normalizeComparableFilename(value)
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function getBasename(value) {
+  const segments = getPathSegments(value);
+  return segments[segments.length - 1] ?? "";
+}
+
+function parseLegacyNamespacedFilename(value) {
+  const basename = getBasename(value);
+  const match = basename.match(/^(vintage|moodboard|wishlist)-images-(\d+)(\.[a-z0-9]+)?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    namespace: match[1].toLowerCase(),
+    number: match[2],
+    extension: match[3] || ""
+  };
+}
+
+function parseLegacyNumberedFilename(value) {
+  const basename = getBasename(value);
+  const match = basename.match(LEGACY_NUMBERED_IMAGE_PATTERN);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    number: match[1],
+    extension: match[2] || ""
+  };
+}
+
+function collectSourceNamespacesSet(record = {}) {
+  const namespaces = new Set();
+  const pushNamespace = (value) => {
+    const normalizedValue = normalizeComparableFilename(value);
+
+    if (LEGACY_SOURCE_NAMESPACES.has(normalizedValue)) {
+      namespaces.add(normalizedValue);
+    }
+  };
+  const pushFromValue = (value) => {
+    const segments = getPathSegments(value);
+
+    segments.forEach((segment) => {
+      pushNamespace(segment);
+      const namespacedFilename = parseLegacyNamespacedFilename(segment);
+
+      if (namespacedFilename?.namespace) {
+        pushNamespace(namespacedFilename.namespace);
+      }
+    });
+  };
+
+  pushFromValue(record?.sourceRelativePath);
+  pushFromValue(record?.relativePath);
+  pushFromValue(record?.sourceOriginalFilename);
+  pushFromValue(record?.originalFilename);
+  pushFromValue(record?.images?.preview?.originalFilename);
+  (Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : []).forEach(pushFromValue);
+
+  return namespaces;
+}
+
+function buildLegacyNamespaceAliases(value, namespaces) {
+  const numberedFilename = parseLegacyNumberedFilename(value);
+
+  if (!numberedFilename || !namespaces.size) {
+    return [];
+  }
+
+  const basename = `images-${numberedFilename.number}${numberedFilename.extension}`;
+
+  return [...namespaces].flatMap((namespace) => [`${namespace}/${basename}`, `${namespace}-${basename}`]);
+}
+
+function hasSharedNamespace(leftNamespaces, rightNamespaces) {
+  for (const namespace of leftNamespaces) {
+    if (rightNamespaces.has(namespace)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export function collectSourceNamespaces(record = {}) {
+  return [...collectSourceNamespacesSet(record)];
 }
 
 export function collectSourceFilenameCandidates(record = {}) {
   const seen = new Set();
   const candidates = [];
+  const namespaces = collectSourceNamespacesSet(record);
   const pushCandidate = (value) => {
     const normalizedValue = normalizeText(value);
     const candidateKey = normalizeComparableFilename(normalizedValue);
@@ -29,25 +148,98 @@ export function collectSourceFilenameCandidates(record = {}) {
     seen.add(candidateKey);
     candidates.push(normalizedValue);
   };
+  const pushWithLegacyAliases = (value) => {
+    pushCandidate(value);
+    buildLegacyNamespaceAliases(value, namespaces).forEach(pushCandidate);
+  };
 
-  pushCandidate(record?.sourceOriginalFilename);
-  pushCandidate(record?.originalFilename);
-  pushCandidate(record?.images?.preview?.originalFilename);
-  (Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : []).forEach(pushCandidate);
+  pushWithLegacyAliases(record?.sourceOriginalFilename);
+  pushWithLegacyAliases(record?.originalFilename);
+  pushWithLegacyAliases(record?.images?.preview?.originalFilename);
+  pushCandidate(record?.sourceRelativePath);
+  pushCandidate(record?.relativePath);
+  (Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : []).forEach(pushWithLegacyAliases);
 
   return candidates;
 }
 
-function collectComparableFilenameKeys(record = {}) {
-  return new Set(collectSourceFilenameCandidates(record).map(normalizeComparableFilename).filter(Boolean));
+export function collectComparableFilenameKeys(record = {}) {
+  return collectSourceFilenameCandidates(record).map(normalizeComparableFilename).filter(Boolean);
+}
+
+export function buildSourceProvenanceSignals(record = {}) {
+  const comparableFilenameKeys = collectComparableFilenameKeys(record);
+  const namespaces = collectSourceNamespaces(record);
+  const legacyNumberKeys = [];
+  const namespaceFilenameKeys = [];
+  const namespaceLegacyNumberKeys = [];
+  const seenLegacyNumberKeys = new Set();
+  const seenNamespaceFilenameKeys = new Set();
+  const seenNamespaceLegacyNumberKeys = new Set();
+
+  comparableFilenameKeys.forEach((filenameKey) => {
+    const legacyNumberKey = getNormalizedLegacyNumberKey(filenameKey);
+
+    if (legacyNumberKey && !seenLegacyNumberKeys.has(legacyNumberKey)) {
+      seenLegacyNumberKeys.add(legacyNumberKey);
+      legacyNumberKeys.push(legacyNumberKey);
+    }
+
+    namespaces.forEach((namespace) => {
+      const namespaceFilenameKey = `${namespace}|${filenameKey}`;
+
+      if (!seenNamespaceFilenameKeys.has(namespaceFilenameKey)) {
+        seenNamespaceFilenameKeys.add(namespaceFilenameKey);
+        namespaceFilenameKeys.push(namespaceFilenameKey);
+      }
+
+      if (!legacyNumberKey) {
+        return;
+      }
+
+      const namespaceLegacyNumberKey = `${namespace}|${legacyNumberKey}`;
+
+      if (!seenNamespaceLegacyNumberKeys.has(namespaceLegacyNumberKey)) {
+        seenNamespaceLegacyNumberKeys.add(namespaceLegacyNumberKey);
+        namespaceLegacyNumberKeys.push(namespaceLegacyNumberKey);
+      }
+    });
+  });
+
+  return {
+    comparableFilenameKeys,
+    comparableFilenameKeySet: new Set(comparableFilenameKeys),
+    namespaces,
+    namespaceSet: new Set(namespaces),
+    legacyNumberKeys,
+    legacyNumberKeySet: new Set(legacyNumberKeys),
+    namespaceFilenameKeys,
+    namespaceLegacyNumberKeys
+  };
 }
 
 function hasSharedFilename(record, candidate) {
-  const left = collectComparableFilenameKeys(record);
-  const right = collectComparableFilenameKeys(candidate);
+  return hasSharedFilenameFromSignals(
+    buildSourceProvenanceSignals(record),
+    buildSourceProvenanceSignals(candidate)
+  );
+}
 
-  for (const entry of left) {
-    if (right.has(entry)) {
+function hasSharedFilenameFromSignals(leftSignals, rightSignals) {
+  for (const entry of leftSignals.comparableFilenameKeys) {
+    if (!rightSignals.comparableFilenameKeySet.has(entry)) {
+      continue;
+    }
+
+    if (!LEGACY_NUMBERED_IMAGE_PATTERN.test(getBasename(entry))) {
+      return true;
+    }
+
+    if (
+      leftSignals.namespaceSet.size
+      && rightSignals.namespaceSet.size
+      && hasSharedNamespace(leftSignals.namespaceSet, rightSignals.namespaceSet)
+    ) {
       return true;
     }
   }
@@ -87,8 +279,26 @@ function hasExactMimeTypeMatch(record, candidate) {
   return Boolean(left && right && left === right);
 }
 
-export function getSourceProvenanceMatchDetails(record = {}, candidate = {}) {
-  const filenameMatch = hasSharedFilename(record, candidate);
+export function createSourceProvenanceComparableRecord(record = {}) {
+  return {
+    sourceRelativePath: normalizeText(record?.sourceRelativePath),
+    relativePath: normalizeText(record?.relativePath),
+    sourceOriginalFilename: normalizeText(record?.sourceOriginalFilename),
+    originalFilename: normalizeText(record?.originalFilename),
+    sourceFilenameAliases: Array.isArray(record?.sourceFilenameAliases) ? record.sourceFilenameAliases : [],
+    sourceFileSize: normalizeNumber(record?.sourceFileSize),
+    sourceImageWidth: normalizeNumber(record?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(record?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(record?.sourceLastModified),
+    mimeType: normalizeMimeType(record?.mimeType),
+    images: record?.images
+  };
+}
+
+export function getSourceProvenanceMatchDetails(record = {}, candidate = {}, options = {}) {
+  const recordSignals = options.recordSignals ?? buildSourceProvenanceSignals(record);
+  const candidateSignals = options.candidateSignals ?? buildSourceProvenanceSignals(candidate);
+  const filenameMatch = hasSharedFilenameFromSignals(recordSignals, candidateSignals);
   const sizeMatch = hasExactSizeMatch(record, candidate);
   const dimensionMatch = hasExactDimensionMatch(record, candidate);
   const lastModifiedMatch = hasExactLastModifiedMatch(record, candidate);
@@ -117,6 +327,6 @@ export function getSourceProvenanceMatchDetails(record = {}, candidate = {}) {
   };
 }
 
-export function classifySourceProvenanceMatch(record = {}, candidate = {}) {
-  return getSourceProvenanceMatchDetails(record, candidate).classification;
+export function classifySourceProvenanceMatch(record = {}, candidate = {}, options = {}) {
+  return getSourceProvenanceMatchDetails(record, candidate, options).classification;
 }
