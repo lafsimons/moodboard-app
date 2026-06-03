@@ -379,35 +379,32 @@ export async function prepareBackupPackageImportFromDirectory(rootHandle, option
 
     const previewPackagePath = validatePreviewPackagePath(record?.images?.preview?.packagePath, { allowEmpty: true });
     const previewFileName = previewPackagePath ? previewPackagePath.slice(`${PACKAGE_PREVIEWS_DIR}/`.length) : "";
-    let previewFile = null;
+    let previewFileHandle = null;
 
     if (previewFileName) {
-      let previewFileHandle;
-
       try {
         previewFileHandle = await previewsDirectoryHandle.getFileHandle(previewFileName);
       } catch {
         throw new Error(`Backup package preview file "${previewFileName}" is missing.`);
       }
-
-      previewFile = await previewFileHandle.getFile();
     }
     const normalizedImages = normalizeItemImages(record);
     const previewImage = createImageAsset(normalizedImages.preview);
 
     seenIds.add(itemId);
     stagedItems.push(createPreparedPackageItem(record));
-    if (previewFile) {
+    if (previewFileHandle) {
       stagedPreviewFiles.push({
         itemId,
         variant: "preview",
         asset: {
           ...previewImage,
           src: "",
-          blob: previewFile,
-          fileSize: previewImage.fileSize || previewFile.size || 0,
-          mimeType: previewImage.mimeType || previewFile.type || ""
-        }
+          fileSize: previewImage.fileSize || 0,
+          mimeType: previewImage.mimeType || ""
+        },
+        packagePath: previewPackagePath,
+        fileHandle: previewFileHandle
       });
     }
 

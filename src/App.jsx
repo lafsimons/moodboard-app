@@ -8641,10 +8641,15 @@ export default function App() {
         priority: "blocking",
         changedItemIds: localSafety.changedItemIdsSinceSnapshot
       });
-      await replaceWithPreparedBackupPackage({
-        ...preparedPackage,
-        appState: importedAppState
-      });
+      await replaceWithPreparedBackupPackage(
+        {
+          ...preparedPackage,
+          appState: importedAppState
+        },
+        {
+          onProgress: updateBackupPackageImportProgress
+        }
+      );
       const verifiedImport = await verifyImportedPersistence(preparedPackage.items.length, importedAppState);
       await applyLoadedData(verifiedImport.items, verifiedImport.appState);
       clearBackupPackageImportProgress();
@@ -11810,6 +11815,10 @@ export default function App() {
 
     if (progress.phase === "importing") {
       return "Importing";
+    }
+
+    if (progress.phase === "importing-previews") {
+      return `Importing previews: ${progress.completed} / ${progress.total}`;
     }
 
     return "";

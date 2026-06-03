@@ -47,6 +47,7 @@ const SYNC_STATE_KEY = "state";
 const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
 const SYNC_BACKFILL_BATCH_SIZE = 100;
+const BACKUP_PACKAGE_PREVIEW_IMPORT_CHUNK_SIZE = 150;
 const ITEM_MEDIA_VARIANTS = ["preview", "thumbnail"];
 const SNAPSHOT_REASON_PRIORITY = {
   autosnapshot: 1,
@@ -755,6 +756,53 @@ function normalizeItemMediaAssetRecord(record) {
     variant,
     asset: createImageAsset(record?.asset)
   };
+}
+
+function normalizePreparedBackupPackagePreviewRecord(record, index) {
+  const normalizedRecord = normalizeItemMediaAssetRecord(record);
+
+  if (normalizedRecord.variant !== "preview") {
+    throw new Error(`Prepared backup package media asset ${index + 1} is invalid.`);
+  }
+
+  const fileHandle = record?.fileHandle;
+  const hasBlob = normalizedRecord.asset?.blob instanceof Blob;
+  const hasFileHandle = fileHandle && typeof fileHandle.getFile === "function";
+
+  if (!hasBlob && !hasFileHandle) {
+    throw new Error(`Prepared backup package media asset ${index + 1} is missing preview data.`);
+  }
+
+  return {
+    ...normalizedRecord,
+    fileHandle: hasFileHandle ? fileHandle : null
+  };
+}
+
+async function resolvePreparedBackupPackagePreviewRecord(record, index) {
+  const normalizedRecord = normalizePreparedBackupPackagePreviewRecord(record, index);
+
+  if (normalizedRecord.asset?.blob instanceof Blob) {
+    return normalizedRecord;
+  }
+
+  const previewFile = await normalizedRecord.fileHandle.getFile();
+
+  if (!(previewFile instanceof Blob)) {
+    throw new Error(`Prepared backup package media asset ${index + 1} is missing preview data.`);
+  }
+
+  return normalizeItemMediaAssetRecord({
+    itemId: normalizedRecord.itemId,
+    variant: normalizedRecord.variant,
+    asset: {
+      ...normalizedRecord.asset,
+      src: "",
+      blob: previewFile,
+      fileSize: normalizedRecord.asset.fileSize || previewFile.size || 0,
+      mimeType: normalizedRecord.asset.mimeType || previewFile.type || ""
+    }
+  });
 }
 
 function buildItemMediaAssetRecord(itemId, variant, asset) {
@@ -2849,17 +2897,7 @@ function validatePreparedBackupPackageForReplacement(preparedPackage) {
 
   const validatedItemMediaAssets = Array.isArray(preparedPackage.itemMediaAssets)
     ? preparedPackage.itemMediaAssets.map((record, index) => {
-        const normalizedRecord = normalizeItemMediaAssetRecord(record);
-
-        if (normalizedRecord.variant !== "preview") {
-          throw new Error(`Prepared backup package media asset ${index + 1} is invalid.`);
-        }
-
-        if (!(normalizedRecord.asset?.blob instanceof Blob)) {
-          throw new Error(`Prepared backup package media asset ${index + 1} is missing preview data.`);
-        }
-
-        return normalizedRecord;
+        return normalizePreparedBackupPackagePreviewRecord(record, index);
       })
     : (() => {
         throw new Error("Prepared backup package media assets are invalid.");
@@ -2907,8 +2945,13 @@ export async function replaceWithPreparedBackup(backup) {
   await backfillLocalSyncMetadata(validatedBackup.items, validatedBackup.appState?.savedOutfits ?? []);
 }
 
-export async function replaceWithPreparedBackupPackage(preparedPackage) {
+export async function replaceWithPreparedBackupPackage(preparedPackage, options = {}) {
   const validatedPackage = validatePreparedBackupPackageForReplacement(preparedPackage);
+  const previewChunkSize = Math.max(
+    1,
+    Math.round(Number(options.previewChunkSize) || BACKUP_PACKAGE_PREVIEW_IMPORT_CHUNK_SIZE)
+  );
+  const publishProgress = typeof options.onProgress === "function" ? options.onProgress : null;
 
   await withStores(
     [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE, ORIGINAL_RECOVERY_STORE],
@@ -2929,6 +2972,33 @@ export async function replaceWithPreparedBackupPackage(preparedPackage) {
       });
     }
   );
+
+  if (publishProgress) {
+    publishProgress({
+      phase: "importing-previews",
+      completed: 0,
+      total: validatedPackage.itemMediaAssets.length
+    });
+  }
+
+  for (let index = 0; index < validatedPackage.itemMediaAssets.length; index += previewChunkSize) {
+    const batch = validatedPackage.itemMediaAssets.slice(index, index + previewChunkSize);
+    const resolvedBatch = await Promise.all(
+      batch.map((record, batchIndex) => resolvePreparedBackupPackagePreviewRecord(record, index + batchIndex))
+    );
+
+    await withStore(ITEM_MEDIA_STORE, "readwrite", (store) => {
+      resolvedBatch.forEach((assetRecord) => store.put(assetRecord));
+    });
+
+    if (publishProgress) {
+      publishProgress({
+        phase: "importing-previews",
+        completed: Math.min(index + batch.length, validatedPackage.itemMediaAssets.length),
+        total: validatedPackage.itemMediaAssets.length
+      });
+    }
+  }
 
   await backfillLocalSyncMetadata(validatedPackage.items, validatedPackage.appState?.savedOutfits ?? []);
 }

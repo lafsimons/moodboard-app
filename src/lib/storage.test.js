@@ -128,6 +128,18 @@ class FakeTransaction {
   }
 }
 
+class LazyPreviewFileHandle {
+  constructor(blob) {
+    this.blob = blob;
+    this.getFileCount = 0;
+  }
+
+  async getFile() {
+    this.getFileCount += 1;
+    return this.blob;
+  }
+}
+
 class FakeDatabase {
   constructor(version = 0) {
     this.version = version;
@@ -1028,6 +1040,94 @@ test("replaceWithPreparedBackupPackage clears local original recovery sessions",
   const latestRecoverySession = await loadLatestOriginalRecoverySession({ resumableOnly: false });
 
   assert.equal(latestRecoverySession, null);
+});
+
+test("replaceWithPreparedBackupPackage resolves preview handles lazily and reports chunk progress", async () => {
+  const indexedDb = installFakeIndexedDb();
+  const previewHandleA = new LazyPreviewFileHandle(new Blob(["preview-a"], { type: "image/webp" }));
+  const previewHandleB = new LazyPreviewFileHandle(new Blob(["preview-b"], { type: "image/webp" }));
+  const progressEvents = [];
+
+  await replaceWithPreparedBackupPackage({
+    source: "moodboard-app-package",
+    version: 1,
+    items: [
+      {
+        id: "item-a",
+        itemUuid: "uuid-a",
+        images: {
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 640,
+            height: 480,
+            originalFilename: "a.webp"
+          }
+        }
+      },
+      {
+        id: "item-b",
+        itemUuid: "uuid-b",
+        images: {
+          preview: {
+            src: "",
+            mimeType: "image/webp",
+            width: 800,
+            height: 600,
+            originalFilename: "b.webp"
+          }
+        }
+      }
+    ],
+    appState: {
+      savedOutfits: []
+    },
+    itemMediaAssets: [
+      {
+        itemId: "item-a",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 640,
+          height: 480,
+          originalFilename: "a.webp"
+        },
+        fileHandle: previewHandleA
+      },
+      {
+        itemId: "item-b",
+        variant: "preview",
+        asset: {
+          src: "",
+          mimeType: "image/webp",
+          width: 800,
+          height: 600,
+          originalFilename: "b.webp"
+        },
+        fileHandle: previewHandleB
+      }
+    ]
+  }, {
+    previewChunkSize: 1,
+    onProgress: (event) => progressEvents.push(event)
+  });
+
+  const itemMediaStore = indexedDb.getDatabase(INDEXED_DB_NAME).stores.get("itemMediaAssets");
+  const storedPreviewA = itemMediaStore.records.get("item-a:preview");
+  const storedPreviewB = itemMediaStore.records.get("item-b:preview");
+
+  assert.equal(previewHandleA.getFileCount, 1);
+  assert.equal(previewHandleB.getFileCount, 1);
+  assert.equal(storedPreviewA.asset.blob instanceof Blob, true);
+  assert.equal(storedPreviewB.asset.blob instanceof Blob, true);
+  assert.equal(await storedPreviewA.asset.blob.text(), "preview-a");
+  assert.equal(await storedPreviewB.asset.blob.text(), "preview-b");
+  assert.deepEqual(progressEvents, [
+    { phase: "importing-previews", completed: 0, total: 2 },
+    { phase: "importing-previews", completed: 1, total: 2 },
+    { phase: "importing-previews", completed: 2, total: 2 }
+  ]);
 });
 
 test("getOrCreateDeviceId creates and reuses a stable local device id", async () => {
