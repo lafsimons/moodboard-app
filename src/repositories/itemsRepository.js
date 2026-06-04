@@ -16,6 +16,7 @@ import {
 } from "../lib/storage.js";
 import { runMediaIntegrityCheck as analyzeStoredMediaIntegrity } from "../lib/mediaIntegrity.js";
 import { normalizeItemImages } from "../lib/itemImages.js";
+import { normalizeKnownOriginalRelativePath } from "../lib/itemIdentity.js";
 import {
   appendOriginalReconnectionAlias,
   buildOriginalReconnectionReview,
@@ -24,6 +25,19 @@ import {
 
 export async function loadItems() {
   return loadStoredItems();
+}
+
+export async function loadItemsByIds(itemIds = []) {
+  const normalizedItemIds = Array.isArray(itemIds)
+    ? [...new Set(itemIds.map((itemId) => normalizeText(itemId)).filter(Boolean))]
+    : [];
+
+  if (!normalizedItemIds.length) {
+    return [];
+  }
+
+  const items = await Promise.all(normalizedItemIds.map((itemId) => loadStoredItemById(itemId)));
+  return items.filter(Boolean);
 }
 
 export async function loadStartupItemMetadata(options = {}) {
@@ -353,6 +367,21 @@ function buildRecoveryOriginalMetadata(file, candidate = {}) {
   };
 }
 
+function resolveRecoveredKnownOriginalRelativePath(item = {}, candidate = {}, options = {}) {
+  const currentPath = normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath);
+  const candidatePath = normalizeKnownOriginalRelativePath(candidate?.relativePath);
+
+  if (!candidatePath) {
+    return currentPath;
+  }
+
+  if (!currentPath || currentPath === candidatePath || options.allowOverride) {
+    return candidatePath;
+  }
+
+  return currentPath;
+}
+
 function verifyRecoveredOriginalCandidate(file, candidate = {}) {
   const expectedFilename = normalizeText(candidate?.fileName);
   const actualFilename = normalizeText(file?.name);
@@ -438,6 +467,7 @@ export async function attachRecoveredOriginalForItem(itemId, file, candidate = {
     ...item,
     originalPreserved: true,
     relinkStatus: "linked",
+    knownOriginalRelativePath: resolveRecoveredKnownOriginalRelativePath(item, candidate, { allowOverride: true }),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename) || recoveredFilename,
     sourceFilenameAliases: appendOriginalReconnectionAlias(item, recoveredFilename),
     originalLinkedAt: linkedAt,
@@ -495,6 +525,7 @@ export async function attachRecoveredOriginalForItem(itemId, file, candidate = {
       relinkStatus: "linked",
       sourceOriginalFilename: nextItem.sourceOriginalFilename,
       sourceFilenameAliases: nextItem.sourceFilenameAliases,
+      knownOriginalRelativePath: nextItem.knownOriginalRelativePath,
       originalLinkedAt: nextItem.originalLinkedAt,
       originalRelinkedFrom: nextItem.originalRelinkedFrom,
       originalRelinkedFilename: nextItem.originalRelinkedFilename,
@@ -595,6 +626,7 @@ export async function reconnectOriginalForItem(itemId, file, expectedMatchContex
     ...item,
     originalPreserved: true,
     relinkStatus: "linked",
+    knownOriginalRelativePath: resolveRecoveredKnownOriginalRelativePath(item),
     sourceFilenameAliases: appendOriginalReconnectionAlias(item, file?.name || originalAsset?.originalFilename),
     originalLinkedAt: linkedAt,
     originalRelinkedFrom: "file-picker",

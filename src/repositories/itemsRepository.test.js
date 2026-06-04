@@ -594,6 +594,7 @@ test("attachRecoveredOriginalForItem writes original blob directly without decod
     file,
     {
       id: "candidate-fast",
+      relativePath: "archive/recovered-fast.jpg",
       fileName: "recovered-fast.jpg",
       sourceFileSize: file.size,
       sourceImageWidth: 1200,
@@ -620,6 +621,7 @@ test("attachRecoveredOriginalForItem writes original blob directly without decod
   assert.equal(result.item.originalLinkedAt, "2026-06-01T12:34:56.000Z");
   assert.equal(result.item.originalRelinkedFrom, "original-recovery");
   assert.equal(result.item.originalRelinkedFilename, "recovered-fast.jpg");
+  assert.equal(result.item.knownOriginalRelativePath, "archive/recovered-fast.jpg");
   assert.equal(result.item.sourceOriginalFilename, "recovered-fast.jpg");
   assert.deepEqual(result.item.sourceFilenameAliases, [
     "archive-copy.jpg",
@@ -636,6 +638,61 @@ test("attachRecoveredOriginalForItem writes original blob directly without decod
   assert.equal(storedOriginalEntry?.blob instanceof Blob, true);
   const afterRecoveryAvailability = await classifyOriginalAvailability("item-recovery-fast");
   assert.equal(afterRecoveryAvailability.hasStoredOriginal, true);
+});
+
+test("attachRecoveredOriginalForItem lets an accepted recovery override a conflicting knownOriginalRelativePath", async () => {
+  installFakeIndexedDb();
+  await saveItem({
+    id: "item-recovery-known-path",
+    itemUuid: "uuid-recovery-known-path",
+    name: "Recovery Known Path",
+    knownOriginalRelativePath: "archive/stale-path.jpg",
+    sourceOriginalFilename: "recovered-fast.jpg",
+    sourceFileSize: 18,
+    sourceImageWidth: 1200,
+    sourceImageHeight: 800,
+    sourceLastModified: 1717236000000,
+    mimeType: "image/jpeg",
+    originalPreserved: false,
+    images: {
+      preview: {
+        src: "data:image/webp;base64,preview-known-path",
+        mimeType: "image/webp",
+        width: 1200,
+        height: 800
+      }
+    }
+  });
+
+  const file = new File(["recovered-fast.jpg"], "recovered-fast.jpg", {
+    type: "image/jpeg",
+    lastModified: 1717236000000
+  });
+  const result = await attachRecoveredOriginalForItem(
+    "item-recovery-known-path",
+    file,
+    {
+      id: "candidate-known-path",
+      relativePath: "archive/recovered-fast.jpg",
+      fileName: "recovered-fast.jpg",
+      sourceFileSize: file.size,
+      sourceImageWidth: 1200,
+      sourceImageHeight: 800,
+      sourceLastModified: 1717236000000,
+      mimeType: "image/jpeg",
+      match: {
+        classification: "strong"
+      }
+    },
+    {
+      createOriginalImageAsset: async () => {
+        throw new Error("verified recovery should not decode");
+      },
+      now: () => "2026-06-01T12:34:56.000Z"
+    }
+  );
+
+  assert.equal(result.item.knownOriginalRelativePath, "archive/recovered-fast.jpg");
 });
 
 test("attachRecoveredOriginalForItem preserves sourceOriginalFilename and falls back to decode on scalar mismatch", async () => {

@@ -43,6 +43,7 @@ class FakeFileHandle {
     this.closeLog = closeLog;
     this.chunks = [];
     this.closed = false;
+    this.getFileCount = 0;
   }
 
   async createWritable() {
@@ -50,6 +51,7 @@ class FakeFileHandle {
   }
 
   async getFile() {
+    this.getFileCount += 1;
     return this.readBlob();
   }
 
@@ -808,6 +810,7 @@ test("prepareBackupPackageImportFromDirectory stages metadata-only items and pre
   const rootHandle = await createValidImportPackageRoot();
   rootHandle.name = "mba-archive-package";
   const progressEvents = [];
+  const previewHandle = rootHandle.directories.get("media").directories.get("previews").files.get("item-1.webp");
 
   const prepared = await prepareBackupPackageImportFromDirectory(rootHandle, {
     onProgress: (event) => {
@@ -823,7 +826,9 @@ test("prepareBackupPackageImportFromDirectory stages metadata-only items and pre
   assert.equal(prepared.itemMediaAssets.length, 1);
   assert.equal(prepared.itemMediaAssets[0].itemId, "item-1");
   assert.equal(prepared.itemMediaAssets[0].variant, "preview");
-  assert.equal(prepared.itemMediaAssets[0].asset.blob instanceof Blob, true);
+  assert.equal(prepared.itemMediaAssets[0].asset.blob instanceof Blob, false);
+  assert.equal(typeof prepared.itemMediaAssets[0].fileHandle?.getFile, "function");
+  assert.equal(previewHandle.getFileCount, 0);
   assert.equal(prepared.backupName, "mba-archive-package");
   assert.deepEqual(progressEvents, [
     { phase: "reading-manifest", completed: 0, total: 0 },
@@ -906,4 +911,22 @@ test("prepareBackupPackageImportFromDirectory rejects manifest preview count mis
   await seedPackageFile(rootHandle, PACKAGE_MANIFEST_FILE, JSON.stringify(mismatchedManifest, null, 2));
 
   await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /preview file count/i);
+});
+
+test("prepareBackupPackageImportFromDirectory rejects empty packages with 0 manifest items", async () => {
+  const rootHandle = new FakeDirectoryHandle();
+  const manifest = buildBackupPackageManifest({
+    exportedAt: "2026-05-25T12:00:00.000Z",
+    itemCount: 0,
+    previewFileCount: 0
+  });
+  const appState = buildBackupPackageAppState({
+    savedOutfits: []
+  });
+
+  await seedPackageFile(rootHandle, PACKAGE_MANIFEST_FILE, JSON.stringify(manifest, null, 2));
+  await seedPackageFile(rootHandle, PACKAGE_APP_STATE_FILE, JSON.stringify(appState, null, 2));
+  await seedPackageFile(rootHandle, PACKAGE_ITEMS_FILE, "", "application/x-ndjson");
+
+  await assert.rejects(() => prepareBackupPackageImportFromDirectory(rootHandle), /0 items/i);
 });

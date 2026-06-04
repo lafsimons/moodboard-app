@@ -8,6 +8,7 @@ const ENRICHABLE_FIELDS = [
   "mimeType",
   "sourceOriginalFilename",
   "sourceFilenameAliases",
+  "knownOriginalRelativePath",
   "originalRelinkedFilename",
   "originalRelinkedRelativePath",
   "originalLinkedAt"
@@ -58,8 +59,9 @@ function buildRecoveryRelativePathIndex(recoverySessions = []) {
       );
       const relativePath = normalizeText(selectedCandidate?.relativePath);
       const appliedAt = normalizeText(match?.applyResult?.appliedAt);
+      const appliedStatus = normalizeText(match?.applyResult?.status);
 
-      if (!relativePath && !appliedAt) {
+      if (appliedStatus !== "recovered" || (!relativePath && !appliedAt)) {
         return;
       }
 
@@ -174,6 +176,11 @@ export function buildLinkedOriginalMetadataEnrichmentResult(item = {}, originalE
     changedFields.push("sourceFilenameAliases");
   }
 
+  if (!normalizeText(item?.knownOriginalRelativePath) && normalizeText(recoveryHint?.relativePath)) {
+    nextItem.knownOriginalRelativePath = normalizeText(recoveryHint?.relativePath);
+    changedFields.push("knownOriginalRelativePath");
+  }
+
   if (!normalizeText(item?.originalRelinkedFilename) && originalEntryMetadata.originalFilename) {
     nextItem.originalRelinkedFilename = originalEntryMetadata.originalFilename;
     changedFields.push("originalRelinkedFilename");
@@ -211,6 +218,7 @@ export function buildLinkedOriginalMetadataEnrichmentResult(item = {}, originalE
       mimeType: normalizeText(nextItem?.mimeType),
       sourceOriginalFilename: normalizeText(nextItem?.sourceOriginalFilename),
       sourceFilenameAliases: Array.isArray(nextItem?.sourceFilenameAliases) ? nextItem.sourceFilenameAliases : [],
+      knownOriginalRelativePath: normalizeText(nextItem?.knownOriginalRelativePath),
       originalRelinkedFilename: normalizeText(nextItem?.originalRelinkedFilename),
       originalRelinkedRelativePath: normalizeText(nextItem?.originalRelinkedRelativePath),
       originalLinkedAt: normalizeText(nextItem?.originalLinkedAt)

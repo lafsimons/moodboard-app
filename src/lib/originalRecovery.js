@@ -3,6 +3,7 @@ import {
   createSourceProvenanceComparableRecord,
   getSourceProvenanceMatchDetails
 } from "./sourceProvenanceMatching.js";
+import { normalizeKnownOriginalRelativePath } from "./itemIdentity.js";
 
 const MATCH_PRIORITY = {
   none: 0,
@@ -446,6 +447,7 @@ export function createOriginalRecoveryCandidateRecord(scanEntry, originalAsset =
     id: candidateId,
     sourceLabel: normalizeText(scanEntry?.sourceLabel),
     relativePath: normalizeText(scanEntry?.relativePath),
+    lookupStrategy: normalizeText(scanEntry?.lookupStrategy) || "scan",
     fileName: normalizeText(file?.name) || normalizeText(originalAsset?.originalFilename),
     sourceFileSize: normalizeNumber(file?.size) || normalizeNumber(originalAsset?.fileSize),
     sourceImageWidth: normalizeNumber(originalAsset?.width),
@@ -544,6 +546,7 @@ function summarizeMatches(matches, scannedFileCount) {
   let eligibleItemCount = 0;
   let excludedItemCount = 0;
   let approvedCount = 0;
+  let alreadyAppliedCount = 0;
   let unresolvedCount = 0;
   let recoveredCount = 0;
   let failedCount = 0;
@@ -559,7 +562,7 @@ function summarizeMatches(matches, scannedFileCount) {
       eligibleItemCount += 1;
     }
 
-    if (match.decision === "accepted") {
+    if (match.decision === "accepted" && match.applyResult?.status !== "recovered") {
       approvedCount += 1;
     }
 
@@ -571,6 +574,7 @@ function summarizeMatches(matches, scannedFileCount) {
     }
 
     if (match.applyResult?.status === "recovered") {
+      alreadyAppliedCount += 1;
       recoveredCount += 1;
     } else if (match.applyResult?.status === "failed") {
       failedCount += 1;
@@ -583,6 +587,7 @@ function summarizeMatches(matches, scannedFileCount) {
     excludedItemCount,
     scannedFileCount: normalizeNumber(scannedFileCount),
     approvedCount,
+    alreadyAppliedCount,
     unresolvedCount,
     recoveredCount,
     failedCount,
@@ -602,7 +607,9 @@ function createExcludedMatchRecord(item) {
     exclusionReason: item?.originalPreserved ? "already_linked" : "ineligible",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId: "",
+    recoveryStrategy: "",
     sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
@@ -639,7 +646,9 @@ function createMatchRecord(item, candidates, previousMatch = null) {
     exclusionReason: "",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId,
+    recoveryStrategy: "",
     sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
@@ -676,7 +685,9 @@ function createIndexedMatchRecord(item, preparedItem, candidateIndex, previousMa
     exclusionReason: "",
     relinkStatus: normalizeText(item?.relinkStatus),
     selectedCandidateId,
+    recoveryStrategy: "",
     sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
     sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
     sourceFileSize: normalizeNumber(item?.sourceFileSize),
@@ -909,8 +920,116 @@ export function mergeOriginalRecoveryApplyResults(session, applyResults = [], op
   };
 }
 
+export function isOriginalRecoveryMatchAlreadyApplied(match, item = null) {
+  if (normalizeText(match?.applyResult?.status) === "recovered") {
+    return true;
+  }
+
+  const normalizedRelinkStatus = normalizeText(item?.relinkStatus || match?.relinkStatus).toLowerCase();
+  const isLinked = normalizedRelinkStatus === "linked" || normalizedRelinkStatus === "recovered";
+
+  if (item?.originalPreserved) {
+    return true;
+  }
+
+  const selectedCandidateId = normalizeText(match?.selectedCandidateId);
+  const selectedCandidate = (Array.isArray(match?.candidates) ? match.candidates : []).find(
+    (candidate) => normalizeText(candidate?.id) === selectedCandidateId
+  );
+  const selectedRelativePath = normalizeKnownOriginalRelativePath(selectedCandidate?.relativePath);
+  const knownRelativePath = normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath || match?.knownOriginalRelativePath);
+  const relinkedRelativePath = normalizeKnownOriginalRelativePath(item?.originalRelinkedRelativePath);
+
+  return Boolean(
+    selectedRelativePath
+    && isLinked
+    && (selectedRelativePath === knownRelativePath || selectedRelativePath === relinkedRelativePath)
+  );
+}
+
+export function reconcileOriginalRecoverySessionWithItems(session, items = []) {
+  return reconcileOriginalRecoverySessionWithItemsResult(session, items).session;
+}
+
+export function reconcileOriginalRecoverySessionWithItemsResult(session, items = []) {
+  const itemsById = new Map(
+    (Array.isArray(items) ? items : [])
+      .filter((item) => normalizeText(item?.id))
+      .map((item) => [normalizeText(item.id), item])
+  );
+  let changed = false;
+  const nextMatches = (Array.isArray(session?.matches) ? session.matches : []).map((match) => {
+    const item = itemsById.get(normalizeText(match?.itemId));
+
+    if (!item) {
+      return match;
+    }
+
+    const alreadyApplied = isOriginalRecoveryMatchAlreadyApplied(match, item);
+
+    const nextMatch = {
+      ...match,
+      relinkStatus: normalizeText(item?.relinkStatus) || match.relinkStatus,
+      knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath) || match.knownOriginalRelativePath,
+      sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename) || match.sourceOriginalFilename,
+      sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases).length ? normalizeStringArray(item?.sourceFilenameAliases) : match.sourceFilenameAliases,
+      applyResult: alreadyApplied
+        ? {
+            status: "recovered",
+            message: normalizeText(match?.applyResult?.message) || "Original already applied.",
+            appliedAt: normalizeText(match?.applyResult?.appliedAt)
+          }
+        : match.applyResult
+    };
+
+    if (
+      nextMatch.relinkStatus !== match.relinkStatus
+      || nextMatch.knownOriginalRelativePath !== match.knownOriginalRelativePath
+      || nextMatch.sourceOriginalFilename !== match.sourceOriginalFilename
+      || JSON.stringify(nextMatch.sourceFilenameAliases ?? []) !== JSON.stringify(match.sourceFilenameAliases ?? [])
+      || JSON.stringify(nextMatch.applyResult ?? null) !== JSON.stringify(match.applyResult ?? null)
+    ) {
+      changed = true;
+    }
+
+    return nextMatch;
+  });
+  const nextSummary = summarizeMatches(nextMatches, session?.summary?.scannedFileCount);
+  const summaryChanged = JSON.stringify(nextSummary) !== JSON.stringify(session?.summary ?? {});
+
+  if (summaryChanged) {
+    changed = true;
+  }
+
+  if (!changed) {
+    return {
+      session,
+      changed: false
+    };
+  }
+
+  return {
+    session: {
+      ...session,
+      matches: nextMatches,
+      summary: nextSummary
+    },
+    changed: true
+  };
+}
+
 export function getApprovedOriginalRecoveryMatches(session) {
-  return (Array.isArray(session?.matches) ? session.matches : []).filter((match) => match.decision === "accepted");
+  return (Array.isArray(session?.matches) ? session.matches : []).filter(
+    (match) => match.decision === "accepted" && normalizeText(match?.applyResult?.status) !== "recovered"
+  );
+}
+
+export function hasUnappliedApprovedOriginalRecoveryMatches(session) {
+  return getApprovedOriginalRecoveryMatches(session).length > 0;
+}
+
+export function isOriginalRecoverySessionResumable(session) {
+  return hasUnappliedApprovedOriginalRecoveryMatches(session);
 }
 
 export function createOriginalRecoveryReport(session) {
@@ -926,5 +1045,54 @@ export function refreshOriginalRecoverySession(session, options = {}) {
     updatedAt: normalizeText(options.updatedAt) || new Date().toISOString(),
     summary: summarizeMatches(nextMatches, session?.summary?.scannedFileCount),
     matches: nextMatches
+  };
+}
+
+export function createDirectPathRecoveryCandidate(item, fileMetadata = {}, options = {}) {
+  const normalizedRelativePath = normalizeKnownOriginalRelativePath(
+    options.relativePath || item?.knownOriginalRelativePath
+  );
+  const basename = normalizedRelativePath.split("/").filter(Boolean).at(-1) ?? "";
+
+  return {
+    id: normalizeText(options.id) || `direct_path_${normalizeText(item?.id)}`,
+    sourceLabel: normalizeText(options.sourceLabel),
+    relativePath: normalizedRelativePath,
+    lookupStrategy: options.lookupStrategy === "exact_path" ? "exact_path" : "direct_path",
+    fileName: normalizeText(fileMetadata?.name) || basename,
+    sourceFileSize: normalizeNumber(fileMetadata?.size),
+    sourceImageWidth: normalizeNumber(item?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(item?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(fileMetadata?.lastModified),
+    mimeType: normalizeText(fileMetadata?.type) || normalizeText(item?.mimeType),
+    fingerprint: ""
+  };
+}
+
+export function createDirectPathMatchRecord(item, candidate, previousMatch = null) {
+  const candidateMatch = createCandidateMatchRecord(item, candidate);
+  const outcome = candidate.lookupStrategy === "exact_path" ? "exact_single" : "strong_single";
+
+  return {
+    itemId: normalizeText(item?.id),
+    itemUuid: normalizeText(item?.itemUuid),
+    itemName: normalizeText(item?.name) || normalizeText(item?.sourceOriginalFilename),
+    outcome,
+    decision: "accepted",
+    exclusionReason: "",
+    relinkStatus: normalizeText(item?.relinkStatus),
+    selectedCandidateId: candidate.id,
+    recoveryStrategy: normalizeText(candidate.lookupStrategy) || "direct_path",
+    sourceRelativePath: normalizeText(item?.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(item?.knownOriginalRelativePath),
+    sourceOriginalFilename: normalizeText(item?.sourceOriginalFilename),
+    sourceFilenameAliases: normalizeStringArray(item?.sourceFilenameAliases),
+    sourceFileSize: normalizeNumber(item?.sourceFileSize),
+    sourceImageWidth: normalizeNumber(item?.sourceImageWidth),
+    sourceImageHeight: normalizeNumber(item?.sourceImageHeight),
+    sourceLastModified: normalizeNumber(item?.sourceLastModified),
+    mimeType: normalizeText(item?.mimeType),
+    candidates: [candidateMatch],
+    applyResult: previousMatch?.applyResult ?? null
   };
 }

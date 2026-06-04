@@ -6,54 +6,94 @@ aliases:
 
 # Active
 
-## Provenance/original reconnection architecture
+## knownOriginalRelativePath / direct-path reconnect workflow audit
 
-Later, not urgent.
+Let the enrichment finish and then audit what was actually implemented.
 
-Design and implement a provenance-safe original media reconciliation architecture.
+What matters is the concept:
 
-Current issue:
-Display names, imported filenames, external filenames, and media identity are conceptually mixed.
+```text
+knownOriginalRelativePath
+```
 
-Implement clear separation:
+means:
 
-Per item:
+```text
+vintage/vintage-images-050.jpg
+moodboard/moodboard-images-123.png
+wishlist/wishlist-images-168.png
+```
 
-* immutable internal ID
-* editable display title
-* immutable original imported filename
-* optional external/current filename aliases
-* media storage references
+and survives:
 
-Goal:
-Support future:
+```text
+export
+→ import
+→ reconnect originals folder
+```
 
-* reconnect originals
-* dedupe
-* provenance tracking
-* media reconciliation
-* sync/migration
+Then MBA can attempt:
 
-Add:
+```text
+rootFolder + knownOriginalRelativePath
+```
 
-1. provenance metadata schema
-2. filename alias/history support
-3. original-file reconciliation preparation
-4. migration for existing libraries
-5. matching helpers using:
-    * filename
-    * dimensions
-    * file size
-    * mime type
+before doing any expensive scan.
 
-Do NOT implement full perceptual hashing yet.
-Prepare architecture only.
+That’s a huge quality-of-life improvement.
 
-Run:
-npm test – –runInBand
-npm run build
+My preferred long-term reconnect order would actually be:
 
-The important thing is: Prompt 1 should happen before any large-scale renaming/tagging cleanup.
+```text
+1. Exact knownOriginalRelativePath
+2. sourceRelativePath
+3. sourceOriginalFilename + metadata
+4. full recovery scan
+```
+
+So after this enrichment is done, I would audit:
+
+### **A. What fields were actually added?**
+
+Check whether Codex created:
+
+```text
+originalRelinkedRelativePath
+knownOriginalRelativePath
+something else
+```
+
+### **B. Are they exported/imported?**
+
+Because a field that stays only inside IndexedDB doesn’t help future imports.
+
+### **C. How many linked items received it?**
+
+Ideally something like:
+
+```text
+1478 linked items
+1450 knownOriginalRelativePath populated
+28 unavailable
+```
+
+### **D. Does it point to archive-relative paths?**
+
+Good:
+
+```text
+vintage/vintage-images-050.jpg
+```
+
+Bad:
+
+```text
+/Users/lafsimons/Desktop/originals/vintage/vintage-images-050.jpg
+```
+
+because absolute paths won’t survive across machines.
+
+So yes, I would let the implementation finish, then do a quick audit. The naming can be cleaned up afterward if needed. The important thing is whether MBA now remembers enough about successfully recovered originals to avoid repeating recovery work in the future.
 
 ---
 
@@ -186,40 +226,6 @@ The important thing is: Prompt 1 should happen before any large-scale renaming/t
     - 4:5
     - 16:9
 
----
-
-## Wardrobe export improvements
-
-### OA
-- Dedicated wardrobe image export
-- Multiple export ordering modes
-- Improved layout consistency
-- Better support for large wardrobes
-- Optional labels and export settings
-- full library image export: export current filtered set up to a maximum, warn/block very large exports. Also export images in higher quality
-
----
-
-## Status & Collections
-
-### Status
-- Interested
-- Wishlist
-- Incoming
-- Wardrobe
-- Selling
-- Sold
-
-### Collections
-- User-defined multi-select organizational groups
-- Filterable
-- Editable
-- Generation-aware
-
-Goals:
-- Separate lifecycle state from organization
-- Reduce hardcoded wardrobe modes
-- Preserve migration compatibility
 
 ---
 

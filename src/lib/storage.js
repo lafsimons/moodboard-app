@@ -23,6 +23,7 @@ import {
   normalizeMediaUpdateIntent,
   normalizeItemImages
 } from "./itemImages.js";
+import { normalizeKnownOriginalRelativePath } from "./itemIdentity.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 import { stripItemMediaPayloads } from "./startupItemMetadata.js";
 
@@ -46,6 +47,7 @@ const SYNC_STATE_KEY = "state";
 const MIGRATED_STORES = [ITEM_STORE, APP_STORE, ORIGINAL_STORE];
 const PERSISTED_APP_STATE_MAX_BYTES = 1024 * 1024;
 const SYNC_BACKFILL_BATCH_SIZE = 100;
+const BACKUP_PACKAGE_PREVIEW_IMPORT_CHUNK_SIZE = 150;
 const ITEM_MEDIA_VARIANTS = ["preview", "thumbnail"];
 const SNAPSHOT_REASON_PRIORITY = {
   autosnapshot: 1,
@@ -88,6 +90,56 @@ let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
 let activeMetadataSnapshotRequest = null;
 let pendingMetadataSnapshotRequest = null;
+let startupStorageDebugPhase = "idle";
+
+function isStartupStorageDebugEnabled() {
+  return true;
+}
+
+function setStartupStorageDebugPhaseValue(nextPhase = "idle") {
+  startupStorageDebugPhase = typeof nextPhase === "string" && nextPhase.trim()
+    ? nextPhase.trim()
+    : "idle";
+}
+
+function logStartupStorageDebug(event, details = {}) {
+  if (!isStartupStorageDebugEnabled()) {
+    return;
+  }
+
+  const payload = {
+    phase: startupStorageDebugPhase,
+    ...details
+  };
+
+  console.debug(`[storage-startup] ${event}`, payload);
+}
+
+function instrumentStoreWriteCounters(store, writeCounts) {
+  if (!store || typeof store !== "object") {
+    return store;
+  }
+
+  return {
+    ...store,
+    put(value) {
+      writeCounts.put += 1;
+      return store.put(value);
+    },
+    add(value, key) {
+      writeCounts.add += 1;
+      return typeof store.add === "function" ? store.add(value, key) : store.put(value);
+    },
+    delete(key) {
+      writeCounts.delete += 1;
+      return store.delete(key);
+    },
+    clear() {
+      writeCounts.clear += 1;
+      return store.clear();
+    }
+  };
+}
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
@@ -575,6 +627,7 @@ function stripItemInlineMediaFields(record = {}) {
   return {
     ...rest,
     imageUrl: "",
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(rest?.knownOriginalRelativePath),
     images: {
       ...(rest?.images && typeof rest.images === "object" && !Array.isArray(rest.images) ? rest.images : {}),
       original: {
@@ -705,6 +758,53 @@ function normalizeItemMediaAssetRecord(record) {
   };
 }
 
+function normalizePreparedBackupPackagePreviewRecord(record, index) {
+  const normalizedRecord = normalizeItemMediaAssetRecord(record);
+
+  if (normalizedRecord.variant !== "preview") {
+    throw new Error(`Prepared backup package media asset ${index + 1} is invalid.`);
+  }
+
+  const fileHandle = record?.fileHandle;
+  const hasBlob = normalizedRecord.asset?.blob instanceof Blob;
+  const hasFileHandle = fileHandle && typeof fileHandle.getFile === "function";
+
+  if (!hasBlob && !hasFileHandle) {
+    throw new Error(`Prepared backup package media asset ${index + 1} is missing preview data.`);
+  }
+
+  return {
+    ...normalizedRecord,
+    fileHandle: hasFileHandle ? fileHandle : null
+  };
+}
+
+async function resolvePreparedBackupPackagePreviewRecord(record, index) {
+  const normalizedRecord = normalizePreparedBackupPackagePreviewRecord(record, index);
+
+  if (normalizedRecord.asset?.blob instanceof Blob) {
+    return normalizedRecord;
+  }
+
+  const previewFile = await normalizedRecord.fileHandle.getFile();
+
+  if (!(previewFile instanceof Blob)) {
+    throw new Error(`Prepared backup package media asset ${index + 1} is missing preview data.`);
+  }
+
+  return normalizeItemMediaAssetRecord({
+    itemId: normalizedRecord.itemId,
+    variant: normalizedRecord.variant,
+    asset: {
+      ...normalizedRecord.asset,
+      src: "",
+      blob: previewFile,
+      fileSize: normalizedRecord.asset.fileSize || previewFile.size || 0,
+      mimeType: normalizedRecord.asset.mimeType || previewFile.type || ""
+    }
+  });
+}
+
 function buildItemMediaAssetRecord(itemId, variant, asset) {
   return normalizeItemMediaAssetRecord({
     itemId,
@@ -718,6 +818,10 @@ function requestToPromise(request) {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+export function setStartupStorageDebugPhase(phase = "idle") {
+  setStartupStorageDebugPhaseValue(phase);
 }
 
 function getIndexedDb() {
@@ -900,9 +1004,22 @@ async function withStore(storeName, mode, run) {
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
-    const store = transaction.objectStore(storeName);
+    const writeCounts = {
+      put: 0,
+      add: 0,
+      delete: 0,
+      clear: 0
+    };
+    const store = mode === "readwrite"
+      ? instrumentStoreWriteCounters(transaction.objectStore(storeName), writeCounts)
+      : transaction.objectStore(storeName);
 
     let resultPromise;
+
+    logStartupStorageDebug("transaction-start", {
+      stores: [storeName],
+      mode
+    });
 
     try {
       const result = run(store);
@@ -915,6 +1032,11 @@ async function withStore(storeName, mode, run) {
     }
 
     transaction.oncomplete = () => {
+      logStartupStorageDebug("transaction-complete", {
+        stores: [storeName],
+        mode,
+        writeCounts
+      });
       resultPromise
         .then(resolve)
         .catch(reject)
@@ -924,6 +1046,13 @@ async function withStore(storeName, mode, run) {
     };
 
     transaction.onerror = () => {
+      logStartupStorageDebug("transaction-error", {
+        stores: [storeName],
+        mode,
+        writeCounts,
+        errorName: transaction.error?.name ?? "",
+        errorMessage: transaction.error?.message ?? ""
+      });
       reject(transaction.error);
       db.close();
     };
@@ -935,9 +1064,23 @@ async function withStoreWithoutMigration(storeName, mode, run) {
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, mode);
-    const store = transaction.objectStore(storeName);
+    const writeCounts = {
+      put: 0,
+      add: 0,
+      delete: 0,
+      clear: 0
+    };
+    const store = mode === "readwrite"
+      ? instrumentStoreWriteCounters(transaction.objectStore(storeName), writeCounts)
+      : transaction.objectStore(storeName);
 
     let resultPromise;
+
+    logStartupStorageDebug("transaction-start", {
+      stores: [storeName],
+      mode,
+      withoutMigration: true
+    });
 
     try {
       const result = run(store);
@@ -950,6 +1093,12 @@ async function withStoreWithoutMigration(storeName, mode, run) {
     }
 
     transaction.oncomplete = () => {
+      logStartupStorageDebug("transaction-complete", {
+        stores: [storeName],
+        mode,
+        withoutMigration: true,
+        writeCounts
+      });
       resultPromise
         .then(resolve)
         .catch(reject)
@@ -959,6 +1108,14 @@ async function withStoreWithoutMigration(storeName, mode, run) {
     };
 
     transaction.onerror = () => {
+      logStartupStorageDebug("transaction-error", {
+        stores: [storeName],
+        mode,
+        withoutMigration: true,
+        writeCounts,
+        errorName: transaction.error?.name ?? "",
+        errorMessage: transaction.error?.message ?? ""
+      });
       reject(transaction.error);
       db.close();
     };
@@ -1019,8 +1176,24 @@ async function withStores(storeNames, mode, run) {
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeNames, mode);
-    const stores = Object.fromEntries(storeNames.map((storeName) => [storeName, transaction.objectStore(storeName)]));
+    const writeCountsByStore = Object.fromEntries(storeNames.map((storeName) => [storeName, {
+      put: 0,
+      add: 0,
+      delete: 0,
+      clear: 0
+    }]));
+    const stores = Object.fromEntries(storeNames.map((storeName) => [
+      storeName,
+      mode === "readwrite"
+        ? instrumentStoreWriteCounters(transaction.objectStore(storeName), writeCountsByStore[storeName])
+        : transaction.objectStore(storeName)
+    ]));
     let resultPromise;
+
+    logStartupStorageDebug("transaction-start", {
+      stores: storeNames,
+      mode
+    });
 
     try {
       resultPromise = Promise.resolve(run(stores));
@@ -1031,6 +1204,11 @@ async function withStores(storeNames, mode, run) {
     }
 
     transaction.oncomplete = () => {
+      logStartupStorageDebug("transaction-complete", {
+        stores: storeNames,
+        mode,
+        writeCountsByStore
+      });
       resultPromise
         .then(resolve)
         .catch(reject)
@@ -1040,6 +1218,13 @@ async function withStores(storeNames, mode, run) {
     };
 
     transaction.onerror = () => {
+      logStartupStorageDebug("transaction-error", {
+        stores: storeNames,
+        mode,
+        writeCountsByStore,
+        errorName: transaction.error?.name ?? "",
+        errorMessage: transaction.error?.message ?? ""
+      });
       reject(transaction.error);
       db.close();
     };
@@ -1714,6 +1899,9 @@ export async function markItemOriginalRecovered(itemOrId, recoveryItem = {}) {
     originalRelinkedFrom: normalizeSyncText(recoveryItem?.originalRelinkedFrom),
     originalRelinkedFilename: normalizeSyncText(recoveryItem?.originalRelinkedFilename),
     updatedAt: normalizeSyncText(recoveryItem?.updatedAt) || normalizeSyncText(existingItem?.updatedAt),
+    knownOriginalRelativePath:
+      normalizeKnownOriginalRelativePath(recoveryItem?.knownOriginalRelativePath)
+      || normalizeKnownOriginalRelativePath(existingItem?.knownOriginalRelativePath),
     sourceFilenameAliases: Array.isArray(recoveryItem?.sourceFilenameAliases)
       ? recoveryItem.sourceFilenameAliases
       : Array.isArray(existingItem?.sourceFilenameAliases)
@@ -2108,7 +2296,12 @@ function prepareBackupItems(items) {
     }
 
     seenIds.add(item.id);
-    return migrateReferenceMetadataToTags(item);
+    const migratedItem = migrateReferenceMetadataToTags(item);
+
+    return {
+      ...migratedItem,
+      knownOriginalRelativePath: normalizeKnownOriginalRelativePath(migratedItem?.knownOriginalRelativePath)
+    };
   });
 }
 
@@ -2242,6 +2435,17 @@ function normalizeOriginalRecoveryReasonList(value) {
     .filter(Boolean);
 }
 
+function normalizeOriginalRecoveryPathLookupSummary(value = {}) {
+  return {
+    checkedCount: normalizeOriginalRecoveryCount(value.checkedCount),
+    readyCount: normalizeOriginalRecoveryCount(value.readyCount),
+    missingCount: normalizeOriginalRecoveryCount(value.missingCount),
+    conflictCount: normalizeOriginalRecoveryCount(value.conflictCount),
+    fallbackItemCount: normalizeOriginalRecoveryCount(value.fallbackItemCount),
+    fallbackMatchCount: normalizeOriginalRecoveryCount(value.fallbackMatchCount)
+  };
+}
+
 function normalizeOriginalRecoveryDecision(value, fallback = "undecided") {
   const normalizedValue = normalizeOriginalRecoveryText(value);
   return ORIGINAL_RECOVERY_DECISIONS.includes(normalizedValue)
@@ -2301,6 +2505,7 @@ function normalizeOriginalRecoveryCandidateRecord(record = {}) {
     id,
     sourceLabel: normalizeOriginalRecoveryText(record.sourceLabel),
     relativePath: normalizeOriginalRecoveryText(record.relativePath),
+    lookupStrategy: normalizeOriginalRecoveryText(record.lookupStrategy),
     fileName: normalizeOriginalRecoveryText(record.fileName),
     sourceFileSize: normalizeOriginalRecoveryCount(record.sourceFileSize),
     sourceImageWidth: normalizeOriginalRecoveryCount(record.sourceImageWidth),
@@ -2329,7 +2534,9 @@ function normalizeOriginalRecoveryMatchRecord(record = {}) {
     exclusionReason: normalizeOriginalRecoveryText(record.exclusionReason),
     relinkStatus: normalizeOriginalRecoveryText(record.relinkStatus),
     selectedCandidateId: normalizeOriginalRecoveryText(record.selectedCandidateId),
+    recoveryStrategy: normalizeOriginalRecoveryText(record.recoveryStrategy),
     sourceRelativePath: normalizeOriginalRecoveryText(record.sourceRelativePath),
+    knownOriginalRelativePath: normalizeKnownOriginalRelativePath(record.knownOriginalRelativePath),
     sourceOriginalFilename: normalizeOriginalRecoveryText(record.sourceOriginalFilename),
     sourceFilenameAliases: normalizeReasonableStringArray(record.sourceFilenameAliases),
     sourceFileSize: normalizeOriginalRecoveryCount(record.sourceFileSize),
@@ -2351,6 +2558,7 @@ function normalizeOriginalRecoverySummary(summary = {}) {
     excludedItemCount: normalizeOriginalRecoveryCount(summary.excludedItemCount),
     scannedFileCount: normalizeOriginalRecoveryCount(summary.scannedFileCount),
     approvedCount: normalizeOriginalRecoveryCount(summary.approvedCount),
+    alreadyAppliedCount: normalizeOriginalRecoveryCount(summary.alreadyAppliedCount),
     unresolvedCount: normalizeOriginalRecoveryCount(summary.unresolvedCount),
     recoveredCount: normalizeOriginalRecoveryCount(summary.recoveredCount),
     failedCount: normalizeOriginalRecoveryCount(summary.failedCount),
@@ -2398,14 +2606,23 @@ function normalizeOriginalRecoverySessionRecord(record = {}) {
     updatedAt,
     status: ORIGINAL_RECOVERY_SESSION_STATUSES.includes(status) ? status : "idle",
     summary: normalizeOriginalRecoverySummary(record.summary),
+    pathLookup: normalizeOriginalRecoveryPathLookupSummary(record.pathLookup),
     matches: (Array.isArray(record.matches) ? record.matches : [])
       .map((match) => normalizeOriginalRecoveryMatchRecord(match))
       .filter(Boolean)
   };
 }
 
+function isNormalizedOriginalRecoverySessionResumable(session = {}) {
+  return (Array.isArray(session?.matches) ? session.matches : []).some(
+    (match) => normalizeOriginalRecoveryText(match?.decision) === "accepted"
+      && normalizeOriginalRecoveryText(match?.applyResult?.status) !== "recovered"
+  );
+}
+
 export async function loadOriginalRecoverySessions(options = {}) {
   const limit = normalizeOriginalRecoveryCount(options.limit);
+  const resumableOnly = options.resumableOnly === true;
   const sessions = await withOptionalStore(
     ORIGINAL_RECOVERY_STORE,
     "readonly",
@@ -2424,11 +2641,26 @@ export async function loadOriginalRecoverySessions(options = {}) {
       return right.id.localeCompare(left.id);
     });
 
-  return limit > 0 ? normalizedSessions.slice(0, limit) : normalizedSessions;
+  const filteredSessions = resumableOnly
+    ? normalizedSessions.filter((session) => isNormalizedOriginalRecoverySessionResumable(session))
+    : normalizedSessions;
+
+  return limit > 0 ? filteredSessions.slice(0, limit) : filteredSessions;
 }
 
-export async function loadLatestOriginalRecoverySession() {
-  const [latestSession] = await loadOriginalRecoverySessions({ limit: 1 });
+export async function loadLatestOriginalRecoverySession(options = {}) {
+  if (options.resumableOnly !== true) {
+    const [latestResumableSession] = await loadOriginalRecoverySessions({ limit: 1, resumableOnly: true });
+
+    if (latestResumableSession) {
+      return latestResumableSession;
+    }
+  }
+
+  const [latestSession] = await loadOriginalRecoverySessions({
+    limit: 1,
+    resumableOnly: options.resumableOnly === true
+  });
   return latestSession ?? null;
 }
 
@@ -2665,17 +2897,7 @@ function validatePreparedBackupPackageForReplacement(preparedPackage) {
 
   const validatedItemMediaAssets = Array.isArray(preparedPackage.itemMediaAssets)
     ? preparedPackage.itemMediaAssets.map((record, index) => {
-        const normalizedRecord = normalizeItemMediaAssetRecord(record);
-
-        if (normalizedRecord.variant !== "preview") {
-          throw new Error(`Prepared backup package media asset ${index + 1} is invalid.`);
-        }
-
-        if (!(normalizedRecord.asset?.blob instanceof Blob)) {
-          throw new Error(`Prepared backup package media asset ${index + 1} is missing preview data.`);
-        }
-
-        return normalizedRecord;
+        return normalizePreparedBackupPackagePreviewRecord(record, index);
       })
     : (() => {
         throw new Error("Prepared backup package media assets are invalid.");
@@ -2723,8 +2945,13 @@ export async function replaceWithPreparedBackup(backup) {
   await backfillLocalSyncMetadata(validatedBackup.items, validatedBackup.appState?.savedOutfits ?? []);
 }
 
-export async function replaceWithPreparedBackupPackage(preparedPackage) {
+export async function replaceWithPreparedBackupPackage(preparedPackage, options = {}) {
   const validatedPackage = validatePreparedBackupPackageForReplacement(preparedPackage);
+  const previewChunkSize = Math.max(
+    1,
+    Math.round(Number(options.previewChunkSize) || BACKUP_PACKAGE_PREVIEW_IMPORT_CHUNK_SIZE)
+  );
+  const publishProgress = typeof options.onProgress === "function" ? options.onProgress : null;
 
   await withStores(
     [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE, ORIGINAL_RECOVERY_STORE],
@@ -2745,6 +2972,33 @@ export async function replaceWithPreparedBackupPackage(preparedPackage) {
       });
     }
   );
+
+  if (publishProgress) {
+    publishProgress({
+      phase: "importing-previews",
+      completed: 0,
+      total: validatedPackage.itemMediaAssets.length
+    });
+  }
+
+  for (let index = 0; index < validatedPackage.itemMediaAssets.length; index += previewChunkSize) {
+    const batch = validatedPackage.itemMediaAssets.slice(index, index + previewChunkSize);
+    const resolvedBatch = await Promise.all(
+      batch.map((record, batchIndex) => resolvePreparedBackupPackagePreviewRecord(record, index + batchIndex))
+    );
+
+    await withStore(ITEM_MEDIA_STORE, "readwrite", (store) => {
+      resolvedBatch.forEach((assetRecord) => store.put(assetRecord));
+    });
+
+    if (publishProgress) {
+      publishProgress({
+        phase: "importing-previews",
+        completed: Math.min(index + batch.length, validatedPackage.itemMediaAssets.length),
+        total: validatedPackage.itemMediaAssets.length
+      });
+    }
+  }
 
   await backfillLocalSyncMetadata(validatedPackage.items, validatedPackage.appState?.savedOutfits ?? []);
 }

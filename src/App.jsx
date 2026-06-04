@@ -101,8 +101,13 @@ import {
   replaceItemImageSet,
   replaceItemOriginalImage
 } from "./lib/itemImages";
-import { normalizeItemSourceIdentity, normalizeSourceFilenameAliases } from "./lib/itemIdentity";
+import {
+  normalizeItemSourceIdentity,
+  normalizeKnownOriginalRelativePath,
+  normalizeSourceFilenameAliases
+} from "./lib/itemIdentity";
 import { ensureBoardUuid, ensureSavedBoardUuid } from "./lib/boardIdentity.js";
+import { setStartupStorageDebugPhase } from "./lib/storage.js";
 import TagInput from "./components/TagInput";
 import OriginalRecoveryDialog from "./components/OriginalRecoveryDialog.jsx";
 import {
@@ -191,7 +196,9 @@ import {
   createOriginalReconnectionSnapshot,
   deleteItem,
   deleteItems,
+  loadItems,
   loadItemMediaAssetById,
+  loadItemsByIds,
   loadStartupItemMetadata,
   markOriginalMissing,
   prepareLoadedItems,
@@ -217,13 +224,25 @@ import {
   getOriginalRecoveryEntryFileWithFileSystemAccess,
   getOriginalRecoveryEntryMetadataWithFileSystemAccess,
   isOriginalRecoveryFileSystemAdapterSupported,
+  pickOriginalRecoveryDirectoryWithFileSystemAccess,
+  resolveRecoverySelectedCandidateHandles,
+  resolveOriginalRecoveryEntryByRelativePathWithFileSystemAccess,
+  scanOriginalRecoveryDirectoryHandleWithFileSystemAccess,
   scanOriginalRecoveryDirectoryWithFileSystemAccess
 } from "./lib/originalRecoveryFileSystemAdapter.js";
-import { refreshOriginalRecoverySession } from "./lib/originalRecovery.js";
+import {
+  getApprovedOriginalRecoveryMatches,
+  hasUnappliedApprovedOriginalRecoveryMatches,
+  reconcileOriginalRecoverySessionWithItemsResult,
+  refreshOriginalRecoverySession
+} from "./lib/originalRecovery.js";
+import { applyPersistedOriginalMutations } from "./lib/originalRecoveryApplyState.js";
+import { probeOriginalRecoveryImageMetadata } from "./lib/originalRecoveryImageProbe.js";
 import {
   createControlledVintageProvenanceBackfillReport,
   createLegacyProvenanceBackfillReport
 } from "./lib/legacyProvenanceBackfill.js";
+import { createKnownOriginalRelativePathBackfillReport } from "./lib/knownOriginalRelativePathBackfill.js";
 import {
   applyLinkedOriginalMetadataEnrichmentReport,
   buildLinkedOriginalMetadataEnrichmentReport
@@ -3213,6 +3232,7 @@ function itemNeedsMoodboardMetadataMigration(originalItem, normalizedItem) {
     normalizeFileMetadataText(originalItem.itemUuid) !== normalizedItem.itemUuid ||
     normalizeFileMetadataText(originalItem.sourceNamespace) !== normalizedItem.sourceNamespace ||
     normalizeFileMetadataText(originalItem.sourceRelativePath) !== normalizedItem.sourceRelativePath ||
+    normalizeKnownOriginalRelativePath(originalItem.knownOriginalRelativePath) !== normalizedItem.knownOriginalRelativePath ||
     normalizeFileMetadataText(originalItem.sourceOriginalFilename) !== normalizedItem.sourceOriginalFilename ||
     normalizedOriginalAliases.length !== normalizedNextAliases.length ||
     normalizedOriginalAliases.some((alias, index) => alias !== normalizedNextAliases[index]) ||
@@ -3679,6 +3699,10 @@ function buildSnapshotTrackedAppStateSignature(appState) {
   return JSON.stringify(rest);
 }
 
+function areSemanticallyEqualJsonish(left, right) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 const emptyWeatherSettings = {
   locationName: "",
   latitude: null,
@@ -3972,10 +3996,15 @@ export default function App() {
   const [isOriginalRecoveryApplying, setIsOriginalRecoveryApplying] = useState(false);
   const [originalRecoveryScanProgress, setOriginalRecoveryScanProgress] = useState("");
   const [originalRecoveryRuntimeSessionId, setOriginalRecoveryRuntimeSessionId] = useState("");
-  const [originalRecoveryCandidateEntriesById, setOriginalRecoveryCandidateEntriesById] = useState({});
+  const originalRecoveryCandidateEntriesByIdRef = useRef({});
+  const originalRecoveryRootHandleRef = useRef(null);
+  const [originalRecoveryLiveDescriptorCount, setOriginalRecoveryLiveDescriptorCount] = useState(0);
   const [legacyProvenanceBackfillReport, setLegacyProvenanceBackfillReport] = useState(null);
   const [legacyProvenanceBackfillFeedback, setLegacyProvenanceBackfillFeedback] = useState("");
   const [isLegacyProvenanceBackfillApplying, setIsLegacyProvenanceBackfillApplying] = useState(false);
+  const [knownOriginalRelativePathBackfillReport, setKnownOriginalRelativePathBackfillReport] = useState(null);
+  const [knownOriginalRelativePathBackfillFeedback, setKnownOriginalRelativePathBackfillFeedback] = useState("");
+  const [isKnownOriginalRelativePathBackfillApplying, setIsKnownOriginalRelativePathBackfillApplying] = useState(false);
   const [controlledVintageBackfillReport, setControlledVintageBackfillReport] = useState(null);
   const [controlledVintageBackfillFeedback, setControlledVintageBackfillFeedback] = useState("");
   const [isControlledVintageBackfillApplying, setIsControlledVintageBackfillApplying] = useState(false);
@@ -5439,6 +5468,93 @@ export default function App() {
     return value || "None";
   }
 
+  function formatKnownOriginalRelativePathBackfillReason(reason) {
+    switch (reason) {
+      case "not_preserved":
+        return "Original is not preserved";
+      case "already_backfilled":
+        return "Known original path already exists";
+      case "missing_original_relinked_relative_path":
+        return "No original relinked relative path";
+      case "invalid_original_relinked_relative_path":
+        return "Original relinked relative path is invalid";
+      default:
+        return "Skipped";
+    }
+  }
+
+  async function handleKnownOriginalRelativePathBackfillDryRun() {
+    const report = createKnownOriginalRelativePathBackfillReport(items, { exampleLimit: 20 });
+    setKnownOriginalRelativePathBackfillReport(report);
+    setKnownOriginalRelativePathBackfillFeedback(
+      `Dry run complete. ${report.eligiblePreservedItemCount} eligible preserved items, ${report.affectedCount} affected, ${report.skippedCount} skipped, ${report.invalidPathCount} invalid paths.`
+    );
+  }
+
+  async function handleKnownOriginalRelativePathBackfillApply() {
+    if (!knownOriginalRelativePathBackfillReport?.affectedCount) {
+      return;
+    }
+
+    const confirmed = await requestConfirmation({
+      title: "Apply known original path backfill?",
+      message: `This will update ${knownOriginalRelativePathBackfillReport.affectedCount} preserved items, skip ${knownOriginalRelativePathBackfillReport.skippedCount}, and ignore ${knownOriginalRelativePathBackfillReport.invalidPathCount} invalid paths. Apply the dry-run changes now?`,
+      confirmLabel: "Apply backfill"
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsKnownOriginalRelativePathBackfillApplying(true);
+
+    try {
+      const snapshotResult = await runMetadataSnapshot("before-repair", {
+        priority: "blocking",
+        changedItemIds: knownOriginalRelativePathBackfillReport.changedItemIds
+      });
+
+      if (!snapshotResult) {
+        const continueWithoutSnapshot = await requestConfirmation({
+          title: "Continue without metadata snapshot?",
+          message: "Metadata snapshot failed. Continue with known original path backfill anyway?",
+          confirmLabel: "Continue"
+        });
+
+        if (!continueWithoutSnapshot) {
+          return;
+        }
+      }
+
+      const updatedItems = knownOriginalRelativePathBackfillReport.affectedItems;
+      await saveItems(updatedItems);
+
+      const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
+      const nextItems = items.map((item) => updatedItemsById[item.id] ?? item);
+
+      setItems(nextItems);
+      setReferencePreview((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      setDraft((current) => current?.id ? (updatedItemsById[current.id] ?? current) : current);
+      markMetadataDirty(updatedItems.map((item) => item.id));
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+
+      const nextReport = createKnownOriginalRelativePathBackfillReport(nextItems, { exampleLimit: 20 });
+      setKnownOriginalRelativePathBackfillReport(nextReport);
+      setKnownOriginalRelativePathBackfillFeedback(
+        `Backfilled ${updatedItems.length} preserved items. ${nextReport.eligiblePreservedItemCount} eligible preserved items remain, ${nextReport.skippedCount} skipped, ${nextReport.invalidPathCount} invalid paths.`
+      );
+    } catch (error) {
+      setKnownOriginalRelativePathBackfillFeedback(
+        formatErrorMessage(error, "Known original path backfill failed.")
+      );
+    } finally {
+      setIsKnownOriginalRelativePathBackfillApplying(false);
+    }
+  }
+
   async function handleLegacyProvenanceBackfillDryRun() {
     const report = createLegacyProvenanceBackfillReport(items, { exampleLimit: 3 });
     setLegacyProvenanceBackfillReport(report);
@@ -5688,10 +5804,19 @@ export default function App() {
     setOriginalRecoveryScanProgress("");
 
     try {
-      const latestSession = await loadLatestOriginalRecoverySession();
-      setOriginalRecoverySession(latestSession);
+      const [latestSession, currentItems] = await Promise.all([
+        loadLatestOriginalRecoverySession(),
+        loadItems()
+      ]);
+      const reconciledLatestSession = latestSession
+        ? reconcileOriginalRecoverySessionWithItemsResult(latestSession, currentItems).session
+        : latestSession;
+      setOriginalRecoverySession(
+        reconciledLatestSession
+      );
       setOriginalRecoveryRuntimeSessionId("");
-      setOriginalRecoveryCandidateEntriesById({});
+      originalRecoveryCandidateEntriesByIdRef.current = {};
+      setOriginalRecoveryLiveDescriptorCount(0);
     } catch (error) {
       setOriginalRecoveryError(formatErrorMessage(error, "Failed to load original recovery report."));
     }
@@ -5751,19 +5876,38 @@ export default function App() {
     try {
       const result = await scanOriginalRecoverySource({
         adapter: {
-          scan: (adapterOptions = {}) => scanOriginalRecoveryDirectoryWithFileSystemAccess({
-            target: window,
-            ...adapterOptions,
-            onProgress: ({ phase, traversedFileCount, currentPath }) => {
-              if (phase === "traversal") {
-                publishOriginalRecoveryProgress("Traversing", traversedFileCount, 0, currentPath);
+          selectRoot: async (adapterOptions = {}) => {
+            const rootContext = await pickOriginalRecoveryDirectoryWithFileSystemAccess({
+              target: window,
+              ...adapterOptions
+            });
+            originalRecoveryRootHandleRef.current = rootContext?.directoryHandle ?? null;
+            return rootContext;
+          },
+          scanRoot: (rootContext, adapterOptions = {}) => scanOriginalRecoveryDirectoryHandleWithFileSystemAccess(
+            rootContext?.directoryHandle,
+            {
+              ...adapterOptions,
+              sourceLabel: rootContext?.sourceLabel,
+              onProgress: ({ phase, traversedFileCount, currentPath }) => {
+                if (phase === "traversal") {
+                  publishOriginalRecoveryProgress("Traversing", traversedFileCount, 0, currentPath);
+                }
               }
             }
-          }),
+          ),
+          resolveRelativePath: (rootContext, relativePath, adapterOptions = {}) => resolveOriginalRecoveryEntryByRelativePathWithFileSystemAccess(
+            rootContext?.directoryHandle,
+            relativePath,
+            {
+              ...adapterOptions,
+              sourceLabel: rootContext?.sourceLabel
+            }
+          ),
           getFile: getOriginalRecoveryEntryFileWithFileSystemAccess,
           getFileMetadata: getOriginalRecoveryEntryMetadataWithFileSystemAccess
         },
-        createOriginalImageAsset,
+        probeRecoveryImageMetadata: probeOriginalRecoveryImageMetadata,
         app: "mba",
         previousSession: originalRecoverySession,
         onProgress: ({ phase, completed, total, currentPath }) => {
@@ -5773,6 +5917,8 @@ export default function App() {
 
           const phaseLabel = phase === "matching-filenames"
             ? "Matching filenames"
+            : phase === "direct-path-check"
+              ? "Checking known paths"
             : phase === "reading-candidate-metadata"
               ? "Reading candidate metadata"
               : phase === "decoding-candidate-images"
@@ -5789,11 +5935,13 @@ export default function App() {
 
       setOriginalRecoverySession(result.session);
       setOriginalRecoveryRuntimeSessionId(result.session.id);
-      setOriginalRecoveryCandidateEntriesById(result.candidateEntriesById);
+      originalRecoveryCandidateEntriesByIdRef.current = result.candidateEntriesById;
+      setOriginalRecoveryLiveDescriptorCount(Object.keys(result.candidateEntriesById ?? {}).length);
       setOriginalRecoveryBucket("all");
+      const pathLookup = result.session.pathLookup ?? {};
       setOriginalRecoveryFeedback(result.persisted
-        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
-        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        ? `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, live descriptors ${result.instrumentation?.liveDescriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, stored candidates ${result.instrumentation?.totalStoredCandidateCount ?? 0}, session bytes ${result.instrumentation?.serializedSessionByteEstimate ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
+        : `Scanned ${result.session.summary?.scannedFileCount ?? 0} files. ${result.session.summary?.approvedCount ?? 0} matches are ready to recover. Recovery report could not be saved; this session cannot be resumed after reload. Known paths checked ${pathLookup.checkedCount ?? 0}, ready ${pathLookup.readyCount ?? 0}, missing ${pathLookup.missingCount ?? 0}, conflicts ${pathLookup.conflictCount ?? 0}, fallback matches ${pathLookup.fallbackMatchCount ?? 0}. Descriptors ${result.instrumentation?.descriptorCount ?? 0}, live descriptors ${result.instrumentation?.liveDescriptorCount ?? 0}, plausible ${result.instrumentation?.plausibleCandidateCount ?? 0}, getFile calls ${result.instrumentation?.getFileCallCount ?? 0}, decoded ${result.instrumentation?.decodedCandidateCount ?? 0}, stored candidates ${result.instrumentation?.totalStoredCandidateCount ?? 0}, session bytes ${result.instrumentation?.serializedSessionByteEstimate ?? 0}, retained files ${result.instrumentation?.fileObjectsRetainedCount ?? 0}.`
       );
       setOriginalRecoveryScanProgress("");
     } catch (error) {
@@ -5946,12 +6094,18 @@ export default function App() {
     }
   }
 
-  async function handleApplyOriginalRecovery() {
-    if (!originalRecoverySession?.id) {
+  async function handleApplyOriginalRecovery(options = {}) {
+    const sessionForApply = options.sessionOverride ?? originalRecoverySession;
+
+    if (!sessionForApply?.id) {
       return;
     }
 
-    if (originalRecoveryRuntimeSessionId !== originalRecoverySession.id) {
+    const runtimeSessionId = typeof options.runtimeSessionId === "string"
+      ? options.runtimeSessionId
+      : originalRecoveryRuntimeSessionId;
+
+    if (!options.skipRuntimeSessionCheck && runtimeSessionId !== sessionForApply.id) {
       setOriginalRecoveryError("Re-scan the source before applying approved recoveries.");
       return;
     }
@@ -5990,7 +6144,7 @@ export default function App() {
         ? performance.now()
         : Date.now();
       const snapshotResult = await runMetadataSnapshot("before-repair", {
-        changedItemIds: (originalRecoverySession.matches ?? [])
+        changedItemIds: (sessionForApply.matches ?? [])
           .filter((match) => match.decision === "accepted")
           .map((match) => match.itemId),
         priority: "blocking"
@@ -6017,9 +6171,9 @@ export default function App() {
         }
       }
 
-      const result = await applyOriginalRecoverySession(originalRecoverySession.id, {
-        currentSession: originalRecoverySession,
-        candidateEntriesById: originalRecoveryCandidateEntriesById,
+      const result = await applyOriginalRecoverySession(sessionForApply.id, {
+        currentSession: sessionForApply,
+        candidateEntriesById: options.candidateEntriesById ?? originalRecoveryCandidateEntriesByIdRef.current,
         adapter: {
           getFile: getOriginalRecoveryEntryFileWithFileSystemAccess
         },
@@ -6140,12 +6294,14 @@ export default function App() {
         }
       });
 
-      result.recoveredItems.forEach((savedItem) => {
-        applyPersistedOriginalMutation(savedItem);
-      });
-      if (result.recoveredItems.length) {
-        const changedItemIds = result.recoveredItems.map((item) => item.id).filter(Boolean);
-        markMetadataDirty(changedItemIds);
+      const recoveredItems = await loadItemsByIds(result.recoveredItemIds);
+
+      if (recoveredItems.length) {
+        const mergedState = applyPersistedOriginalMutations(items, recoveredItems, referencePreview, draft);
+        setItems(mergedState.items);
+        setReferencePreview(mergedState.referencePreview);
+        setDraft(mergedState.draft);
+        markMetadataDirty(mergedState.changedItemIds);
         applyProvenanceUpdate(
           (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
           { itemCountSnapshot: items.length }
@@ -6153,13 +6309,73 @@ export default function App() {
       }
       setOriginalRecoverySession(result.session);
       setOriginalRecoveryFeedback(result.persisted
-        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
-        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms.`
+        ? `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms, chunks ${result.timings?.applyChunkCount ?? 0}, max chunk ${result.timings?.maxApplyChunkSize ?? 0}.`
+        : `Recovered ${result.session.summary?.recoveredCount ?? 0} originals. ${result.session.summary?.failedCount ?? 0} failed. Recovery report could not be saved; this session cannot be resumed after reload. Autosnapshot ${autosnapshotMs} ms, getFile ${result.timings?.getFileMs ?? 0} ms, blob write ${result.timings?.blobWriteMs ?? 0} ms, item save ${result.timings?.itemMetadataSaveMs ?? 0} ms, avg/item ${result.timings?.averagePerItemMs ?? 0} ms, apply ${result.timings?.applyLoopMs ?? 0} ms, report save ${result.timings?.reportPersistenceMs ?? 0} ms, chunks ${result.timings?.applyChunkCount ?? 0}, max chunk ${result.timings?.maxApplyChunkSize ?? 0}.`
       );
     } catch (error) {
       setOriginalRecoveryError(formatErrorMessage(error, "Original recovery apply failed."));
     } finally {
       setIsOriginalRecoveryApplying(false);
+    }
+  }
+
+  async function handleResumeOriginalRecoveryApply() {
+    if (!originalRecoverySession?.id || !hasUnappliedApprovedOriginalRecoveryMatches(originalRecoverySession)) {
+      return;
+    }
+
+    if (!isOriginalRecoveryFileSystemAdapterSupported(window)) {
+      setOriginalRecoveryError("Original recovery folder access requires File System Access API support.");
+      return;
+    }
+
+    setOriginalRecoveryError("");
+    setOriginalRecoveryFeedback("");
+    setOriginalRecoveryScanProgress("Resolving approved candidate paths...");
+
+    try {
+      let rootHandle = originalRecoveryRootHandleRef.current;
+
+      if (!rootHandle) {
+        const rootContext = await pickOriginalRecoveryDirectoryWithFileSystemAccess({ target: window });
+        rootHandle = rootContext?.directoryHandle ?? null;
+        originalRecoveryRootHandleRef.current = rootHandle;
+      }
+
+      const selectedHandleResult = await resolveRecoverySelectedCandidateHandles(
+        rootHandle,
+        originalRecoverySession,
+        {
+          sourceLabel: originalRecoverySession.sourceLabel,
+          currentItems: items
+        }
+      );
+      const reconciledSessionResult = reconcileOriginalRecoverySessionWithItemsResult(originalRecoverySession, items);
+      const reconciledSession = reconciledSessionResult.session;
+
+      originalRecoveryCandidateEntriesByIdRef.current = selectedHandleResult.candidateEntriesById;
+      setOriginalRecoveryLiveDescriptorCount(Object.keys(selectedHandleResult.candidateEntriesById).length);
+      setOriginalRecoveryRuntimeSessionId(reconciledSession.id);
+      if (reconciledSessionResult.changed) {
+        setOriginalRecoverySession(reconciledSession);
+      }
+      await handleApplyOriginalRecovery({
+        candidateEntriesById: selectedHandleResult.candidateEntriesById,
+        runtimeSessionId: reconciledSession.id,
+        skipRuntimeSessionCheck: true,
+        sessionOverride: reconciledSession
+      });
+
+      setOriginalRecoveryFeedback((currentFeedback) => {
+        const resolutionSummary = `Resolved ${selectedHandleResult.resolvedCount} approved files from the selected folder. Missing ${selectedHandleResult.missingCount}, invalid paths ${selectedHandleResult.invalidPathCount}.`;
+        return currentFeedback ? `${resolutionSummary} ${currentFeedback}` : resolutionSummary;
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        setOriginalRecoveryFeedback("Resume apply canceled.");
+      } else {
+        setOriginalRecoveryError(formatErrorMessage(error, "Failed to resolve approved recovery files."));
+      }
     }
   }
   const visibleWardrobeItems = useMemo(() => {
@@ -6637,6 +6853,7 @@ export default function App() {
 
     return {
       id: board?.id ?? `board_${Date.now()}`,
+      boardUuid: board?.boardUuid ?? "",
       width: relaidBoard.width,
       height: relaidBoard.height,
       images: relaidBoard.images
@@ -6941,6 +7158,7 @@ export default function App() {
       let fallbackItems = [];
 
       try {
+        setStartupStorageDebugPhase("bootstrap:load-startup-state");
         const [storedAppState, startupItems, latestMetadataSnapshotInfoResult] = await Promise.all([
           loadStartupAppState(),
           loadStartupItemMetadata(),
@@ -7045,6 +7263,7 @@ export default function App() {
           setFitpics(storedAppState.fitpics ?? []);
 
           try {
+            setStartupStorageDebugPhase("bootstrap:backfill-local-sync-metadata:stored-app-state");
             await backfillLocalSyncMetadata(effectiveItems, hydratedSavedBoards);
           } catch (syncMetadataError) {
             console.error("Failed to initialize local sync metadata.", syncMetadataError);
@@ -7053,6 +7272,7 @@ export default function App() {
           applyDefaultBootstrapState(effectiveItems);
 
           try {
+            setStartupStorageDebugPhase("bootstrap:backfill-local-sync-metadata:default-state");
             await backfillLocalSyncMetadata(effectiveItems, []);
           } catch (syncMetadataError) {
             console.error("Failed to initialize local sync metadata.", syncMetadataError);
@@ -7060,6 +7280,7 @@ export default function App() {
         }
 
       } catch (error) {
+        setStartupStorageDebugPhase("bootstrap:error");
         if (cancelled) {
           return;
         }
@@ -7070,6 +7291,7 @@ export default function App() {
       }
 
       if (!cancelled) {
+        setStartupStorageDebugPhase("bootstrap:complete");
         setLoading(false);
         pendingPersistenceReadyRef.current = true;
       }
@@ -7079,6 +7301,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      setStartupStorageDebugPhase("bootstrap:cancelled");
     };
   }, []);
 
@@ -7121,9 +7344,9 @@ export default function App() {
       locked,
       excluded,
       outfit,
-      board: ensureBoardUuid(board),
+      board,
       ignoredImportImages,
-      savedOutfits: savedOutfits.map((savedOutfit) => ensureSavedBoardUuid(savedOutfit)),
+      savedOutfits,
       likedOutfitKeys,
       outfitAffinity,
       recentOutfits,
@@ -7364,6 +7587,7 @@ export default function App() {
         while (pendingAppStateSaveRef.current) {
           const stateToSave = pendingAppStateSaveRef.current;
           pendingAppStateSaveRef.current = null;
+          setStartupStorageDebugPhase(`app-state-save:${reason}`);
           await saveAppState(stateToSave);
         }
       } finally {
@@ -7428,6 +7652,11 @@ export default function App() {
 
   function applyLocalSafetyUpdate(buildNextLocalSafety) {
     const nextLocalSafety = normalizeLocalSafetyState(buildNextLocalSafety(localSafetyRef.current));
+
+    if (areSemanticallyEqualJsonish(nextLocalSafety, localSafetyRef.current)) {
+      return localSafetyRef.current;
+    }
+
     localSafetyRef.current = nextLocalSafety;
     setLocalSafety(nextLocalSafety);
 
@@ -8121,9 +8350,18 @@ export default function App() {
       loadStartupItemMetadata(),
       loadStartupAppState()
     ]);
+    const actualItemCount = persistedItems?.length ?? 0;
 
-    if ((persistedItems?.length ?? 0) !== expectedItemCount) {
-      throw new Error(`Imported library persistence verification failed: expected ${expectedItemCount} items but found ${persistedItems?.length ?? 0}.`);
+    if (expectedItemCount <= 0) {
+      throw new Error(`Imported scalable backup package is empty: expected ${expectedItemCount} items and found ${actualItemCount} after commit.`);
+    }
+
+    if (actualItemCount !== expectedItemCount) {
+      throw new Error(`Imported library persistence verification failed after commit: expected ${expectedItemCount} items but found ${actualItemCount}.`);
+    }
+
+    if (actualItemCount === 0) {
+      throw new Error(`Imported library persistence verification failed after commit: expected ${expectedItemCount} items but found 0.`);
     }
 
     if (!persistedAppState) {
@@ -8367,6 +8605,10 @@ export default function App() {
       const preparedPackage = await prepareBackupPackageImportFromDirectory(directoryHandle, {
         onProgress: updateBackupPackageImportProgress
       });
+
+      if ((preparedPackage.items?.length ?? 0) <= 0) {
+        throw new Error("Scalable backup package import failed: parsed 0 items from the selected package.");
+      }
       const importedAppState = buildImportedAppStateWithProvenance(preparedPackage.appState, {
         importedAt: new Date().toISOString(),
         lastImportedBackupName: preparedPackage.backupName || directoryHandle?.name || "",
@@ -8399,10 +8641,15 @@ export default function App() {
         priority: "blocking",
         changedItemIds: localSafety.changedItemIdsSinceSnapshot
       });
-      await replaceWithPreparedBackupPackage({
-        ...preparedPackage,
-        appState: importedAppState
-      });
+      await replaceWithPreparedBackupPackage(
+        {
+          ...preparedPackage,
+          appState: importedAppState
+        },
+        {
+          onProgress: updateBackupPackageImportProgress
+        }
+      );
       const verifiedImport = await verifyImportedPersistence(preparedPackage.items.length, importedAppState);
       await applyLoadedData(verifiedImport.items, verifiedImport.appState);
       clearBackupPackageImportProgress();
@@ -8420,7 +8667,9 @@ export default function App() {
         return;
       }
 
-      window.alert(error?.message || "This scalable backup package could not be imported.");
+      const failureMessage = error?.message || "This scalable backup package could not be imported.";
+      setBackupExportStatus(`Scalable backup package import failed: ${failureMessage}`);
+      window.alert(failureMessage);
     } finally {
       importCommitInFlightRef.current = false;
       setIsBackupPackageImporting(false);
@@ -11568,6 +11817,10 @@ export default function App() {
       return "Importing";
     }
 
+    if (progress.phase === "importing-previews") {
+      return `Importing previews: ${progress.completed} / ${progress.total}`;
+    }
+
     return "";
   }
 
@@ -12338,13 +12591,22 @@ export default function App() {
   const backupPackageExportProgressLabel = getBackupPackageExportProgressLabel(backupPackageExportProgress);
   const backupPackageImportProgressLabel = getBackupPackageImportProgressLabel(backupPackageImportProgress);
   const appBuildLabel = formatAppBuildLabel();
+  const resumableOriginalRecoveryMatches = useMemo(
+    () => getApprovedOriginalRecoveryMatches(originalRecoverySession),
+    [originalRecoverySession]
+  );
   const canUseOriginalRecoveryScan = typeof window !== "undefined"
     ? isOriginalRecoveryFileSystemAdapterSupported(window)
     : isOriginalRecoveryFileSystemAdapterSupported();
   const hasLiveOriginalRecoveryCandidates = Boolean(
     originalRecoverySession?.id
     && originalRecoveryRuntimeSessionId === originalRecoverySession.id
-    && Object.keys(originalRecoveryCandidateEntriesById).length
+    && originalRecoveryLiveDescriptorCount
+  );
+  const canResumeOriginalRecoveryApply = Boolean(
+    originalRecoverySession?.id
+    && resumableOriginalRecoveryMatches.length
+    && !hasLiveOriginalRecoveryCandidates
   );
   const fileSystemAccessDebug = typeof window !== "undefined"
     ? getFileSystemAccessDebugSnapshot(window)
@@ -14114,6 +14376,64 @@ export default function App() {
                           <button
                             type="button"
                             className="ghost-button wardrobe-manage-action"
+                            onClick={() => void handleKnownOriginalRelativePathBackfillDryRun()}
+                            disabled={isKnownOriginalRelativePathBackfillApplying}
+                          >
+                            {isKnownOriginalRelativePathBackfillApplying
+                              ? "Applying known original path backfill..."
+                              : "Dry run known original path backfill"}
+                          </button>
+                          {knownOriginalRelativePathBackfillReport ? (
+                            <section className="media-integrity-report" aria-label="Known original path backfill report">
+                              <p className="media-integrity-status">
+                                {knownOriginalRelativePathBackfillReport.eligiblePreservedItemCount} eligible preserved items · {knownOriginalRelativePathBackfillReport.affectedCount} affected · {knownOriginalRelativePathBackfillReport.skippedCount} skipped · {knownOriginalRelativePathBackfillReport.invalidPathCount} invalid paths
+                              </p>
+                              {knownOriginalRelativePathBackfillFeedback ? (
+                                <p className="form-success tag-manager-feedback">{knownOriginalRelativePathBackfillFeedback}</p>
+                              ) : null}
+                              {knownOriginalRelativePathBackfillReport.examples.affected.length ? (
+                                <div className="media-integrity-summary">
+                                  {knownOriginalRelativePathBackfillReport.examples.affected.map((example) => (
+                                    <p key={`known-original-path-affected-${example.itemId}`} className="media-integrity-summary-row">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{example.preview?.sanitizedKnownOriginalRelativePath || "None"}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {knownOriginalRelativePathBackfillReport.examples.invalid.length ? (
+                                <div className="media-integrity-issues">
+                                  {knownOriginalRelativePathBackfillReport.examples.invalid.map((example) => (
+                                    <p key={`known-original-path-invalid-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatKnownOriginalRelativePathBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {knownOriginalRelativePathBackfillReport.examples.skipped.length ? (
+                                <div className="media-integrity-issues">
+                                  {knownOriginalRelativePathBackfillReport.examples.skipped.map((example) => (
+                                    <p key={`known-original-path-skipped-${example.itemId}`} className="media-integrity-issue-entry">
+                                      <span>{example.itemName || example.itemId}</span>
+                                      <strong>{formatKnownOriginalRelativePathBackfillReason(example.reason)}</strong>
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="ghost-button wardrobe-manage-action"
+                                onClick={() => void handleKnownOriginalRelativePathBackfillApply()}
+                                disabled={!knownOriginalRelativePathBackfillReport.affectedCount || isKnownOriginalRelativePathBackfillApplying}
+                              >
+                                Apply known original path backfill
+                              </button>
+                            </section>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="ghost-button wardrobe-manage-action"
                             onClick={() => void handleLinkedOriginalMetadataEnrichmentDryRun()}
                             disabled={isLinkedOriginalMetadataEnrichmentApplying}
                           >
@@ -15009,10 +15329,12 @@ export default function App() {
           error={originalRecoveryError}
           canScan={canUseOriginalRecoveryScan}
           hasLiveCandidates={hasLiveOriginalRecoveryCandidates}
+          canResumeApply={canResumeOriginalRecoveryApply}
           bucketFilter={originalRecoveryBucket}
           onClose={closeOriginalRecoveryWorkflow}
           onScan={() => void handleOriginalRecoveryScan()}
           onApplyApproved={() => void handleApplyOriginalRecovery()}
+          onResumeApply={() => void handleResumeOriginalRecoveryApply()}
           onExportReport={() => void handleExportOriginalRecoveryReport()}
           onBucketFilterChange={setOriginalRecoveryBucket}
           onApproveReady={() => void handleApproveReadyOriginalRecoveryMatches()}
