@@ -6,94 +6,12 @@ aliases:
 
 # Active
 
-## knownOriginalRelativePath / direct-path reconnect workflow audit
-
-Let the enrichment finish and then audit what was actually implemented.
-
-What matters is the concept:
-
-```text
-knownOriginalRelativePath
-```
-
-means:
-
-```text
-vintage/vintage-images-050.jpg
-moodboard/moodboard-images-123.png
-wishlist/wishlist-images-168.png
-```
-
-and survives:
-
-```text
-export
-→ import
-→ reconnect originals folder
-```
-
-Then MBA can attempt:
-
-```text
-rootFolder + knownOriginalRelativePath
-```
-
-before doing any expensive scan.
-
-That’s a huge quality-of-life improvement.
-
-My preferred long-term reconnect order would actually be:
-
-```text
-1. Exact knownOriginalRelativePath
-2. sourceRelativePath
-3. sourceOriginalFilename + metadata
-4. full recovery scan
-```
-
-So after this enrichment is done, I would audit:
-
-### **A. What fields were actually added?**
-
-Check whether Codex created:
-
-```text
-originalRelinkedRelativePath
-knownOriginalRelativePath
-something else
-```
-
-### **B. Are they exported/imported?**
-
-Because a field that stays only inside IndexedDB doesn’t help future imports.
-
-### **C. How many linked items received it?**
-
-Ideally something like:
-
-```text
-1478 linked items
-1450 knownOriginalRelativePath populated
-28 unavailable
-```
-
-### **D. Does it point to archive-relative paths?**
-
-Good:
-
-```text
-vintage/vintage-images-050.jpg
-```
-
-Bad:
-
-```text
-/Users/lafsimons/Desktop/originals/vintage/vintage-images-050.jpg
-```
-
-because absolute paths won’t survive across machines.
-
-So yes, I would let the implementation finish, then do a quick audit. The naming can be cleaned up afterward if needed. The important thing is whether MBA now remembers enough about successfully recovered originals to avoid repeating recovery work in the future.
+- Scan cache / original recovery source index
+- Export package atomicity validation
+- Recovery session pruning
+- Import/export phase progress and error visibility
+- Startup write audit and reduction
+- App.jsx decomposition
 
 ---
 

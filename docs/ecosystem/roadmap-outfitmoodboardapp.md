@@ -1,3 +1,7 @@
+---
+aliases:
+  - roadmap
+---
 # Roadmap
 
 # Vision
@@ -56,6 +60,7 @@ Tools operate on information.
 # Current State
 
 Current architecture supports multi-thousand-image local-first libraries and is considered stable enough for future sync/cloud foundations.
+Portable library reliability now includes not only backup format validity but also import/export scalability at 5k–10k item scale.
 
 ## Backup & Import Architecture
 

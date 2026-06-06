@@ -1,10 +1,9 @@
+# Codex
 
 - /Users/lafsimons/Desktop/outfit-app/docs/ecosystem/core-outfitmoodboardapp.md
 - /Users/lafsimons/Desktop/outfit-app/docs/ecosystem/roadmap-outfitmoodboardapp.md
 - /Users/lafsimons/Desktop/outfit-app/docs/ecosystem/active-context-outfitmoodboardapp.md
 - /Users/lafsimons/Desktop/outfit-app/docs/sync-cloud-v1-outfitmoodboardapp.md
-
-## Reminders Codex
 
 I would put this at the top of almost every implementation prompt:
 Before making changes, read:
@@ -44,7 +43,8 @@ Too much context can make Codex:
 * start “improving” architecture you did not ask for
 Short architectural constraints + focused task prompt is usually best.
 
-## ChatGPT
+# ChatGPT
+## general small prompts
 
 - “Does this idea already exist somewhere?”
 - “Where should this feature belong?”
@@ -62,9 +62,773 @@ The next useful step would probably be a documentation audit focused on:
 5. Missing links between documents.
 6. Areas where OA and MBA responsibilities are still not clearly separated.
 
+## Master Wardrobe Chat - Starting Prompt
+
+For the prompt, I would actually create a standard one and reuse it whenever you upload a fresh export:
+
+You are my wardrobe curator and acquisition advisor.
+
+Use my wardrobe CSV export, wishlist export, outfit photos, fit photos, and previous discussions as the primary source of truth.
+
+When evaluating a potential purchase, always consider:
+
+- Existing wardrobe overlap
+- Cost-per-wear potential
+- Seasonal usefulness
+- Silhouette contribution
+- Material and texture diversity
+- Outfit creation potential
+- Long-term wardrobe direction
+- Whether it solves an actual gap or merely duplicates something I already own
+
+Avoid evaluating items in isolation.
+
+Compare every item against my existing wardrobe and wishlist.
+
+Be critical about redundancy, especially regarding:
+
+- Taiga Takahashi pieces
+- Brown garments
+- Workwear jackets
+- Denim
+- Footwear
+
+When discussing outfits, analyze:
+
+- Silhouette
+- Proportions
+- Texture
+- Historical references
+- Visual weight
+- Cohesion
+- Versatility
+
+When discussing wishlist priorities, rank items by wardrobe impact rather than hype or rarity.
+
+Challenge my assumptions when appropriate and identify blind spots in my wardrobe planning.
+
+One additional thing: every few weeks, upload a fresh wardrobe export into the same master chat and say:
+
+Read this new export and replace your understanding of my wardrobe with this version.
+
+That keeps the context synchronized and tends to produce noticeably better acquisition advice than relying purely on memory.
+
 ---
 
-# Product Backlog Prompts
+# MBA/OA Master Chat
+
+This is the OA/MBA Master Chat.
+
+The uploaded project documents are the authoritative source of truth.
+
+Before making recommendations, proposals, architectural changes, UX suggestions, implementation plans, or prioritization decisions:
+
+- Read all uploaded documents.
+- Use the documentation as the primary source of truth.
+- If documentation and previous discussion conflict, prefer the documentation.
+- Preserve existing architecture, terminology, workflows, and project direction unless there is a strong reason to change them.
+- Prefer low-risk, incremental improvements over large redesigns.
+- Consider existing constraints:
+  - Local-first architecture
+  - Mobile support
+  - Large-library scalability
+  - Offline resilience
+  - Performance on libraries containing thousands of items
+- Avoid introducing duplicate systems, duplicate workflows, or overlapping features.
+- Avoid proposing functionality that already exists unless the goal is refinement or simplification.
+
+When evaluating ideas:
+
+- First determine whether the capability already exists.
+- Then determine whether the problem is UX, discoverability, workflow, architecture, performance, or missing functionality.
+- Favor extending existing systems over creating new ones.
+
+When making recommendations:
+
+- Explicitly reference relevant existing systems where applicable.
+- Identify tradeoffs and implementation complexity.
+- Distinguish between:
+  - Quick wins
+  - Medium-sized improvements
+  - Major architectural work
+
+Assume the goal is to evolve OA and MBA into mature long-term products while preserving accumulated design decisions and avoiding unnecessary complexity.
+
+---
+
+
+## **Wardrobe Continuity Extraction**
+
+I am consolidating wardrobe discussions into a single Wardrobe Master Chat.
+
+Please review the entire conversation and extract ONLY information that would be useful to preserve long-term.
+
+Do NOT summarize the whole chat.
+
+Instead, produce the following structure:
+
+### **1. Important Decisions**
+
+List concrete wardrobe decisions that were made.
+
+For each decision include:
+
+- Decision
+- Reasoning
+- Current status (implemented / partially implemented / not implemented)
+
+Examples:
+
+- Purchases made
+- Items sold
+- Wishlist prioritization
+- Wardrobe strategy changes
+- Collection focus decisions
+- Brand direction decisions
+
+Only include decisions that would still matter months from now.
+
+---
+
+### **2. Priority Changes**
+
+List any shifts in wardrobe direction or acquisition priorities.
+
+Examples:
+
+- Brands moving up or down in priority
+- Categories becoming more or less important
+- New gaps identified
+- Previously desired items losing relevance
+- Changes in footwear strategy
+- Changes in seasonal planning
+
+Include reasoning.
+
+---
+
+### **3. Rejected Directions**
+
+List items, brands, aesthetics, wardrobe strategies, or purchases that were seriously considered but ultimately rejected.
+
+For each:
+
+- What was proposed
+- Why it was rejected
+- What replaced it (if applicable)
+
+Examples:
+
+- Purchases not made
+- Styling directions abandoned
+- Brands that no longer fit the wardrobe
+- Duplicate items avoided
+
+---
+
+### **4. Important Conclusions Not Yet Reflected In Documentation**
+
+Extract conclusions that appear important but may not exist in:
+
+- Wardrobe inventory
+- Wishlist
+- Favorites
+- Outfit archive
+- Written wardrobe notes
+
+Focus on:
+
+- Personal style philosophy
+- Wardrobe building principles
+- Silhouette preferences
+- Color strategy
+- Material preferences
+- Collection strategy
+- Acquisition philosophy
+
+---
+
+### **5. Current Reality**
+
+Identify things that appear true about the wardrobe today.
+
+Examples:
+
+- Most-worn items
+- Core brands
+- Actual wardrobe focus versus intended focus
+- Collection strengths
+- Collection weaknesses
+- Emerging patterns in purchases
+- Categories with too much duplication
+- Categories with genuine gaps
+
+Include evidence from the conversation.
+
+---
+
+### **6. Fit & Sizing Knowledge**
+
+Extract durable sizing knowledge that would be useful in future purchase decisions.
+
+Include:
+
+- Body measurements
+- Brand-specific sizing conclusions
+- Successful sizes
+- Failed sizes
+- Last shapes
+- Fit preferences
+- Tailoring conclusions
+
+Only include information that appears reliable and repeatable.
+
+---
+
+### **7. Open Questions**
+
+List unresolved wardrobe questions that remained unanswered.
+
+Examples:
+
+- Future purchases
+- Category gaps
+- Sizing uncertainties
+- Collection direction questions
+- Sell versus keep decisions
+
+Only include questions that are still relevant.
+
+---
+
+### **8. High-Value Quotes**
+
+Extract up to 15 short statements that capture important wardrobe philosophy or decision-making principles.
+
+Only include statements that would be useful as future wardrobe guidance.
+
+Examples:
+
+- What makes an item worth buying
+- What makes an outfit successful
+- What makes a piece redundant
+- Principles around collecting
+- Principles around fit and silhouette
+
+---
+
+### **9. Ignore**
+
+Do NOT include:
+
+- Routine buy/sell negotiations
+- Temporary listings
+- Shipping discussions
+- Currency calculations
+- One-off sizing questions
+- Brief outfit reactions
+- Short-term marketplace activity
+- Information already captured elsewhere unless it changes a larger conclusion
+
+The goal is to recover durable wardrobe knowledge, not summarize the chat.
+
+### **10. Changes Since Last Extraction**
+
+This forces each extraction to focus on what is genuinely new rather than repeating the same conclusions every time. For a long-running wardrobe master chat, that becomes extremely valuable.
+
+---
+
+# **Wardrobe Master Synthesis**
+
+I have uploaded:
+
+- My latest wardrobe export
+- My latest wishlist export
+- All wardrobe continuity extractions from previous chats
+- Any other relevant wardrobe documents
+
+Your task is NOT to summarize the files.
+
+Your task is to synthesize them into a single canonical wardrobe document.
+
+Treat all uploaded files as evidence.
+
+Remove duplication, repeated conclusions, temporary observations, and outdated reasoning.
+
+Resolve contradictions where possible.
+
+Where contradictions cannot be resolved, identify them as active open questions.
+
+Focus on extracting the durable truths that should still be useful 1–3 years from now.
+
+Do not preserve conclusions simply because they were repeated often.
+
+Instead, determine whether they remain true based on the total body of evidence.
+
+The output should read like a wardrobe operating manual rather than a chat summary.
+
+Use the following structure:
+
+# **1. Wardrobe Philosophy**
+
+Describe the current wardrobe identity.
+
+Include:
+
+- aesthetic direction
+- values
+- what makes an item fit the wardrobe
+- what makes an item not fit the wardrobe
+- how the wardrobe differs from adjacent aesthetics
+
+This should be concise but comprehensive.
+
+---
+
+# **2. Current Wardrobe Reality**
+
+Describe the wardrobe as it actually exists today.
+
+Include:
+
+- strongest categories
+- weakest categories
+- most important brands
+- most important garments
+- actual wearing patterns
+- recurring outfit patterns
+- duplication risks
+- genuine gaps
+
+Use evidence from the exports and continuity documents.
+
+---
+
+# **3. Acquisition Framework**
+
+Extract the rules that should govern future purchases.
+
+Include:
+
+- what qualifies as a good purchase
+- what usually leads to regret
+- how wishlist items should be evaluated
+- when an item should replace an existing item
+- when an item should be rejected
+
+Produce practical decision rules.
+
+---
+
+# **4. Footwear Strategy**
+
+Create a complete footwear system.
+
+Include:
+
+- current footwear roles
+- missing roles
+- wishlist candidates
+- overlap risks
+- purchase priority
+
+Resolve as much ambiguity as possible.
+
+---
+
+# **5. Silhouette & Fit Principles**
+
+Extract all durable fit knowledge.
+
+Include:
+
+- preferred proportions
+- trouser principles
+- jacket principles
+- shirt principles
+- footwear interaction principles
+- tailoring principles
+
+Do not include one-off sizing anecdotes.
+
+Only include repeatable rules.
+
+---
+
+# **6. Color & Material Strategy**
+
+Describe:
+
+- core palette
+- supporting palette
+- saturated areas
+- underrepresented areas
+- favored materials
+- materials that have proven disappointing
+
+Focus on long-term conclusions.
+
+---
+
+# **7. Category-by-Category Audit**
+
+For each major category:
+
+- outerwear
+- shirts
+- knitwear
+- trousers
+- footwear
+- accessories
+
+Identify:
+
+- strengths
+- weaknesses
+- duplication
+- gaps
+- likely future priorities
+
+---
+
+# **8. Current Open Questions**
+
+List only genuinely unresolved questions.
+
+Examples:
+
+- purchase decisions
+- category direction decisions
+- sell/keep decisions
+
+Do not include questions that already have a practical answer.
+
+---
+
+# **9. Canonical Wardrobe Principles**
+
+Produce 10–20 short statements that should guide future wardrobe decisions.
+
+These should function as a personal wardrobe manifesto.
+
+Examples:
+
+- Evaluate the item against the wardrobe, not in isolation.
+- Footwear should have roles, not just be more shoes.
+
+Only include principles that are strongly supported by the evidence.
+
+---
+
+# **10. What Has Changed**
+
+Identify the most important shifts in wardrobe thinking over time.
+
+Examples:
+
+- collecting → system building
+- historical accuracy → historical mood
+- acquisition focus → outfit focus
+
+Explain why each shift happened and why it matters.
+
+---
+
+Most importantly:
+
+Do not write a neutral summary.
+
+Act as an editor.
+
+Reduce hundreds of pages of discussion into a single coherent worldview that can serve as the foundation for all future wardrobe decisions.
+
+---
+
+I would then add one extra instruction:
+
+Prefer conclusions supported by actual wardrobe exports, descriptions, favorites, fitpics, saved outfits, and ownership status over conclusions supported only by discussion.
+
+That one sentence prevents the synthesis from becoming a summary of ideas and pushes it toward a summary of reality.
+
+---
+
+## OA/MBA Continuity Extraction
+
+I am consolidating OA/MBA discussions into a single Master Chat.
+
+Please review the entire conversation and extract ONLY information that would be useful to preserve long-term.
+
+Do NOT summarize the whole chat.
+
+Instead, produce the following structure:
+
+### 1. Important Decisions
+
+List concrete decisions that were made.
+
+For each decision include:
+- Decision
+- Reasoning
+- Current status (implemented / partially implemented / not implemented)
+
+	Only include decisions that would still matter months from now.
+
+### 2. Priority Changes
+
+List any backlog reprioritizations or shifts in project direction.
+
+Examples:
+- Features moved up or down in priority
+- Architectural focus changes
+- New milestones identified
+
+Include reasoning.
+
+### 3. Rejected Directions
+
+List ideas, architectures, features, or approaches that were seriously considered but ultimately rejected.
+
+For each:
+- What was proposed
+- Why it was rejected
+- What replaced it (if applicable)
+
+### 4. Important Conclusions Not Yet Reflected In Documentation
+
+Extract conclusions that appear important but may not exist in:
+- Core
+- Roadmap
+- Active Context
+- Backlog
+- Technical Decisions
+- Taxonomy
+
+Focus on project philosophy, architecture, workflow, and priorities.
+
+### 5. Current Reality / Implementation Notes
+
+Identify things that appear:
+- Completed but not documented
+- Partially implemented
+- Different from the documented plan
+
+Include evidence from the conversation.
+
+### 6. Open Questions
+
+List unresolved architectural or product questions that remained unanswered.
+
+Only include questions that are still relevant.
+
+### 7. High-Value Quotes
+
+Extract up to 10 short statements that capture important project philosophy or strategic direction.
+
+Only include statements that are useful as future decision-making principles.
+
+### 8. Ignore
+
+Do NOT include:
+- UI styling discussions
+- Minor implementation details
+- Bug-fix minutiae
+- Research tangents
+- One-off feature ideas
+- Repeated information already captured elsewhere
+
+The goal is to recover durable project knowledge, not summarize the chat.
+
+## MBA Implementation Post-Mortem prompt
+
+Review the entire conversation from the point where implementation work started today.
+
+Do NOT summarize the chat chronologically.
+
+Instead, perform a technical post-mortem.
+
+1. Major Changes Implemented
+
+List every significant implementation completed.
+
+For each:
+
+* Goal
+* Files affected
+* What changed
+* Current status
+* Confidence level (high / medium / low)
+
+Only include changes that would still matter months from now.
+
+⸻
+
+2. Root Causes Discovered
+
+Identify every major problem encountered.
+
+For each:
+
+* Initial hypothesis
+* What evidence supported it
+* Why it was ultimately correct or incorrect
+* Final root cause
+
+Focus especially on:
+
+* Original Recovery
+* TT import issues
+* IndexedDB failures
+* Recovery session behavior
+* Startup persistence behavior
+* Large-library scalability
+
+⸻
+
+3. False Leads
+
+List investigations that consumed significant time but turned out not to be the actual problem.
+
+For each:
+
+* Why it seemed plausible
+* How it was disproven
+* Lessons learned
+
+⸻
+
+4. Architectural Lessons
+
+Extract durable conclusions about:
+
+Original Recovery
+
+Import / Export
+
+IndexedDB
+
+Large Library Support
+
+Local-First Architecture
+
+Only include conclusions likely to remain valid 6–12 months from now.
+
+⸻
+
+5. Scalability Findings
+
+Document every place where TT-scale data (~6884 items, ~1GB previews) exposed assumptions that were invisible with smaller libraries.
+
+For each:
+
+* What assumption failed
+* Why
+* How it was fixed
+* Remaining risks
+
+⸻
+
+6. Documentation Updates Recommended
+
+For each important conclusion:
+
+* Which document should be updated?
+    * Core
+    * Active Context
+    * Roadmap
+    * Technical Decisions
+    * Backlog
+    * Changelog
+* Proposed entry
+
+⸻
+
+7. Technical Debt Created
+
+List any temporary fixes, instrumentation, guards, compatibility layers, or unfinished work introduced today.
+
+For each:
+
+* Why it exists
+* Whether it should remain
+* Recommended next action
+
+⸻
+
+8. Current State Assessment
+
+Provide a concise assessment of:
+
+* Original Recovery v3
+* Resume without full rescan
+* knownOriginalRelativePath
+* TT import/export
+* Recovery scalability
+* Import scalability
+* Overall MBA stability
+
+Classify each as:
+
+* Stable
+* Mostly stable
+* Experimental
+* Needs follow-up
+
+⸻
+
+9. Highest-Value Knowledge To Preserve
+
+Limit to the 10–20 most important lessons from today.
+
+Only include information that would still be valuable if this conversation disappeared tomorrow.
+
+This will produce something much more useful than a summary because today contained a lot of incorrect hypotheses, dead ends, and eventually one very important scalability bug that was only found after eliminating many other possibilities.
+
+---
+
+## 3.6. OA/MBA Master Chat v3 PROMPT MBA MD Export Design
+
+MBA Markdown Export Design
+
+Context:
+
+MBA already has scalable package exports for full recovery.
+
+Those exports preserve:
+- Items
+- Previews
+- Images
+- App state
+
+The goal of this discussion is NOT backup/recovery.
+
+The goal is to design a second export format focused on knowledge preservation.
+
+Requirements:
+
+- Metadata-first
+- Human-readable
+- AI-readable
+- Git-friendly
+- Does not duplicate image assets
+- Scales to libraries with 7,000+ items
+- Can survive independently of MBA
+
+Please design:
+
+1. Export goals
+2. Folder structure
+3. Markdown schema
+4. Per-item vs per-season vs full-library exports
+5. Image reference strategy
+6. Import possibilities in the future
+7. Performance considerations for large libraries
+8. Recommended MVP implementation
+9. Long-term roadmap
+
+Do not focus on backup/recovery packages.
+Treat this as a knowledge export system rather than an asset export system.
+
+# Product Backlog Codex Prompts
 
 ## 1. saved thumbnail/miniature rendering in OA and MBA.
 
@@ -746,3 +1510,6 @@ Migration:
 Run:
 - npm test -- --runInBand
 - npm run build
+
+---
+

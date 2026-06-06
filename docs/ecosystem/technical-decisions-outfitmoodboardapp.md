@@ -1,3 +1,7 @@
+---
+aliases:
+  - technical decisions
+---
 # **Technical Decisions**
 
 This document records finalized or semi-finalized architectural conclusions.
@@ -21,6 +25,10 @@ Structure:
 - Consequences
 
 ---
+
+## MBA 04.06.2026
+
+Large local media operations must be chunked and bounded. Import/export/recovery flows must not eagerly materialize full media payloads or rely on single huge IndexedDB transactions.
 
 ## **Decision: Metadata-only runtime state**
 

@@ -1,4 +1,12 @@
+---
+aliases:
+  - changelog
+---
 # Changelog
+
+
+## MBA 03.06.26
+Large scalable package import was hardened for TT-scale libraries. Preview assets are now imported lazily and written in chunks, preventing 1GB preview sets from hanging import or aborting IndexedDB transactions.
 
 ## MBA 02.06.26
 ### Original Reconnection v2

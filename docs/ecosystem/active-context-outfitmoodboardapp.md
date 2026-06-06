@@ -1,3 +1,7 @@
+---
+aliases:
+  - active context
+---
 # Active Context
 
 OA = Outfit-App  
@@ -44,6 +48,7 @@ Current status:
 - Out-of-line media architecture established
 - Dashboard and filter architecture largely stabilized
 - Nested taxonomy system established
+- Original Reconnection v3 is implemented, including known path persistence and resume without full rescan. Large scalable package import has been fixed after TT-scale validation. Recovery scan caching remains open.
 
 Current focus:
 

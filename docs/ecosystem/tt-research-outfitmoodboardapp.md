@@ -1,4 +1,4 @@
-# [[tt-philosophy-interviews-outfitmoodboardapp|T.T - Philosophy - Interviews]]
+# T.T Research
 
 ---
 
@@ -189,9 +189,803 @@ Next archival priority:
 
 ---
 
-# Website Infos
+# **T.T. Archive Continuity Extraction**
 
-# LOT.405 ATELIER COAT
+## **1. Important Decisions**
+
+### **Decision: Store archive information as metadata, not in filenames**
+
+**Reasoning**
+
+- Filenames are difficult to maintain.
+- Manual renaming does not scale.
+- The archive page already contains structured information.
+- Metadata is searchable and can later be exported, filtered, and transformed.
+
+**Current Status**
+
+- Decision made.
+- Not fully implemented.
+
+---
+
+### **Decision: Preserve original imported image filenames whenever possible**
+
+**Reasoning**
+
+- Renaming creates additional maintenance work.
+- Original filenames are sufficient for storage.
+- Human-readable names should come from metadata fields rather than filenames.
+
+**Current Status**
+
+- Partially implemented conceptually.
+
+---
+
+### **Decision: Use archive pages as the source of truth**
+
+**Reasoning**
+
+- T.T. archive pages already contain:
+    - season
+    - item name
+    - item number
+    - descriptions
+    - materials
+    - colors
+    - images
+- Manually recreating this information would be redundant.
+
+**Current Status**
+
+- Confirmed approach.
+
+---
+
+### **Decision: Import metadata separately from image import**
+
+**Reasoning**
+
+- Image acquisition and metadata acquisition are distinct problems.
+- Allows bulk image imports without requiring complete parsing.
+- Makes importer architecture simpler and more robust.
+
+**Current Status**
+
+- Direction established.
+
+---
+
+### **Decision: Generate structured item records from archive pages**
+
+**Reasoning**
+
+- Archive pages are already structured.
+- Enables automated creation of item entries.
+- Reduces manual entry workload dramatically.
+
+**Current Status**
+
+- Not yet implemented.
+
+---
+
+## **2. Priority Changes**
+
+### **Shift from image organization to metadata extraction**
+
+**Original Focus**
+
+- Naming images correctly.
+- Organizing image folders.
+
+**New Focus**
+
+- Extracting structured metadata.
+- Building item records automatically.
+
+**Reasoning**
+
+- Metadata provides much greater long-term value than filenames.
+
+---
+
+### **Shift from manual archive building to importer-driven archive building**
+
+**Original Idea**
+
+- Create archive entries manually.
+
+**New Direction**
+
+- Generate archive entries from source pages.
+
+**Reasoning**
+
+- Archive scale will eventually make manual entry unsustainable.
+
+---
+
+## **3. Rejected Directions**
+
+### **Rejected: Heavy filename-based organization**
+
+**Proposal**
+
+- Encode item names and structure directly into filenames.
+
+**Why Rejected**
+
+- Requires ongoing manual maintenance.
+- Difficult to modify later.
+- Metadata is the proper storage location.
+
+**Replacement**
+
+- Metadata-driven archive records.
+
+---
+
+### **Rejected: Manual item creation from archive pages**
+
+**Proposal**
+
+- Import images and manually create corresponding records.
+
+**Why Rejected**
+
+- Duplicate work.
+- Archive pages already contain structured information.
+
+**Replacement**
+
+- Parsing and automated metadata extraction.
+
+---
+
+### **Rejected: Treating each image as the primary entity**
+
+**Proposal**
+
+- Import images first and organize around images.
+
+**Why Rejected**
+
+- Images are assets, not the archive object.
+- The archive object is the garment/item.
+
+**Replacement**
+
+- Item-centric model with attached images.
+
+---
+
+## **4. Important Conclusions Not Yet Reflected In Documentation**
+
+### **Archive entries should be item-centric**
+
+The fundamental object is:
+
+```text
+Item
+ ├─ Metadata
+ ├─ Images
+ ├─ Season
+ ├─ Materials
+ ├─ Description
+ └─ Source URL
+```
+
+Not:
+
+```text
+Image
+ └─ Metadata
+```
+
+This is a significant architectural distinction.
+
+---
+
+### **The archive importer can become a general MBA ingestion pipeline**
+
+The same workflow could later support:
+
+```text
+Taiga Takahashi
+Auralee
+Lemaire
+Evan Kinori
+Vintage archives
+Museum collections
+Personal research
+```
+
+The architecture should therefore remain source-agnostic.
+
+---
+
+### **Markdown may be the best intermediate format**
+
+Potential pipeline:
+
+```text
+Archive Page
+      ↓
+Parser
+      ↓
+Markdown Record
+      ↓
+MBA Import
+```
+
+Advantages:
+
+- Human readable
+- Easy to version control
+- Easy to edit manually
+- Future-proof
+- LLM-friendly
+
+---
+
+### **Images and metadata should be loosely coupled**
+
+Importing images should not depend on successful metadata extraction.
+
+Importing metadata should not depend on image naming conventions.
+
+This separation will make the ingestion pipeline significantly more resilient.
+
+---
+
+## **Emerging Architecture**
+
+The discussion gradually converged toward:
+
+```text
+Archive Website
+       ↓
+Saved HTML
+       ↓
+Parser
+       ↓
+Markdown Item Records
+       ↓
+MBA Importer
+       ↓
+Item Entries
+       ↓
+Attached Images
+```
+
+This is probably the most important outcome of the entire discussion. The real goal stopped being “how do I name these images?” and became “how do I build a scalable archive ingestion system?”
+
+---
+
+# Wayback
+
+https://web.archive.org/web/20220517171110/https://taigatakahashi.com/
+
+https://web.archive.org/web/20221130111640/https://taigatakahashi.com/
+
+https://web.archive.org/web/20230313075009/https://taigatakahashi.com/
+
+https://web.archive.org/web/20230401015110/https://taigatakahashi.com/
+
+https://web.archive.org/web/20230530114230/https://taigatakahashi.com/
+
+https://web.archive.org/web/20240425113314/https://taigatakahashi.com/
+
+---
+
+# **T.T Archive Continuity Extraction - Chat "Offline Archive Checklist"**
+
+## **1. Important Discoveries**
+
+### **Wayback Machine pages often contain far more data than is visibly rendered**
+
+**Discovery**  
+Many archived T.T pages appear broken visually but still contain significant structured data in the HTML source.
+
+**Evidence**
+
+- Product names extracted from HTML.
+- Collection metadata extracted from HTML.
+- LOT numbers extracted from HTML.
+- Look-to-LOT relationships extracted from HTML.
+- Sanity image URLs still present in source.
+
+**Importance**  
+Future archive work should always inspect HTML source before assuming a page is unusable.
+
+---
+
+### **Collection lookbooks preserve look-to-garment relationships**
+
+**Discovery**  
+Collection pages contain mappings such as:
+
+```text
+Look 1 → LOT.107, LOT.201, LOT.308
+Look 2 → ...
+```
+
+even when the visual page is partially broken.
+
+**Importance**  
+This information no longer exists on the current website.
+
+**Archive Value**  
+Very high.
+
+This allows reconstruction of:
+
+```text
+Collection
+→ Look
+→ Garments used
+```
+
+which is one of the most valuable relationship datasets discovered.
+
+---
+
+### **Original Sanity image URLs remain accessible**
+
+**Discovery**  
+Archived HTML contains original Sanity CDN image URLs.
+
+Example:
+
+```text
+cdn.sanity.io/images/...
+```
+
+Many still resolve successfully.
+
+**Importance**  
+Images obtained directly from Sanity are substantially higher quality than:
+
+- website thumbnails
+- saved webpage assets
+- current website compressed versions
+
+**Observed**  
+Example image:
+
+```text
+4.8 MB
+```
+
+versus
+
+```text
+384 KB
+```
+
+for a version already in the archive.
+
+---
+
+### **Homepage snapshots contain large numbers of hidden assets**
+
+**Discovery**  
+A saved homepage snapshot contained roughly:
+
+```text
+190 images
+```
+
+many of which were not immediately visible during browsing.
+
+**Importance**  
+Homepage captures may act as image reservoirs for entire collections.
+
+---
+
+### **Older collection sites remain partially functional**
+
+**Discovery**  
+Some snapshots from:
+
+```text
+AW21
+SS22
+```
+
+still allow:
+
+- scrolling
+- page navigation
+- look navigation
+
+even when other parts of the website appear broken.
+
+**Importance**  
+These snapshots may contain recoverable collection information not present elsewhere.
+
+---
+
+### **Some newer snapshots are almost fully preserved**
+
+**Discovery**  
+Certain 2025 snapshots preserve:
+
+- product page
+- description
+- garment background
+- pricing
+- images
+- materials
+- product notes
+
+almost completely.
+
+**Example**  
+LOT.302 DB Sack Suit page from August 2025.
+
+**Importance**  
+These snapshots may serve as canonical historical product records.
+
+---
+
+### **Pre-T.T fashion school PDFs discovered**
+
+**Discovery**  
+Wayback revealed PDFs from Taiga Takahashi’s womenswear graduation/fashion school period.
+
+**Importance**  
+These are among the rarest historical artifacts discovered.
+
+**Archive Value**  
+Extremely high.
+
+---
+
+## **2. Archive Value Assessment**
+
+### **Highest-value information**
+
+Ranked approximately:
+
+#### **Tier 1**
+
+```text
+Look → LOT relationships
+```
+
+Reason:
+
+Current site no longer provides this.
+
+---
+
+#### **Tier 1**
+
+```text
+Pre-T.T PDFs
+```
+
+Reason:
+
+Very difficult to find elsewhere.
+
+---
+
+#### **Tier 1**
+
+```text
+Garment Background texts
+```
+
+Reason:
+
+Core design philosophy.
+
+---
+
+#### **Tier 2**
+
+```text
+Historical product pages
+```
+
+Reason:
+
+Contain descriptions, materials, construction details.
+
+---
+
+#### **Tier 2**
+
+```text
+Original Sanity images
+```
+
+Reason:
+
+Much higher fidelity than currently available copies.
+
+---
+
+#### **Tier 3**
+
+```text
+Historical pricing
+```
+
+Reason:
+
+Interesting for historical reference but less critical than relationships and texts.
+
+---
+
+#### **Tier 3**
+
+```text
+Old website UI and presentation
+```
+
+Reason:
+
+Useful for archive authenticity and historical context.
+
+---
+
+## **3. Important Conclusions**
+
+### **Current T.T Archive problem is not image collection**
+
+Initial assumption:
+
+```text
+Need more images.
+```
+
+Emerging conclusion:
+
+```text
+Need more structure.
+```
+
+The archive already contains substantial visual material.
+
+The missing component is relationships.
+
+---
+
+### **Context is more valuable than individual images**
+
+Example:
+
+```text
+Image
+```
+
+alone provides limited information.
+
+Whereas:
+
+```text
+Image
+→ Look
+→ Collection
+→ Product
+→ Garment Background
+→ Interview
+```
+
+creates significantly more value.
+
+---
+
+### **T.T Archive behaves more like a knowledge archive than a moodboard**
+
+Current MBA model:
+
+```text
+Image
+→ Tags
+→ Boards
+```
+
+Emerging archive model:
+
+```text
+Collection
+Product
+Interview
+Editorial
+Essay
+Image
+PDF
+```
+
+with relationships between them.
+
+---
+
+### **T.T Archive is a strong test case for future MBA evolution**
+
+The archive naturally suggests entity-based organization:
+
+```text
+Collection
+Product
+Article
+Person
+Image
+```
+
+rather than image-only organization.
+
+This may inform future MBA development.
+
+---
+
+## **4. Actionable Next Steps**
+
+### **Phase 1 — Preservation**
+
+Goal:
+
+```text
+Download everything before it disappears.
+```
+
+Priority:
+
+1. Collection HTML pages
+2. Product HTML pages
+3. Interviews
+4. Editorials
+5. PDFs
+6. About/Philosophy pages
+
+Do not worry about organization yet.
+
+---
+
+### **Phase 2 — Extraction**
+
+Create structured exports from saved HTML:
+
+For products:
+
+```text
+LOT Number
+Name
+Description
+Garment Background
+Materials
+Price
+Colorways
+Images
+Collection
+```
+
+For collections:
+
+```text
+Collection Name
+Season
+Look Number
+LOTs used
+Look Images
+Collection Text
+```
+
+For texts:
+
+```text
+Title
+Type
+Date
+Source
+Content
+Related Collections
+Related Products
+```
+
+---
+
+### **Phase 3 — Relationship Building**
+
+Construct links:
+
+```text
+Collection ↔ Look
+Look ↔ LOT
+LOT ↔ Images
+LOT ↔ Garment Background
+LOT ↔ Editorial
+LOT ↔ Interview
+```
+
+This creates the archive’s core value.
+
+---
+
+### **Phase 4 — Presentation**
+
+Long-term objective:
+
+Recreate the feeling of the original T.T website while adding capabilities the original never had:
+
+```text
+Collection browsing
+Product history
+Price history
+Look navigation
+Interview cross-linking
+Editorial cross-linking
+Historical timeline
+```
+
+using the original typography and visual language already preserved via downloaded fonts.
+
+---
+
+## **5. Potential Future Features**
+
+Not immediate priorities, but surfaced during discussion:
+
+### **Historical price tracking**
+
+```text
+LOT.302
+2023: ¥84,700
+2025: ¥XX,XXX
+```
+
+---
+
+### **Collection timeline**
+
+```text
+AW21
+SS22
+AW22
+SS23
+...
+```
+
+with lookbook access.
+
+---
+
+### **Product appearance tracking**
+
+```text
+LOT.107
+
+Appears in:
+- AW23 Look 1
+- AW23 Look 8
+- Editorial X
+```
+
+---
+
+### **Authentic T.T Archive mode**
+
+Recreate:
+
+- original fonts
+- original layouts
+- original navigation style
+
+while preserving modern archive functionality.
+
+This would make the archive feel closer to a living reconstruction of the T.T ecosystem rather than a conventional image database.
+
+---
+
+# Website Infos (not relevant anymore probably)
+
+## LOT.405 ATELIER COAT
 AW25
 SUMI DYED BLACK
 90% WOOL 10% NYLON
@@ -205,7 +999,7 @@ Original Bakelite buttons with art deco style engraving are used.
 | 40   | 91         | 49.5         | 129       | 63.25      |
 | 42   | 94         | 51.5         | 134       | 64.75      |
 
-# LOT.006 NEWSBOY CAP
+## LOT.006 NEWSBOY CAP
 SS26
 MELANGE CHARCOAL
 100% WOOL
@@ -216,14 +1010,14 @@ The yarn is spun from wool sourced from sheep raised in harsh, dry environments�
 | Size | Head Circumference(cm) |
 | ---- | ---------------------- |
 | OS   | 59                     |
-# LOT.006 NEWSBOY CAP
+## LOT.006 NEWSBOY CAP
 BLACK
 An early 1900's newsboy cap found in an antique dealer's warehouse in New Jersey.  
 It is also called "Newsboy Cap" because a boy who sold newspapers wore this cap in the 19th century in the U.S. The fabric is a brand original, made of Supima organic cotton from the U.S. on an old power loom, and also made of original denim fabric.
 OR
 The cap was reconstructed from an early 1900s newsboy cap found in an antique dealer's warehouse in New Jersey. It was in very poor condition, but I felt a strong connection to the previous owner. It is also called a "newsboy cap" because of the newsboy caps worn by newsboys selling newspapers in the 19th century in the U.S. It seems that working-class men of that time generally wore this "flat cap with a front eavespiece" regardless of their occupation. The fabric is again a brand original. The 14-wale corduroy fabric has been degreased and washed to give it a dry, rusty, old-fashioned look.
 
-# LOT.006 NEWSBOY CAP
+## LOT.006 NEWSBOY CAP
 AW25
 MELANGE CHARCOAL
 100% COTTON
@@ -232,7 +1026,7 @@ While the cap was in no condition to be worn, the former wearer's will felt some
 This fabric is a revival of "TWEEDUROY" used a 1930s sports jacket in Takahashi's collection. "TWEEDUROY" is a corduroy printed with a tweed pattern to resemble wool tweed. Primarily used for boys' clothing and school uniforms, the fabric seems to have been developed for a greater durability compared to wool.  
 This unique fabric was developed by Hockmeyer Company in Massachusetts. Over time, the fabric found its way into adult clothing as well.
 
-# LOT.209 BUCKLE-BACKED TROUSERS
+## LOT.209 BUCKLE-BACKED TROUSERS
 AW25
 BLACK
 100% COTTON
@@ -246,7 +1040,7 @@ The buttons and backside parts marked with original engravings are all made of i
 | 32   | 107        | 82        | 107     | 57              |
 | 34   | 110        | 87        | 112     | 59.4            |
 
-# LOT.030 A.R.C WATCH CAP
+## LOT.030 A.R.C WATCH CAP
 AW25
 CHARCOAL & KHAKI
 80% WOOL 20% CASHMERE
@@ -256,7 +1050,7 @@ The fabric uses a blend of rare white cashmere and extra-fine lambswool yarns. T
 | Size | Head Circumference(cm) |
 | ---- | ---------------------- |
 | OS   | 52                     |
-# LOT.204 ENGINEER TROUSERS
+## LOT.204 ENGINEER TROUSERS
 AW25
 BLACK
 100% COTTON
@@ -270,7 +1064,7 @@ brushed surface just like "mole's skin." Its excellent durability made it a popu
 | 34   | 114.4      | 87        | 122     | 62.5            |
 
 
-# LOT.304 BLANKET LINING COVERALL
+## LOT.304 BLANKET LINING COVERALL
 AW25
 BLACK
 100% COTTON
@@ -285,7 +1079,7 @@ The buttons marked with original engravings are all made of iron. features a mat
 | 40   | 73         | 50           | 118       | 64         |
 | 42   | 75         | 52           | 123       | 65         |
 
-# LOT.309 BUCKLE-BACKED JACKET
+## LOT.309 BUCKLE-BACKED JACKET
 AW25
 BLACK
 100% COTTON
@@ -299,7 +1093,7 @@ The buttons and backside parts marked with original engravings are all made of i
 | 38   | 60.5       | 51           | 124       | 55         |
 | 40   | 63         | 53           | 129       | 56.5       |
 | 42   | 64.5       | 55           | 134       | 58.5       |
-# LOT.202 ENGINEER TROUSERS
+## LOT.202 ENGINEER TROUSERS
 SS24
 MELANGE BLACK
 41% WOOL 37% LINEN 22%
@@ -311,7 +1105,7 @@ Based on work pants manufactured by Can't Bust'Em in the 1940s. The fabric was r
 | 32   | 110.4      | 82        | 122     | 57              |
 | 34   | 113.4      | 87        | 127     | 59              |
 
-# LOT.704 DENIM TROUSERS C.1920'S
+## LOT.704 DENIM TROUSERS C.1920'S
 Core
 RAW INDIGO
 Oshima Island. Cotton 100%
@@ -331,7 +1125,7 @@ After washing, 2~3% shrinkage will occur.
 | 34   | 116        | 87        | 115.8   | 59.5            |
 | 36   | 116.5      | 92        | 120.8   | 62              |
 
-# LOT.703 DENIM JACKET C.1920'S
+## LOT.703 DENIM JACKET C.1920'S
 Core
 RAW INDIGO
 Oshima Island. Cotton 100%
@@ -350,7 +1144,7 @@ After washing, 2~3% shrinkage will occur.
 | 42   | 64.5       | 55           | 128.2     | 58.5       |
 | 44   | 66.5       | 57           | 139       | 60.5       |
 
-# LOT.106 NARROW COLLAR SHIRT
+## LOT.106 NARROW COLLAR SHIRT
 AW23
 IVORY
 Cotton 100%
@@ -362,7 +1156,7 @@ Redesigned based on lines extracted from 1920s feather collar shirts. The fabric
 | 14   | 73.5       | 47           | 122       | 60.5       |
 | 15   | 76         | 48.5         | 126       | 62         |
 | 16   | 78.5       | 50           | 130       | 63.5       |
-# LOT.005 SUSPENDER
+## LOT.005 SUSPENDER
 
 MULTI STRIPE BLACK
 Rayon 71% , Natural Rubber Brass 29%
@@ -372,7 +1166,7 @@ He ran an analysis to find the composition and knitting of the rubber part to be
 | Size | Length(cm) |
 | ---- | ---------- |
 | OS   | 80-150     |
-# LOT.003 HICKOK BELT
+## LOT.003 HICKOK BELT
 Core
 BLACK
 Cow Leather
@@ -381,7 +1175,7 @@ This cowhide belt is made from a reproduction of a brass roller buckle used in t
 | Size | Belt Length(cm) |
 | ---- | --------------- |
 | OS   | 109             |
-# LOT.111 WORK SHIRT
+## LOT.111 WORK SHIRT
 SS24
 INDIGO
 COTTON 100%
@@ -394,7 +1188,7 @@ The dobby stripe used in the fabric is inspired by the 1894 fabric book publishe
 | 14   | 71.5       | 48           | 116       | 60         |
 | 15   | 74         | 49.5         | 120       | 61.5       |
 | 16   | 76.5       | 51           | 124       | 63         |
-# LOT.603 SWEAT SHIRT
+## LOT.603 SWEAT SHIRT
 SS24
 SUMI
 COTTON 100%
@@ -406,7 +1200,7 @@ The sweatshirt takes root in the origin of American sportswear before the 1950s 
 | 38   | 61.5       | 51           | 116       | 47         |
 | 40   | 64         | 54           | 122       | 48         |
 | 42   | 66.5       | 58           | 128       | 51         |
-# LOT.702 DENIM TROUSERS
+## LOT.702 DENIM TROUSERS
 Core
 RAW INDIGO
 Island. Cotton 100%
@@ -423,7 +1217,7 @@ The signature leather patch is mud-dyed in Amami Oshima Island.
 | 32   | 114.5      | 82        | 108     | 41.6            |
 | 34   | 115.5      | 87        | 113     | 44.1            |
 | 36   | 116        | 92        | 118     | 46.6            |
-# LOT.105 BAND COLLAR SHIRT P/O
+## LOT.105 BAND COLLAR SHIRT P/O
 AW24
 BLACK CHAMBRAY
 100% COTTON
@@ -434,3 +1228,5 @@ Merging LOT.103 Work Shirt P/O and LOT.104 Band Collar Shirt, the item stands so
 | 14   | 74         | 47           | 118.5     | 60.5       |
 | 15   | 76.5       | 48.5         | 122.5     | 62         |
 | 16   | 79         | 50           | 126.5     | 63.5       |
+
+# 

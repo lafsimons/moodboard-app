@@ -8,7 +8,7 @@
 
 ## Knowledge
 - [[research-references-outfitmoodboardapp|Research - References]] 
-- [[tt-philosophy-interviews-outfitmoodboardapp|T.T - Philosophy - Interviews]] 
+- [[tt-research-outfitmoodboardapp|T.T - Research]] 
 - [[mba-generation-research|MBA Generation Research]] 
 - [[relationship-model-research|Relationship Model Research]] 
 
@@ -27,3 +27,9 @@
 
 ## History
 - [[completed-decisions-changelog-outfitmoodboardapp|Completed Decisions - Changelog]] 
+- [[dev-master-chat-continuity-notes v1]]
+- [[dev-master-chat-continuity-notes v2]]
+- [[wardrobe-master-chat-continuity-notes-v1]]
+
+---
+
