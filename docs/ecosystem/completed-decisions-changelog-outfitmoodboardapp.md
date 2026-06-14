@@ -4,6 +4,206 @@ aliases:
 ---
 # Changelog
 
+## OA: Fitpics & Saved Outfits Expansion (Passes 1A–3B.4) 06.06.26
+
+### Overview
+
+Completed the first major expansion of the OA Outfits/Fitpics system, transforming Fitpics from simple single-image records into extensible multi-image entities while improving preview workflows, editor usability, linked-item navigation, and overall archive quality.
+
+This work establishes the foundation for future Hub integration, image-level entities, and cross-system image relationships.
+
+---
+
+### Saved Outfits & Fitpics Foundation
+
+- Continued development of the Saved Outfits / Fitpics architecture.
+- Improved separation between Saved Outfits and imported Fitpics while keeping both accessible from the Outfits workspace.
+- Refined Fitpics as persistent outfit-observation records rather than temporary image imports.
+- Improved preview and editing workflows throughout the Outfits area.
+
+---
+
+### Fitpic Preview Redesign
+
+Fitpic preview was substantially redesigned to align more closely with MBA preview behavior.
+
+Changes included:
+
+- Removal of unnecessary FITPIC header labeling.
+- Removal of image dimension metadata from preview.
+- Cleaner title/date presentation.
+- Larger image-first layout.
+- Image constrained to viewport height while preserving aspect ratio.
+- Improved description readability.
+- Tags displayed as inline metadata using MBA-style separators.
+- Linked wardrobe items displayed directly inside preview.
+- Clickable linked wardrobe items opening Wardrobe item previews.
+
+---
+
+### Linked Item Preview Handoff
+
+Implemented preview handoff behavior between Fitpics and Wardrobe.
+
+Previous behavior:
+- Opening a linked item switched the entire application context to Wardrobe.
+
+New behavior:
+- Linked wardrobe item previews open as a temporary handoff.
+- Outfits/Fitpics context remains preserved.
+- Closing the Wardrobe preview returns the user to the exact Fitpic preview state.
+
+This significantly improves navigation flow during outfit review.
+
+---
+
+### Fitpic Editor Improvements
+
+Editor usability improvements included:
+
+- Wider title field.
+- Wider and taller description editor.
+- Chip-based tag editing system.
+- Human-readable linked-item references.
+- Improved linked-item management.
+- Cleaner image-management layout.
+
+Tag system improvements:
+
+- Enter-to-create tags.
+- Comma-separated tag parsing.
+- Paste support.
+- Case-insensitive deduplication.
+- Immediate chip removal updates.
+
+---
+
+### Multi-Image Fitpic Architecture (Pass 3B)
+
+Introduced the first multi-image Fitpic architecture.
+
+New parent-level fields:
+
+- fitpicImages[]
+- primaryImageUuid
+
+Each image now has:
+
+- Stable fitpicImageUuid
+- Parent linkage
+- Ordering
+- Provenance metadata
+- Import metadata
+- Original image references
+
+Legacy Fitpics remain fully compatible through normalization and compatibility aliases.
+
+---
+
+### Image Entity Foundation
+
+Added image-level entity support through flattening helpers.
+
+Fitpic images can now be exposed as independent image entities while still belonging to a Fitpic parent.
+
+This is an important architectural step toward:
+
+- Hub entity graph
+- Cross-system image relationships
+- Future MBA integration
+- Unified image libraries
+
+This establishes the first OA entity type with nested image entities and serves as a prototype for future Wardrobe multi-image support.
+
+---
+
+### Multi-Image Preview Carousel
+
+Implemented Fitpic image carousel support.
+
+Features:
+
+- Inner image navigation.
+- Image indicators.
+- Primary-image initialization.
+- Independent image navigation within a Fitpic.
+- Outer Fitpic navigation preserved.
+
+Navigation behavior was intentionally separated so image navigation and Fitpic navigation remain unambiguous.
+
+Carousel navigation was later updated to wrap continuously instead of stopping at first/last image.
+
+---
+
+### Fitpic Image Management
+
+Added image-management capabilities inside the Fitpic editor.
+
+Supported operations:
+
+- Add image
+- Remove image
+- Set primary image
+- Reorder images
+
+Behavior:
+
+- Stable image identities preserved.
+- Primary image follows the image entity, not position.
+- Removing the primary image automatically promotes a replacement.
+- Existing metadata remains intact.
+
+---
+
+### Grouped Multi-Image Import
+
+Added grouped import workflow.
+
+New import modes:
+
+1. Standard Import
+   - Multiple files → multiple Fitpics
+
+2. Import Grouped Fitpic
+   - Multiple files → one Fitpic
+   - First image becomes primary
+   - Remaining images become ordered Fitpic images
+
+This provides explicit user control without changing existing import behavior.
+
+---
+
+### Fitpics Library Cleanup
+
+The Fitpics library received a visual simplification pass.
+
+Changes included:
+
+- Removal of dates from cards.
+- Removal of tags from cards.
+- Removal of technical metadata from cards.
+- Cleaner image-first presentation.
+- Reintroduction of title display after regression fixes.
+- Improved image containment behavior.
+- Better visual hierarchy and card readability.
+
+---
+
+### Architectural Outcome
+
+Fitpics are no longer modeled as single-image records.
+
+They are now:
+
+- Parent entities
+- With stable image sub-entities
+- Supporting multi-image workflows
+- Compatible with future Hub concepts
+- Compatible with future image-level relationship systems
+
+This establishes the first image-entity architecture inside OA and serves as a model for future multi-image support in Wardrobe items.
+
+Fitpics now support both single-image and grouped multi-image acquisition workflows while preserving backward compatibility.
 
 ## MBA 03.06.26
 Large scalable package import was hardened for TT-scale libraries. Preview assets are now imported lazily and written in chunks, preventing 1GB preview sets from hanging import or aborting IndexedDB transactions.

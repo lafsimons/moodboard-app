@@ -6,6 +6,12 @@ aliases:
 
 # Active
 
+OA: 
+- Wardrobe multi-image & image entities
+- Fitpic image entity exposure / OA library integration
+- Fitpic ↔ Saved Outfit linking
+
+MBA:
 - Scan cache / original recovery source index
 - Export package atomicity validation
 - Recovery session pruning
