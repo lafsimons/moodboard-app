@@ -12,6 +12,7 @@
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",
     "exifr": "^7.1.3",
+    "hub-core": "file:../hub-core",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

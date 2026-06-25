@@ -1,3 +1,12 @@
+import {
+  buildWarningReport as buildGenericWarningReport,
+  getExtensionFromDataUrl,
+  getExtensionFromFilename,
+  getExtensionFromMimeType,
+  normalizeCount as normalizePackageCount,
+  sanitizeFileSegment as sanitizeSharedFileSegment,
+  streamNdjsonFileLines as streamSharedNdjsonFileLines
+} from "hub-core/backup";
 import { createMetadataOnlyBackupData } from "./storage.js";
 import { migrateReferenceMetadataToTags, sanitizeBackupReference } from "./metadata.js";
 import { createImageAsset, normalizeItemImages } from "./itemImages.js";
@@ -14,61 +23,12 @@ export const PACKAGE_MEDIA_DIR = "media";
 export const PACKAGE_PREVIEWS_DIR = "media/previews";
 export const PACKAGE_WARNINGS_FILE = "export-warnings.json";
 
-const MIME_EXTENSION_MAP = {
-  "image/avif": ".avif",
-  "image/gif": ".gif",
-  "image/jpeg": ".jpg",
-  "image/jpg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp"
-};
-
-function normalizePackageCount(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
-}
-
-function sanitizeFileSegment(value) {
-  const normalized = typeof value === "string" ? value.normalize("NFKD") : "";
-  const ascii = normalized.replace(/[^\x00-\x7F]/g, "");
-  const safe = ascii
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/^\.+|\.+$/g, "")
-    .replace(/\.{2,}/g, ".")
-    .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  return safe || "reference";
-}
-
-function getExtensionFromFilename(filename = "") {
-  const normalized = typeof filename === "string" ? filename.trim().toLowerCase() : "";
-  if (!normalized.includes(".")) {
-    return "";
-  }
-
-  const extension = normalized.slice(normalized.lastIndexOf("."));
-  return /^\.[a-z0-9]{1,8}$/.test(extension) ? extension : "";
-}
-
-function getExtensionFromMimeType(mimeType = "") {
-  const normalized = typeof mimeType === "string" ? mimeType.trim().toLowerCase() : "";
-  return MIME_EXTENSION_MAP[normalized] ?? "";
-}
-
 function getExtensionFromAssetType(type = "") {
   return getExtensionFromMimeType(type);
 }
 
-function getExtensionFromDataUrl(dataUrl = "") {
-  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
-    return "";
-  }
-
-  const mimeType = dataUrl.match(/^data:([^;,]+)/i)?.[1] ?? "";
-  return getExtensionFromMimeType(mimeType);
+function sanitizeFileSegment(value) {
+  return sanitizeSharedFileSegment(value, "reference");
 }
 
 function getExtensionFromFileExtension(fileExtension = "") {
@@ -133,17 +93,24 @@ function buildBackupPackageWarningReport({
   exportedAt = new Date().toISOString(),
   warnings = []
 } = {}) {
-  const normalizedWarnings = Array.isArray(warnings)
-    ? warnings.filter((warning) => warning && typeof warning === "object")
-    : [];
-
-  return {
+  return buildGenericWarningReport({
     source: PACKAGE_SOURCE,
     version: PACKAGE_VERSION,
     exportedAt,
-    warningCount: normalizedWarnings.length,
-    warnings: normalizedWarnings
-  };
+    warnings
+  });
+}
+
+async function streamNdjsonFileLines(file, onLine) {
+  try {
+    await streamSharedNdjsonFileLines(file, onLine);
+  } catch (error) {
+    if (error?.message === "NDJSON file is invalid.") {
+      throw new Error("Backup package items file is invalid.");
+    }
+
+    throw error;
+  }
 }
 
 async function readJsonFile(fileHandle, errorMessage) {
@@ -248,45 +215,6 @@ function createPreparedPackageItem(record) {
       thumbnail: thumbnailAsset
     }
   };
-}
-
-async function streamNdjsonFileLines(file, onLine) {
-  if (!file || typeof file.stream !== "function") {
-    throw new Error("Backup package items file is invalid.");
-  }
-
-  const reader = file.stream().getReader();
-  const decoder = new TextDecoder();
-  let buffered = "";
-  let lineNumber = 0;
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-
-      buffered += decoder.decode(value ?? new Uint8Array(), { stream: !done });
-      const lines = buffered.split(/\r?\n/);
-      buffered = lines.pop() ?? "";
-
-      for (const line of lines) {
-        lineNumber += 1;
-        await onLine(line, lineNumber);
-      }
-
-      if (done) {
-        break;
-      }
-    }
-
-    buffered += decoder.decode();
-
-    if (buffered.length > 0) {
-      lineNumber += 1;
-      await onLine(buffered, lineNumber);
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
 }
 
 async function getPreviewsDirectoryHandle(rootHandle) {
