@@ -1782,6 +1782,8 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   image,
   item,
   isActive,
+  isSelected,
+  isSelectMode,
   isEditing,
   isPickerOpen,
   onImagePointerDown,
@@ -1849,19 +1851,20 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
 
   return (
     <div
-      className={`board-image ${isActive ? "is-active" : ""}`}
+      className={`board-image ${isActive ? "is-active" : ""} ${isSelected ? "is-selected" : ""} ${isSelectMode ? "is-select-mode" : ""}`.trim()}
       style={imageStyle}
     >
       <button
         type="button"
-        className="board-image-hit-area"
+        className={`board-image-hit-area ${isSelectMode ? "is-select-mode" : ""}`.trim()}
         onMouseDown={preventMouseButtonFocus}
         onPointerDown={(event) => onImagePointerDown(event, image)}
         onDoubleClick={() => onImageDoubleClick(image, item)}
+        aria-pressed={isSelectMode ? isSelected : undefined}
         aria-label={`${buildDisplayName(item)} preview`}
       >
         <span
-          className={`board-image-visual ${isActive ? "is-active" : ""}`}
+          className={`board-image-visual ${isActive ? "is-active" : ""} ${isSelected ? "is-selected" : ""}`.trim()}
           style={imageVisualStyle}
         >
           <ManagedItemImage
@@ -1924,6 +1927,8 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   prevProps.image === nextProps.image &&
   prevProps.item === nextProps.item &&
   prevProps.isActive === nextProps.isActive &&
+  prevProps.isSelected === nextProps.isSelected &&
+  prevProps.isSelectMode === nextProps.isSelectMode &&
   prevProps.isEditing === nextProps.isEditing &&
   prevProps.isPickerOpen === nextProps.isPickerOpen
 );
@@ -1999,6 +2004,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
   item,
   isSelected,
   isExcluded,
+  isOnCurrentBoard,
   isMobileViewport,
   isMobileSelectMode,
   cardStyle = null,
@@ -2032,7 +2038,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
 
   return (
     <article
-      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""} ${isMobileViewport ? "is-mobile-card" : ""} ${isMobileViewport && isMobileSelectMode ? "is-mobile-select-mode" : ""}`}
+      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""} ${isOnCurrentBoard ? "is-on-current-board" : ""} ${isMobileViewport ? "is-mobile-card" : ""} ${isMobileViewport && isMobileSelectMode ? "is-mobile-select-mode" : ""}`}
       style={mergedCardStyle}
     >
       {isExcluded || (isMobileViewport && isSelected) ? (
@@ -2090,11 +2096,16 @@ const LibraryGridCard = memo(function LibraryGridCard({
         />
       </button>
 
+      {item.favorite ? (
+        <div className="wardrobe-card-corner-badge" aria-label="Favorite">
+          <span className="wardrobe-card-corner-heart" aria-hidden="true">♥</span>
+        </div>
+      ) : null}
+
       <div className={`wardrobe-meta ${isMobileViewport ? "is-mobile-hidden" : ""}`}>
         {showTitle ? (
           <strong title={itemName}>
             <span>{itemName}</span>
-            {item.favorite ? <span className="wardrobe-meta-favorite" aria-label="Favorite">♥</span> : null}
           </strong>
         ) : null}
         <span title={itemTagsLabel}>{itemTagsLabel}</span>
@@ -2105,6 +2116,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
   prevProps.item === nextProps.item &&
   prevProps.isSelected === nextProps.isSelected &&
   prevProps.isExcluded === nextProps.isExcluded &&
+  prevProps.isOnCurrentBoard === nextProps.isOnCurrentBoard &&
   prevProps.isMobileViewport === nextProps.isMobileViewport &&
   prevProps.isMobileSelectMode === nextProps.isMobileSelectMode &&
   prevProps.cardStyle?.top === nextProps.cardStyle?.top &&
@@ -3907,6 +3919,7 @@ export default function App() {
   const pendingPersistenceReadyRef = useRef(false);
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
+  const boardSelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
   const wardrobeFiltersTriggerRef = useRef(null);
   const mobileFilterDismissClickSuppressionRef = useRef(false);
@@ -3931,6 +3944,7 @@ export default function App() {
   const boardUndoStackRef = useRef([]);
   const boardRedoStackRef = useRef([]);
   const pendingRestoredBoardFitRef = useRef(false);
+  const boardSelectModeBoardIdRef = useRef(null);
   const lastInteractionWasPointerRef = useRef(false);
   const pointerActivatedControlRef = useRef(null);
   const excludedOutfitReconcileFrameRef = useRef(0);
@@ -3963,6 +3977,13 @@ export default function App() {
   const [savedOutfitDraft, setSavedOutfitDraft] = useState({ name: "", description: "" });
   const [activeBoardImageId, setActiveBoardImageId] = useState(null);
   const [pickerBoardImageId, setPickerBoardImageId] = useState(null);
+  const [boardSelectMode, setBoardSelectMode] = useState(false);
+  const [selectedBoardImageSelection, setSelectedBoardImageSelection] = useState({
+    ids: {},
+    anchorId: null
+  });
+  const [boardSelectionActionsOpen, setBoardSelectionActionsOpen] = useState(false);
+  const [boardTagActionMode, setBoardTagActionMode] = useState(null);
   const [activeAccessorySlot, setActiveAccessorySlot] = useState(null);
   const [activeOutfitSlot, setActiveOutfitSlot] = useState(null);
   const [pickerAnchorSlot, setPickerAnchorSlot] = useState(null);
@@ -4056,6 +4077,10 @@ export default function App() {
   const [sideEditorWidth, setSideEditorWidth] = useState(DEFAULT_SIDE_EDITOR_WIDTH);
   const [libraryAddWidth, setLibraryAddWidth] = useState(DEFAULT_LIBRARY_ADD_WIDTH);
   const [libraryTagActionMode, setLibraryTagActionMode] = useState(null);
+  const [boardBulkMetadataDraft, setBoardBulkMetadataDraft] = useState({
+    addTags: [],
+    removeTags: []
+  });
   const [outfitPalette, setOutfitPalette] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardView, setBoardView] = useState({ x: 0, y: 0, zoom: 1 });
@@ -4186,6 +4211,7 @@ export default function App() {
     return () => window.removeEventListener("resize", handleWindowResize);
   }, [libraryAddWidth, sideEditorWidth]);
   const selectedReferenceIds = selectedReferenceSelection.ids;
+  const selectedBoardImageIds = selectedBoardImageSelection.ids;
   const [isBoardGenerating, setIsBoardGenerating] = useState(false);
   const [showBoardGenerationBusy, setShowBoardGenerationBusy] = useState(false);
   const [boardGenerationError, setBoardGenerationError] = useState("");
@@ -4339,6 +4365,10 @@ export default function App() {
         return true;
       });
   }, [board, itemsById]);
+  const currentBoardReferenceIdSet = useMemo(
+    () => new Set((board?.images ?? []).map((image) => image.referenceId).filter(Boolean)),
+    [board?.images]
+  );
   const boardCanvasImages = useMemo(
     () =>
       (board?.images ?? [])
@@ -4350,6 +4380,43 @@ export default function App() {
         }))
         .filter(({ item }) => Boolean(item)),
     [board?.images, itemsById]
+  );
+  const selectedBoardImageIdList = useMemo(
+    () => Object.entries(selectedBoardImageIds).filter(([, isSelected]) => isSelected).map(([imageId]) => imageId),
+    [selectedBoardImageIds]
+  );
+  const selectedBoardImages = useMemo(
+    () =>
+      selectedBoardImageIdList
+        .map((imageId) => (board?.images ?? []).find((image) => image.id === imageId) ?? null)
+        .filter(Boolean),
+    [board?.images, selectedBoardImageIdList]
+  );
+  const selectedBoardReferenceIdList = useMemo(
+    () => [...new Set(selectedBoardImages.map((image) => image.referenceId).filter(Boolean))],
+    [selectedBoardImages]
+  );
+  const selectedBoardItems = useMemo(
+    () => selectedBoardReferenceIdList.map((referenceId) => itemsById[referenceId]).filter(Boolean),
+    [itemsById, selectedBoardReferenceIdList]
+  );
+  const selectedBoardImageCount = selectedBoardImageIdList.length;
+  const hasSelectedBoardImages = selectedBoardImageCount > 0;
+  const selectedBoardImageIdSet = useMemo(
+    () => new Set(selectedBoardImageIdList),
+    [selectedBoardImageIdList]
+  );
+  const selectedBoardTags = useMemo(
+    () => uniqueTags(selectedBoardItems.flatMap((item) => item.tags ?? [])),
+    [selectedBoardItems]
+  );
+  const selectedBoardFavoriteValues = useMemo(
+    () => [...new Set(selectedBoardItems.map((item) => Boolean(item.favorite)))],
+    [selectedBoardItems]
+  );
+  const selectedBoardExcludedValues = useMemo(
+    () => [...new Set(selectedBoardItems.map((item) => Boolean(excluded[item.id])))],
+    [excluded, selectedBoardItems]
   );
   const boardSurfaceStyle = useMemo(
     () =>
@@ -4994,11 +5061,31 @@ export default function App() {
   }, [selectionEditorActive]);
 
   useEffect(() => {
+    if (selectedBoardImageCount <= 1) {
+      setBoardBulkMetadataDraft({
+        addTags: [],
+        removeTags: []
+      });
+    }
+  }, [selectedBoardImageCount]);
+
+  useEffect(() => {
     if (!selectedReferenceCount) {
       setLibrarySelectionActionsOpen(false);
       setLibraryTagActionMode(null);
     }
   }, [selectedReferenceCount]);
+
+  useEffect(() => {
+    if (!selectedBoardImageCount) {
+      setBoardSelectionActionsOpen(false);
+      setBoardTagActionMode(null);
+      setBoardBulkMetadataDraft({
+        addTags: [],
+        removeTags: []
+      });
+    }
+  }, [selectedBoardImageCount]);
 
   useEffect(() => {
     function handlePointerDown(event) {
@@ -5017,6 +5104,22 @@ export default function App() {
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
 
   useEffect(() => {
+    function handlePointerDown(event) {
+      if (!boardSelectionActionsOpen && !boardTagActionMode) {
+        return;
+      }
+
+      if (!boardSelectionActionsRef.current?.contains(event.target)) {
+        setBoardSelectionActionsOpen(false);
+        setBoardTagActionMode(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [boardSelectionActionsOpen, boardTagActionMode]);
+
+  useEffect(() => {
     function handleKeyDown(event) {
       if (event.key !== "Escape") {
         return;
@@ -5033,6 +5136,24 @@ export default function App() {
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (!boardSelectionActionsOpen && !boardTagActionMode) {
+        return;
+      }
+
+      setBoardSelectionActionsOpen(false);
+      setBoardTagActionMode(null);
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [boardSelectionActionsOpen, boardTagActionMode]);
 
   useEffect(() => {
     if (!wardrobeViewsOpen && !controlsViewsOpen && !mobileLibraryMoreOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
@@ -7321,6 +7442,35 @@ export default function App() {
     });
   }
 
+  function removeSelectedBoardImages() {
+    const currentBoard = boardRef.current;
+
+    if (!currentBoard?.images?.length || !selectedBoardImageIdList.length) {
+      return;
+    }
+
+    const selectedImageIdSet = new Set(selectedBoardImageIdList);
+    const nextImages = currentBoard.images.filter((image) => !selectedImageIdSet.has(image.id));
+
+    commitBoardSnapshotChange(nextImages.length ? relayoutBoardStateImages(nextImages) : null, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        clearSelectedBoardImages();
+      }
+    });
+  }
+
+  function openBoardSelectionEditor() {
+    if (selectedBoardItems.length !== 1) {
+      return;
+    }
+
+    const [selectedItem] = selectedBoardItems;
+    exitBoardSelectMode();
+    startFloatingEdit(selectedItem);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -7363,6 +7513,53 @@ export default function App() {
 
     setOutfit(boardToSyntheticOutfit(board));
   }, [board]);
+
+  useEffect(() => {
+    if (!boardSelectMode) {
+      return;
+    }
+
+    if (!board?.images?.length) {
+      exitBoardSelectMode();
+      return;
+    }
+
+    const currentBoardImageIds = new Set(board.images.map((image) => image.id));
+
+    setSelectedBoardImageSelection((current) => {
+      const nextIds = Object.fromEntries(
+        Object.entries(current.ids).filter(([imageId, isSelected]) => isSelected && currentBoardImageIds.has(imageId))
+      );
+
+      if (Object.keys(nextIds).length === Object.keys(current.ids).length) {
+        return current;
+      }
+
+      return {
+        ids: nextIds,
+        anchorId: current.anchorId && currentBoardImageIds.has(current.anchorId) ? current.anchorId : null
+      };
+    });
+  }, [board, boardSelectMode]);
+
+  useEffect(() => {
+    if (!boardSelectMode || !board) {
+      return;
+    }
+
+    if (board.id !== boardSelectModeBoardIdRef.current) {
+      exitBoardSelectMode();
+    }
+  }, [board?.id, boardSelectMode]);
+
+  useEffect(() => {
+    if (!boardSelectMode || selectedBoardImageCount > 0) {
+      return;
+    }
+
+    boardSelectModeBoardIdRef.current = null;
+    setBoardSelectMode(false);
+  }, [boardSelectMode, selectedBoardImageCount]);
 
   useEffect(() => {
     if (!pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
@@ -8340,6 +8537,13 @@ export default function App() {
         return;
       }
 
+      if (boardSelectMode || selectedBoardImageCount > 0 || boardSelectionActionsOpen || boardTagActionMode) {
+        event.preventDefault();
+        blurRetainedPointerFocus();
+        exitBoardSelectMode();
+        return;
+      }
+
       if (activePanel) {
         event.preventDefault();
         blurRetainedPointerFocus();
@@ -8352,6 +8556,9 @@ export default function App() {
   }, [
     pickerBoardImageId,
     activePanel,
+    boardSelectMode,
+    boardSelectionActionsOpen,
+    boardTagActionMode,
     confirmation,
     editingId,
     fitpicPreview,
@@ -8361,6 +8568,7 @@ export default function App() {
     cropEditorState,
     librarySelectionActionsOpen,
     libraryTagActionMode,
+    selectedBoardImageCount,
     wardrobeFiltersOpen,
     wardrobeAddOpen,
     wardrobeWorthOpen,
@@ -9610,6 +9818,83 @@ export default function App() {
     setActiveBoardImageId(null);
   }
 
+  function clearSelectedBoardImages() {
+    setBoardSelectionActionsOpen(false);
+    setBoardTagActionMode(null);
+    setBoardBulkMetadataDraft({
+      addTags: [],
+      removeTags: []
+    });
+    setSelectedBoardImageSelection({
+      ids: {},
+      anchorId: null
+    });
+  }
+
+  function exitBoardSelectMode() {
+    boardSelectModeBoardIdRef.current = null;
+    setBoardSelectMode(false);
+    clearSelectedBoardImages();
+  }
+
+  function toggleBoardSelectMode() {
+    setBoardSelectMode((current) => {
+      const nextValue = !current;
+
+      if (nextValue) {
+        boardSelectModeBoardIdRef.current = boardRef.current?.id ?? null;
+        closePickerOverlay();
+        setActiveBoardImageId(null);
+        setSelectionEditorActive(false);
+        resetEditorState();
+      } else {
+        boardSelectModeBoardIdRef.current = null;
+        clearSelectedBoardImages();
+      }
+
+      return nextValue;
+    });
+  }
+
+  function startBoardImageSelection(imageId, event = null, options = {}) {
+    if (!imageId) {
+      return;
+    }
+
+    boardSelectModeBoardIdRef.current = boardRef.current?.id ?? null;
+    closePickerOverlay();
+    setActiveBoardImageId(null);
+    setSelectionEditorActive(false);
+    resetEditorState();
+    setBoardSelectMode(true);
+    toggleBoardImageSelection(imageId, event, options);
+  }
+
+  function toggleBoardImageSelection(imageId, event = null, options = {}) {
+    if (!imageId) {
+      return;
+    }
+
+    setSelectedBoardImageSelection((current) => {
+      const currentBoardImageIds = boardRef.current?.images?.map((image) => image.id) ?? [];
+      const isToggleSelection = Boolean(options.forceToggleSelection || event?.metaKey || event?.ctrlKey);
+      const isRangeSelection = Boolean(event?.shiftKey);
+      const { nextSelection, nextAnchorId } = getNextLibrarySelection({
+        currentSelection: current.ids,
+        itemId: imageId,
+        visibleItemIds: currentBoardImageIds,
+        anchorId: current.anchorId,
+        isToggleSelection,
+        isRangeSelection
+      });
+
+      return {
+        ids: nextSelection,
+        anchorId: nextAnchorId
+      };
+    });
+  }
+
   function scheduleExcludedOutfitReconcile(nextExcluded) {
     latestExcludedStateRef.current = nextExcluded;
 
@@ -9706,6 +9991,16 @@ export default function App() {
   function clearExcluded() {
     latestExcludedStateRef.current = {};
     setExcluded({});
+  }
+
+  function getExplicitSelectedReferenceItems(referenceIds) {
+    const uniqueReferenceIds = [...new Set((referenceIds ?? []).filter(Boolean))];
+    const resolvedItems = uniqueReferenceIds.map((referenceId) => itemsById[referenceId]).filter(Boolean);
+
+    return {
+      referenceIds: resolvedItems.map((item) => item.id),
+      items: resolvedItems
+    };
   }
 
   function syncSelectionEditor(nextSelected) {
@@ -9973,11 +10268,17 @@ export default function App() {
   }
 
   async function applyBulkMetadataUpdate(buildNextItem) {
-    if (!selectedReferenceIdList.length) {
+    return applyBulkMetadataUpdateForReferenceIds(selectedReferenceIdList, buildNextItem);
+  }
+
+  async function applyBulkMetadataUpdateForReferenceIds(referenceIds, buildNextItem) {
+    const { referenceIds: validReferenceIds } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!validReferenceIds.length) {
       return;
     }
 
-    const selectedReferenceIdSet = new Set(selectedReferenceIdList);
+    const selectedReferenceIdSet = new Set(validReferenceIds);
     const updatedItems = items
       .filter((item) => selectedReferenceIdSet.has(item.id))
       .map((item) => {
@@ -10198,13 +10499,18 @@ export default function App() {
   }
 
   async function applyImmediateBulkTagEdit(mode, tag) {
-    const normalizedTag = normalizeTag(tag);
+    return applyImmediateBulkTagEditForReferenceIds(selectedReferenceIdList, mode, tag);
+  }
 
-    if (!normalizedTag || !selectedReferenceIdList.length) {
+  async function applyImmediateBulkTagEditForReferenceIds(referenceIds, mode, tag) {
+    const normalizedTag = normalizeTag(tag);
+    const { referenceIds: validReferenceIds, items: selectedItemsForAction } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!normalizedTag || !validReferenceIds.length) {
       return;
     }
 
-    const changedCount = selectedReferenceItems.reduce((count, item) => {
+    const changedCount = selectedItemsForAction.reduce((count, item) => {
       const currentTags = uniqueTags(item.tags);
       const willChange = mode === "add"
         ? !currentTags.includes(normalizedTag)
@@ -10217,7 +10523,7 @@ export default function App() {
       return;
     }
 
-    await applyBulkMetadataUpdate((item) => {
+    await applyBulkMetadataUpdateForReferenceIds(validReferenceIds, (item) => {
       const currentTags = uniqueTags(item.tags);
       const nextTags = mode === "add"
         ? uniqueTags([...currentTags, normalizedTag])
@@ -10235,12 +10541,18 @@ export default function App() {
   }
 
   async function applyImmediateBulkFavoriteEdit(nextValue) {
-    if (!selectedReferenceIdList.length || !nextValue) {
+    return applyImmediateBulkFavoriteEditForReferenceIds(selectedReferenceIdList, nextValue);
+  }
+
+  async function applyImmediateBulkFavoriteEditForReferenceIds(referenceIds, nextValue) {
+    const { referenceIds: validReferenceIds, items: selectedItemsForAction } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!validReferenceIds.length || !nextValue) {
       return;
     }
 
     const nextFavorite = nextValue === "yes";
-    const changedCount = selectedReferenceItems.reduce(
+    const changedCount = selectedItemsForAction.reduce(
       (count, item) => count + (Boolean(item.favorite) !== nextFavorite ? 1 : 0),
       0
     );
@@ -10250,7 +10562,7 @@ export default function App() {
       return;
     }
 
-    await applyBulkMetadataUpdate((item) => ({
+    await applyBulkMetadataUpdateForReferenceIds(validReferenceIds, (item) => ({
       ...item,
       favorite: nextFavorite
     }));
@@ -10261,12 +10573,18 @@ export default function App() {
   }
 
   async function applyImmediateBulkExcludedEdit(nextValue) {
-    if (!selectedReferenceIdList.length || !nextValue) {
+    return applyImmediateBulkExcludedEditForReferenceIds(selectedReferenceIdList, nextValue);
+  }
+
+  async function applyImmediateBulkExcludedEditForReferenceIds(referenceIds, nextValue) {
+    const { referenceIds: validReferenceIds, items: selectedItemsForAction } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!validReferenceIds.length || !nextValue) {
       return;
     }
 
     const nextExcludedValue = nextValue === "yes";
-    const changedCount = selectedReferenceItems.reduce(
+    const changedCount = selectedItemsForAction.reduce(
       (count, item) => count + (Boolean(excluded[item.id]) !== nextExcludedValue ? 1 : 0),
       0
     );
@@ -10276,7 +10594,7 @@ export default function App() {
       return;
     }
 
-    setReferencesExcluded(selectedReferenceIdList, nextExcludedValue);
+    setReferencesExcluded(validReferenceIds, nextExcludedValue);
 
     showTemporaryBulkMetadataFeedback(
       `${nextExcludedValue ? "Excluded" : "Included"} ${changedCount} ${changedCount === 1 ? "item" : "items"}`
@@ -10299,6 +10617,27 @@ export default function App() {
 
     await applyImmediateBulkTagEdit(mode, committedTags[0]);
     setBulkMetadataDraft((current) => ({
+      ...current,
+      [draftKey]: []
+    }));
+  }
+
+  async function handleBoardBulkTagDraftChange(mode, nextTags) {
+    const draftKey = mode === "add" ? "addTags" : "removeTags";
+    const currentTags = boardBulkMetadataDraft[draftKey];
+    const committedTags = nextTags.filter((tag) => !currentTags.includes(tag));
+
+    setBoardBulkMetadataDraft((current) => ({
+      ...current,
+      [draftKey]: nextTags
+    }));
+
+    if (!committedTags.length) {
+      return;
+    }
+
+    await applyImmediateBulkTagEditForReferenceIds(selectedBoardReferenceIdList, mode, committedTags[0]);
+    setBoardBulkMetadataDraft((current) => ({
       ...current,
       [draftKey]: []
     }));
@@ -11493,12 +11832,16 @@ export default function App() {
   }
 
   function selectBoardImage(imageId) {
+    if (boardSelectMode) {
+      toggleBoardImageSelection(imageId);
+      return;
+    }
+
     closeUtilityWindows();
     setActivePanel(null);
     setActiveAccessorySlot(null);
     setActiveOutfitSlot(null);
-    setActiveBoardImageId((current) => current === imageId ? null : imageId);
-    setPickerBoardImageId(null);
+    startBoardImageSelection(imageId);
   }
 
   function openBoardImagePicker(image) {
@@ -11636,6 +11979,12 @@ export default function App() {
       return;
     }
 
+    if (boardSelectMode) {
+      clearSelectedBoardImages();
+      setBoardSelectMode(false);
+      boardSelectModeBoardIdRef.current = null;
+    }
+
     setActiveBoardImageId(null);
     setPickerBoardImageId(null);
     startBoardInteraction(event, {
@@ -11649,7 +11998,18 @@ export default function App() {
 
   function handleBoardImagePointerDown(event, image) {
     event.stopPropagation();
-    selectBoardImage(image.id);
+    if (boardSelectMode) {
+      if (event.detail >= 2 && selectedBoardImageIdSet.has(image.id)) {
+        event.preventDefault();
+        return;
+      }
+
+      event.preventDefault();
+      toggleBoardImageSelection(image.id, event);
+      return;
+    }
+
+    startBoardImageSelection(image.id, event);
     startBoardInteraction(event, {
       type: "drag",
       imageId: image.id,
@@ -13051,6 +13411,14 @@ export default function App() {
     : [];
 
   function renderBoardCanvas() {
+    const boardTagActionSuggestions = boardTagActionMode === "remove" ? selectedBoardTags : allLibraryTags;
+    const boardTagActionSelectedTags =
+      boardTagActionMode === "remove" ? boardBulkMetadataDraft.removeTags : boardBulkMetadataDraft.addTags;
+    const showFavoriteBoardAction = selectedBoardFavoriteValues.length > 1 || !selectedBoardFavoriteValues[0];
+    const showUnfavoriteBoardAction = selectedBoardFavoriteValues.length > 1 || Boolean(selectedBoardFavoriteValues[0]);
+    const showExcludeBoardAction = selectedBoardExcludedValues.length > 1 || !selectedBoardExcludedValues[0];
+    const showIncludeBoardAction = selectedBoardExcludedValues.length > 1 || Boolean(selectedBoardExcludedValues[0]);
+
     return (
       <div className="board-stage">
         <div className="board-canvas-toolbar" aria-label="Canvas controls">
@@ -13084,6 +13452,161 @@ export default function App() {
           >
             Rearrange
           </button>
+          {boardSelectMode ? (
+            <>
+              <span className="board-canvas-selection-count">{selectedBoardImageCount} selected</span>
+              <div ref={boardSelectionActionsRef} className="board-selection-actions-anchor">
+                <button
+                  type="button"
+                  className={`ghost-button board-selection-actions-trigger ${boardSelectionActionsOpen || boardTagActionMode ? "is-active" : ""}`}
+                  onMouseDown={preventMouseButtonFocus}
+                  onClick={() => setBoardSelectionActionsOpen((current) => !current)}
+                  aria-expanded={boardSelectionActionsOpen || Boolean(boardTagActionMode)}
+                  aria-haspopup="menu"
+                  aria-controls="board-selection-actions-popover"
+                  disabled={!hasSelectedBoardImages}
+                >
+                  Actions ▾
+                </button>
+                {(boardSelectionActionsOpen || boardTagActionMode) ? (
+                  <div
+                    id="board-selection-actions-popover"
+                    className="selection-actions-popover"
+                    aria-label="Board selection actions"
+                  >
+                    {boardTagActionMode ? (
+                      <div className="selection-action-editor">
+                        <button
+                          type="button"
+                          className="ghost-button selection-action-back"
+                          onClick={() => setBoardTagActionMode(null)}
+                        >
+                          Back
+                        </button>
+                        <p className="selection-action-title">
+                          {boardTagActionMode === "add" ? "Add tags" : "Remove tags"}
+                        </p>
+                        <TagInput
+                          selectedTags={boardTagActionSelectedTags}
+                          allTags={boardTagActionSuggestions}
+                          onChange={(nextTags) => {
+                            void handleBoardBulkTagDraftChange(boardTagActionMode, nextTags);
+                          }}
+                          placeholder={boardTagActionMode === "add" ? "Add tag" : "Remove tag"}
+                          autoFocus
+                          showAllSuggestionsOnFocus
+                          className="selection-action-tag-input"
+                          suggestionsClassName="selection-action-tag-input-suggestions"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="selection-actions-popover-section">
+                          {selectedBoardImageCount === 1 ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={openBoardSelectionEditor}
+                            >
+                              Edit
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="selection-actions-popover-item"
+                            onClick={() => setBoardTagActionMode("add")}
+                          >
+                            Add tags
+                          </button>
+                          <button
+                            type="button"
+                            className="selection-actions-popover-item"
+                            onClick={() => setBoardTagActionMode("remove")}
+                          >
+                            Remove tags
+                          </button>
+                        </div>
+                        <div className="selection-actions-popover-section selection-actions-popover-section-divider">
+                          {showFavoriteBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkFavoriteEditForReferenceIds(selectedBoardReferenceIdList, "yes");
+                              }}
+                            >
+                              Favorite
+                            </button>
+                          ) : null}
+                          {showUnfavoriteBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkFavoriteEditForReferenceIds(selectedBoardReferenceIdList, "no");
+                              }}
+                            >
+                              Unfavorite
+                            </button>
+                          ) : null}
+                          {showExcludeBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkExcludedEditForReferenceIds(selectedBoardReferenceIdList, "yes");
+                              }}
+                            >
+                              Exclude
+                            </button>
+                          ) : null}
+                          {showIncludeBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkExcludedEditForReferenceIds(selectedBoardReferenceIdList, "no");
+                              }}
+                            >
+                              Include
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="selection-actions-popover-section selection-actions-popover-section-danger">
+                          <button
+                            type="button"
+                            className="selection-actions-popover-item is-danger"
+                            onClick={removeSelectedBoardImages}
+                          >
+                            Remove selected images
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={clearSelectedBoardImages}
+                disabled={!hasSelectedBoardImages}
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={exitBoardSelectMode}
+              >
+                Done
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="ghost-button"
@@ -13127,12 +13650,13 @@ export default function App() {
                   image={image}
                   item={item}
                   isActive={activeBoardImageId === image.id}
+                  isSelected={selectedBoardImageIdSet.has(image.id)}
+                  isSelectMode={boardSelectMode}
                   isEditing={editingId === item.id && editorReturnTarget === "outfit"}
                   isPickerOpen={pickerBoardImageId === image.id}
                   onMetrics={(metrics) => syncBoardImageDimensions(image.id, item, metrics)}
                   onImagePointerDown={handleBoardImagePointerDown}
                   onImageDoubleClick={(boardImage, boardItem) => {
-                    selectBoardImage(boardImage.id);
                     openReferencePreview(boardItem);
                   }}
                   onEditImage={toggleBoardImageEdit}
@@ -13169,6 +13693,7 @@ export default function App() {
                 item={item}
                 isSelected={selectedReferenceIdSet.has(item.id)}
                 isExcluded={Boolean(excluded[item.id])}
+                isOnCurrentBoard={currentBoardReferenceIdSet.has(item.id)}
                 isMobileViewport={isMobileViewport}
                 isMobileSelectMode={mobileLibrarySelectMode}
                 cardStyle={style}
@@ -13185,6 +13710,7 @@ export default function App() {
               item={item}
               isSelected={selectedReferenceIdSet.has(item.id)}
               isExcluded={Boolean(excluded[item.id])}
+              isOnCurrentBoard={currentBoardReferenceIdSet.has(item.id)}
               isMobileViewport={isMobileViewport}
               isMobileSelectMode={mobileLibrarySelectMode}
               cardStyle={style}

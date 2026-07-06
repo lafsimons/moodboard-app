@@ -543,6 +543,12 @@ button:disabled {
   outline-offset: 4px;
 }
 
+.board-image-visual.is-selected {
+  outline: 2px solid rgba(17, 17, 17, 0.82);
+  outline-offset: 6px;
+  box-shadow: 0 0 0 5px rgba(17, 17, 17, 0.16);
+}
+
 .board-image-hit-area {
   position: absolute;
   inset: 0;
@@ -556,8 +562,16 @@ button:disabled {
   cursor: grab;
 }
 
+.board-image-hit-area.is-select-mode {
+  cursor: pointer;
+}
+
 .board-image-hit-area:active {
   cursor: grabbing;
+}
+
+.board-image-hit-area.is-select-mode:active {
+  cursor: pointer;
 }
 
 .board-image .managed-image,
@@ -582,6 +596,10 @@ button:disabled {
   gap: 6px;
   opacity: 0;
   pointer-events: none;
+}
+
+.board-image.is-select-mode .board-image-actions {
+  display: none;
 }
 
 .board-image-picker-button {
@@ -3322,6 +3340,16 @@ button:disabled {
   position: relative;
 }
 
+.board-selection-actions-anchor {
+  position: relative;
+}
+
+.board-selection-actions-trigger.is-active {
+  color: var(--text);
+  border-color: rgba(0, 0, 0, 0.12);
+  background: var(--soft);
+}
+
 .library-tag-action-popover {
   position: absolute;
   top: calc(100% + 6px);
@@ -3628,6 +3656,14 @@ button:disabled {
 .selection-actions-popover-item.is-danger:hover,
 .selection-actions-popover-item.is-danger:focus-visible {
   color: var(--text);
+}
+
+.board-canvas-selection-count {
+  padding: 0 2px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  color: var(--muted-strong);
 }
 
 .library-mobile-more-popover {
@@ -4019,6 +4055,11 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   box-shadow: none;
 }
 
+.wardrobe-card.is-on-current-board {
+  border-color: rgba(22, 22, 22, 0.56);
+  box-shadow: 0 0 0 1px rgba(22, 22, 22, 0.14);
+}
+
 .wardrobe-card {
   align-content: start;
 }
@@ -4068,6 +4109,30 @@ html[data-input-modality="keyboard"] .wardrobe-filter-search:has(input:focus-vis
   display: flex;
   gap: 6px;
   pointer-events: none;
+}
+
+.wardrobe-card-corner-badge {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+}
+
+.wardrobe-card-corner-heart {
+  color: var(--primary);
+  font-size: 0.72rem;
+  line-height: 1;
 }
 
 .wardrobe-status-dot {

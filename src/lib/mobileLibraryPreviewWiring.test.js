@@ -29,6 +29,8 @@ test("mobile library card tap opens preview while select mode keeps selection be
   assert.equal(appSource.includes("if (isMobileViewport) {"), true);
   assert.equal(appSource.includes('className={`wardrobe-card-badges ${isMobileViewport ? "is-mobile-tile-badges" : ""}`}'), true);
   assert.equal(appSource.includes('className="wardrobe-mobile-selection-badge"'), true);
+  assert.equal(appSource.includes('className="wardrobe-card-corner-badge" aria-label="Favorite"'), true);
+  assert.equal(appSource.includes('isOnCurrentBoard={currentBoardReferenceIdSet.has(item.id)}'), true);
 });
 
 test("mobile library grid uses a centralized 3-column layout config for responsive virtualization", () => {
