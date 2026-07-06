@@ -130,6 +130,14 @@ import {
 } from "./lib/boardBounds.js";
 import { getFittedBoardViewForViewport } from "./lib/boardView.js";
 import {
+  areBoardHistorySnapshotsEqual,
+  BOARD_HISTORY_LIMIT,
+  createBoardHistorySnapshot,
+  pushBoardHistorySnapshot as appendBoardHistorySnapshot,
+  restoreBoardRedoState,
+  restoreBoardUndoState
+} from "./lib/boardHistory.js";
+import {
   exportBackupPackageToDirectory,
   isFileSystemAccessSupported
 } from "./lib/backupPackage.js";
@@ -1060,6 +1068,14 @@ function getBoardImageCount(board) {
   }
 
   return normalizeImageCount(board.images.length);
+}
+
+function isEditableKeyboardTarget(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']")) || target.isContentEditable;
 }
 
 
@@ -3902,6 +3918,11 @@ export default function App() {
   const paletteCacheRef = useRef(new Map());
   const boardRenderLayoutSignatureRef = useRef("");
   const suppressNextBoardRelayoutRef = useRef(false);
+  const boardRef = useRef(null);
+  const boardViewRef = useRef({ x: 0, y: 0, zoom: 1 });
+  const imageCountRef = useRef(DEFAULT_BOARD_IMAGE_COUNT);
+  const boardUndoStackRef = useRef([]);
+  const boardRedoStackRef = useRef([]);
   const pendingRestoredBoardFitRef = useRef(false);
   const lastInteractionWasPointerRef = useRef(false);
   const pointerActivatedControlRef = useRef(null);
@@ -4031,10 +4052,32 @@ export default function App() {
   const [outfitPalette, setOutfitPalette] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardView, setBoardView] = useState({ x: 0, y: 0, zoom: 1 });
+  const [boardUndoStack, setBoardUndoStack] = useState([]);
+  const [boardRedoStack, setBoardRedoStack] = useState([]);
 
   useEffect(() => {
     latestExcludedStateRef.current = excluded;
   }, [excluded]);
+
+  useEffect(() => {
+    boardRef.current = board;
+  }, [board]);
+
+  useEffect(() => {
+    boardViewRef.current = boardView;
+  }, [boardView]);
+
+  useEffect(() => {
+    imageCountRef.current = imageCount;
+  }, [imageCount]);
+
+  useEffect(() => {
+    boardUndoStackRef.current = boardUndoStack;
+  }, [boardUndoStack]);
+
+  useEffect(() => {
+    boardRedoStackRef.current = boardRedoStack;
+  }, [boardRedoStack]);
 
   useEffect(() => {
     mobileReferencePreviewScaleRef.current = mobileReferencePreviewScale;
@@ -6932,7 +6975,11 @@ export default function App() {
       return;
     }
 
-    const { fitView = true } = options;
+    const {
+      fitView = true,
+      historySnapshot = null,
+      recordHistory = false
+    } = options;
     const perfSession = options.perfSession ?? null;
     perfSession?.mark("generation logic done", {
       boardImageCount: result.board?.images?.length ?? 0
@@ -6941,16 +6988,16 @@ export default function App() {
       perfSession.expectedBoardId = result.board?.id ?? null;
     }
 
-    startBoardTransition(() => {
-      setBoard(result.board);
-      setOutfit(result.syntheticOutfit);
-      setGuidedDebugPayload(result.guidedDebugPayload);
-
-      if (fitView) {
-        setBoardView(getFittedBoardView(result.board));
+    commitBoardSnapshotChange(result.board, {
+      historySnapshot,
+      recordHistory,
+      nextBoardView: fitView ? getFittedBoardView(result.board) : boardViewRef.current,
+      nextGuidedDebugPayload: result.guidedDebugPayload,
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setOutfit(result.syntheticOutfit);
+        perfSession?.mark("state commit scheduled");
       }
-
-      perfSession?.mark("state commit scheduled");
     });
 
     if (!perfSession) {
@@ -6960,7 +7007,7 @@ export default function App() {
         });
       });
     }
-  }, [clearBoardGenerationFeedback, startBoardTransition]);
+  }, [clearBoardGenerationFeedback]);
 
   const scheduleBoardGeneration = useCallback((buildBoard, options = {}) => {
     if (boardGenerationInFlightRef.current) {
@@ -7036,6 +7083,105 @@ export default function App() {
       itemNeedsImageAssetMigration,
       itemNeedsStyleWeightMappingMigration
     };
+  }
+
+  function captureCurrentBoardHistorySnapshot() {
+    return createBoardHistorySnapshot({
+      board: boardRef.current,
+      boardView: boardViewRef.current,
+      imageCount: imageCountRef.current
+    });
+  }
+
+  function applyBoardHistorySnapshot(snapshot, options = {}) {
+    const normalizedSnapshot = createBoardHistorySnapshot(snapshot);
+    const nextGuidedDebugPayload = options.nextGuidedDebugPayload ?? [];
+
+    startBoardTransition(() => {
+      setBoard(normalizedSnapshot.board);
+      setBoardView(normalizedSnapshot.boardView);
+      setImageCount(normalizedSnapshot.imageCount);
+      setOutfit(boardToSyntheticOutfit(normalizedSnapshot.board));
+      setGuidedDebugPayload(nextGuidedDebugPayload);
+
+      if (options.clearBoardImageUi) {
+        setActiveBoardImageId(null);
+        setPickerBoardImageId(null);
+        setActiveAccessorySlot(null);
+        setActiveOutfitSlot(null);
+      }
+
+      options.onAfterApply?.();
+    });
+  }
+
+  function pushBoardUndoSnapshot(snapshot) {
+    const normalizedSnapshot = createBoardHistorySnapshot(snapshot);
+    const currentSnapshot = captureCurrentBoardHistorySnapshot();
+
+    if (areBoardHistorySnapshotsEqual(normalizedSnapshot, currentSnapshot)) {
+      return false;
+    }
+
+    setBoardUndoStack((current) => appendBoardHistorySnapshot(current, normalizedSnapshot, BOARD_HISTORY_LIMIT));
+    setBoardRedoStack([]);
+    return true;
+  }
+
+  function commitBoardSnapshotChange(nextBoard, options = {}) {
+    const historySnapshot = createBoardHistorySnapshot(options.historySnapshot ?? captureCurrentBoardHistorySnapshot());
+    const nextSnapshot = createBoardHistorySnapshot({
+      board: nextBoard,
+      boardView: options.nextBoardView ?? boardViewRef.current,
+      imageCount: options.nextImageCount ?? imageCountRef.current
+    });
+
+    if (options.recordHistory !== false && !areBoardHistorySnapshotsEqual(historySnapshot, nextSnapshot)) {
+      setBoardUndoStack((current) => appendBoardHistorySnapshot(current, historySnapshot, BOARD_HISTORY_LIMIT));
+      setBoardRedoStack([]);
+    }
+
+    applyBoardHistorySnapshot(nextSnapshot, {
+      nextGuidedDebugPayload: options.nextGuidedDebugPayload,
+      clearBoardImageUi: Boolean(options.clearBoardImageUi),
+      onAfterApply: options.onAfterApply
+    });
+  }
+
+  function handleUndoBoardChange() {
+    const result = restoreBoardUndoState({
+      undoStack: boardUndoStackRef.current,
+      redoStack: boardRedoStackRef.current,
+      currentSnapshot: captureCurrentBoardHistorySnapshot()
+    });
+
+    if (!result.snapshot) {
+      return;
+    }
+
+    setBoardUndoStack(result.undoStack);
+    setBoardRedoStack(result.redoStack);
+    applyBoardHistorySnapshot(result.snapshot, {
+      clearBoardImageUi: true
+    });
+  }
+
+  function handleRedoBoardChange() {
+    const result = restoreBoardRedoState({
+      undoStack: boardUndoStackRef.current,
+      redoStack: boardRedoStackRef.current,
+      currentSnapshot: captureCurrentBoardHistorySnapshot()
+    });
+
+    if (!result.snapshot) {
+      return;
+    }
+
+    setBoardUndoStack(result.undoStack);
+    setBoardRedoStack(result.redoStack);
+    applyBoardHistorySnapshot(result.snapshot, {
+      clearBoardImageUi: true
+    });
   }
 
   useEffect(() => {
@@ -7911,6 +8057,30 @@ export default function App() {
         }
       }
 
+      if (!event.altKey && !isEditableKeyboardTarget(event.target)) {
+        const isPrimaryModifier = event.metaKey || event.ctrlKey;
+        const normalizedKey = event.key.toLowerCase();
+
+        if (isPrimaryModifier && normalizedKey === "z") {
+          event.preventDefault();
+          blurRetainedPointerFocus();
+
+          if (event.shiftKey) {
+            handleRedoBoardChange();
+          } else {
+            handleUndoBoardChange();
+          }
+          return;
+        }
+
+        if (isPrimaryModifier && normalizedKey === "y") {
+          event.preventDefault();
+          blurRetainedPointerFocus();
+          handleRedoBoardChange();
+          return;
+        }
+      }
+
       if (
         referencePreview &&
         !event.metaKey &&
@@ -8069,6 +8239,7 @@ export default function App() {
       return;
     }
 
+    const historySnapshot = captureCurrentBoardHistorySnapshot();
     const perfSession = createGeneratePerfSession(isGeneratePerfDebug);
     perfSession?.mark("generate button click handler");
 
@@ -8105,6 +8276,8 @@ export default function App() {
         }),
       {
         perfSession,
+        historySnapshot,
+        recordHistory: true,
         onComplete: (result) => {
           if (generationMode !== "guided") {
             return;
@@ -9054,10 +9227,9 @@ export default function App() {
     }
 
     const generationSlot = resolveSlotForItem(item) || visibleSlots[0];
-
-    setBoard((current) => {
-      if (!current?.images?.length) {
-        return createBoardFromReferenceIds([item.id], {
+    const currentBoard = boardRef.current;
+    const nextBoard = !currentBoard?.images?.length
+      ? createBoardFromReferenceIds([item.id], {
           aspectRatiosByReferenceId: {
             [item.id]: getItemPresentationAspectRatio(item)
           },
@@ -9066,18 +9238,24 @@ export default function App() {
           },
           renderMetadataByReferenceId: {
             [item.id]: buildBoardRenderMetadata(item)
+          },
+          itemsByReferenceId: {
+            [item.id]: item
           }
-        });
-      }
+        })
+      : relayoutBoardStateImages([
+          ...currentBoard.images,
+          {
+            id: `board_image_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            referenceId: item.id,
+            referenceItemUuid: item.itemUuid ?? "",
+            generationSlot,
+            zIndex: currentBoard.images.length + 1
+          }
+        ]);
 
-      const nextImage = {
-        id: `board_image_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        referenceId: item.id,
-        generationSlot,
-        zIndex: current.images.length + 1
-      };
-
-      return relayoutBoardStateImages([...current.images, nextImage]);
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot()
     });
   }
 
@@ -9559,22 +9737,23 @@ export default function App() {
       itemsByReferenceId: itemsById
     });
 
-    startBoardTransition(() => {
-      setBoard(nextBoard);
-      setImageCount(validSelectedReferenceIds.length);
-      setOutfit(boardToSyntheticOutfit(nextBoard));
-      setBoardView(getFittedBoardView(nextBoard));
-      setGuidedDebugPayload([]);
-      setActivePanel(null);
-      setWardrobeSavedOpen(false);
-      setLibrarySelectionActionsOpen(false);
-      setLibraryTagActionMode(null);
-      setSelectionEditorActive(false);
-      setSelectedReferenceSelection({
-        ids: {},
-        anchorId: null
-      });
-      resetEditorState();
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      nextImageCount: validSelectedReferenceIds.length,
+      nextBoardView: getFittedBoardView(nextBoard),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setActivePanel(null);
+        setWardrobeSavedOpen(false);
+        setLibrarySelectionActionsOpen(false);
+        setLibraryTagActionMode(null);
+        setSelectionEditorActive(false);
+        setSelectedReferenceSelection({
+          ids: {},
+          anchorId: null
+        });
+        resetEditorState();
+      }
     });
   }
 
@@ -11063,20 +11242,23 @@ export default function App() {
   }
 
   function replaceBoardImageReference(imageId, referenceId) {
-    setGuidedDebugPayload([]);
     suppressNextBoardRelayoutRef.current = true;
-    setBoard((current) => {
-      if (!current) {
-        return current;
-      }
+    const currentBoard = boardRef.current;
 
-      const nextItemUuid = itemsById[referenceId]?.itemUuid ?? "";
-      return replaceBoardImageReferencePreservingLayout(
-        current,
-        imageId,
-        referenceId,
-        nextItemUuid || current.images.find((image) => image.id === imageId)?.referenceItemUuid || ""
-      );
+    if (!currentBoard) {
+      return;
+    }
+
+    const nextItemUuid = itemsById[referenceId]?.itemUuid ?? "";
+    const nextBoard = replaceBoardImageReferencePreservingLayout(
+      currentBoard,
+      imageId,
+      referenceId,
+      nextItemUuid || currentBoard.images.find((image) => image.id === imageId)?.referenceItemUuid || ""
+    );
+
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot()
     });
   }
 
@@ -11127,24 +11309,18 @@ export default function App() {
     }
 
     const nextBoardImages = board.images.map((image) => image.id === result.boardImage.id ? result.boardImage : image);
+    const nextGuidedDebugPayload = result.guidedDebugEntry
+      ? mergeGuidedDebugEntryIntoPayload(guidedDebugPayload, result.guidedDebugEntry, nextBoardImages)
+      : guidedDebugPayload;
 
     suppressNextBoardRelayoutRef.current = true;
-    setBoard((current) => {
-      if (!current) {
-        return current;
+    commitBoardSnapshotChange(
+      replaceBoardImagePreservingLayout(board, result.boardImage),
+      {
+        historySnapshot: captureCurrentBoardHistorySnapshot(),
+        nextGuidedDebugPayload
       }
-
-      return replaceBoardImagePreservingLayout(current, result.boardImage);
-    });
-    setGuidedDebugPayload((current) =>
-      result.guidedDebugEntry
-        ? mergeGuidedDebugEntryIntoPayload(current, result.guidedDebugEntry, nextBoardImages)
-        : current
     );
-    setOutfit(boardToSyntheticOutfit({
-      ...board,
-      images: nextBoardImages
-    }));
   }
 
   function selectBoardImage(imageId) {
@@ -11265,6 +11441,18 @@ export default function App() {
     }
 
     function handlePointerUp() {
+      if (boardInteractionRef.current?.type === "drag" && boardInteractionRef.current.historySnapshot) {
+        const currentBoard = boardRef.current;
+        const movedImage = currentBoard?.images?.find((image) => image.id === boardInteractionRef.current.imageId);
+
+        if (
+          movedImage &&
+          (movedImage.x !== boardInteractionRef.current.originX || movedImage.y !== boardInteractionRef.current.originY)
+        ) {
+          pushBoardUndoSnapshot(boardInteractionRef.current.historySnapshot);
+        }
+      }
+
       boardInteractionRef.current = null;
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerup", handlePointerUp);
@@ -11300,7 +11488,8 @@ export default function App() {
       startClientY: event.clientY,
       originX: image.x,
       originY: image.y,
-      zoom: boardView.zoom
+      zoom: boardView.zoom,
+      historySnapshot: captureCurrentBoardHistorySnapshot()
     });
   }
 
@@ -11558,25 +11747,25 @@ export default function App() {
       return;
     }
 
-    setBoard(nextBoard);
-    setImageCount(getBoardImageCount(nextBoard));
-    setBoardView(getFittedBoardView(nextBoard));
-    setOutfit(boardToSyntheticOutfit(nextBoard));
-    setRecentOutfits((current) =>
-      rememberRecentOutfit(
-        current,
-        boardToSyntheticOutfit(nextBoard),
-        true,
-        {
-          preserveLiked: true,
-          liked: Boolean(likedOutfitKeys[getBoardKey(nextBoard)])
-        }
-      )
-    );
-    setActiveBoardImageId(null);
-    setPickerBoardImageId(null);
-    setActiveAccessorySlot(null);
-    setActiveOutfitSlot(null);
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      nextImageCount: getBoardImageCount(nextBoard),
+      nextBoardView: getFittedBoardView(nextBoard),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setRecentOutfits((current) =>
+          rememberRecentOutfit(
+            current,
+            boardToSyntheticOutfit(nextBoard),
+            true,
+            {
+              preserveLiked: true,
+              liked: Boolean(likedOutfitKeys[getBoardKey(nextBoard)])
+            }
+          )
+        );
+      }
+    });
   }
 
   function renderSavedOutfitPreview(savedOutfit) {
@@ -12512,18 +12701,16 @@ export default function App() {
             type="button"
             className="ghost-button danger"
             onClick={() => {
-              setBoard((current) => {
-                if (!current) {
-                  return current;
-                }
+              const currentBoard = boardRef.current;
+              if (!currentBoard) {
+                return;
+              }
 
-                const nextImages = current.images.filter((image) => image.id !== pickerBoardImage.id);
-
-                return nextImages.length ? relayoutBoardStateImages(nextImages) : null;
+              const nextImages = currentBoard.images.filter((image) => image.id !== pickerBoardImage.id);
+              commitBoardSnapshotChange(nextImages.length ? relayoutBoardStateImages(nextImages) : null, {
+                historySnapshot: captureCurrentBoardHistorySnapshot(),
+                clearBoardImageUi: true
               });
-              setActiveBoardImageId(null);
-              setPickerBoardImageId(null);
-              setGuidedDebugPayload([]);
             }}
           >
             Remove
@@ -12698,6 +12885,26 @@ export default function App() {
     return (
       <div className="board-stage">
         <div className="board-canvas-toolbar" aria-label="Canvas controls">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleUndoBoardChange}
+            disabled={!boardUndoStack.length}
+            title="Undo"
+            aria-label="Undo"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleRedoBoardChange}
+            disabled={!boardRedoStack.length}
+            title="Redo"
+            aria-label="Redo"
+          >
+            Redo
+          </button>
           <button
             type="button"
             className="ghost-button"
