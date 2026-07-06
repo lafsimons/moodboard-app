@@ -7302,6 +7302,25 @@ export default function App() {
     });
   }
 
+  function handleRearrangeCurrentBoard() {
+    const currentBoard = boardRef.current;
+
+    if (!currentBoard?.images?.length || currentBoard.images.length <= 1) {
+      return;
+    }
+
+    const nextBoard = relayoutBoardStateImages(currentBoard.images);
+
+    if (!nextBoard) {
+      return;
+    }
+
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      clearBoardImageUi: true
+    });
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -13054,6 +13073,16 @@ export default function App() {
             aria-label="Redo"
           >
             Redo
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleRearrangeCurrentBoard}
+            disabled={!board?.images?.length || board.images.length <= 1}
+            title="Rearrange board"
+            aria-label="Rearrange board"
+          >
+            Rearrange
           </button>
           <button
             type="button"
