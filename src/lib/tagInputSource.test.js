@@ -26,6 +26,23 @@ test("bulk selection actions use overlay-specific tag input classes without chan
   assert.doesNotMatch(appSource, /selectedTags=\{draft\.tags\}[\s\S]{0,600}?selection-action-tag-input/);
 });
 
+test("both selection action menus place Create Board from Selection above Add tags with a divider", () => {
+  const actionLabel = "Create Board from Selection";
+  const dividerClass = "selection-actions-popover-section selection-actions-popover-section-divider";
+  const tagLabel = "Add tags";
+  const actionIndices = [...appSource.matchAll(new RegExp(actionLabel, "g"))].map((match) => match.index ?? -1);
+
+  assert.equal(actionIndices.length, 2);
+
+  actionIndices.forEach((actionIndex) => {
+    const dividerIndex = appSource.indexOf(dividerClass, actionIndex);
+    const addTagsIndex = appSource.indexOf(tagLabel, dividerIndex);
+
+    assert.ok(dividerIndex > actionIndex);
+    assert.ok(addTagsIndex > dividerIndex);
+  });
+});
+
 test("tag input suggestion buttons still commit the clicked suggestion directly", () => {
   assert.match(tagInputSource, /onClick=\{\(\) => commitTag\(tag\)\}/);
   assert.match(tagInputSource, /onMouseEnter=\{\(\) => setHighlightedIndex\(index\)\}/);

@@ -542,6 +542,26 @@ test("createBoardFromReferenceIds can carry additive referenceItemUuid metadata"
   assert.equal(board.images[0].referenceItemUuid, "uuid-1");
 });
 
+test("createBoardFromReferenceIds preserves the selected reference order while stamping uuids", async () => {
+  const { createBoardFromReferenceIds } = await import("./generation.js");
+  const board = createBoardFromReferenceIds(["ref-3", "ref-1", "ref-2"], {
+    itemsByReferenceId: {
+      "ref-1": { id: "ref-1", itemUuid: "uuid-1" },
+      "ref-2": { id: "ref-2", itemUuid: "uuid-2" },
+      "ref-3": { id: "ref-3", itemUuid: "uuid-3" }
+    }
+  });
+
+  assert.deepEqual(
+    board.images.map((image) => image.referenceId),
+    ["ref-3", "ref-1", "ref-2"]
+  );
+  assert.deepEqual(
+    board.images.map((image) => image.referenceItemUuid),
+    ["uuid-3", "uuid-1", "uuid-2"]
+  );
+});
+
 test("rerollBoardImage preserves active id behavior while stamping referenceItemUuid", () => {
   const references = [
     createMoodboardReference("ref-1", [], { itemUuid: "uuid-1" }),

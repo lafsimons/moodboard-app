@@ -276,6 +276,23 @@ test("getNextLibrarySelection keeps the same anchor across repeated shift clicks
   );
 });
 
+test("getNextLibrarySelection preserves visible-order selection when toggling a non-visible item off", () => {
+  assert.deepEqual(
+    getNextLibrarySelection({
+      currentSelection: { hidden: true, c: true, a: true },
+      itemId: "hidden",
+      visibleItemIds: ["a", "b", "c"],
+      anchorId: "c",
+      isToggleSelection: true,
+      isRangeSelection: false
+    }),
+    {
+      nextSelection: { a: true, c: true },
+      nextAnchorId: "c"
+    }
+  );
+});
+
 test("describeBulkMetadataChanges reports actual changed-item counts", () => {
   const items = [
     { tags: ["black"], favorite: false },

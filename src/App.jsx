@@ -9547,6 +9547,37 @@ export default function App() {
     resetEditorState();
   }
 
+  function createBoardFromSelectedReferences() {
+    const validSelectedReferenceIds = selectedReferenceIdList.filter((itemId) => itemsById[itemId]);
+
+    if (!validSelectedReferenceIds.length) {
+      return;
+    }
+
+    const nextBoard = createBoardFromReferenceIds(validSelectedReferenceIds, {
+      ...getCurrentBoardLayoutOptions(),
+      itemsByReferenceId: itemsById
+    });
+
+    startBoardTransition(() => {
+      setBoard(nextBoard);
+      setImageCount(validSelectedReferenceIds.length);
+      setOutfit(boardToSyntheticOutfit(nextBoard));
+      setBoardView(getFittedBoardView(nextBoard));
+      setGuidedDebugPayload([]);
+      setActivePanel(null);
+      setWardrobeSavedOpen(false);
+      setLibrarySelectionActionsOpen(false);
+      setLibraryTagActionMode(null);
+      setSelectionEditorActive(false);
+      setSelectedReferenceSelection({
+        ids: {},
+        anchorId: null
+      });
+      resetEditorState();
+    });
+  }
+
   function selectAllVisibleReferences() {
     if (!visibleWardrobeItemIds.length) {
       return;
@@ -14146,6 +14177,15 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="selection-actions-popover-item"
+                                  onClick={createBoardFromSelectedReferences}
+                                >
+                                  Create Board from Selection
+                                </button>
+                              </div>
+                              <div className="selection-actions-popover-section selection-actions-popover-section-divider">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
                                   onClick={() => toggleLibraryTagAction("add")}
                                 >
                                   Add tags
@@ -15083,6 +15123,15 @@ export default function App() {
                                 ) : (
                                   <>
                                     <div className="selection-actions-popover-section">
+                                      <button
+                                        type="button"
+                                        className="selection-actions-popover-item"
+                                        onClick={createBoardFromSelectedReferences}
+                                      >
+                                        Create Board from Selection
+                                      </button>
+                                    </div>
+                                    <div className="selection-actions-popover-section selection-actions-popover-section-divider">
                                       <button
                                         type="button"
                                         className="selection-actions-popover-item"
