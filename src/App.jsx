@@ -11868,6 +11868,33 @@ export default function App() {
     } : current);
   }
 
+  function updateBoardImagePositions(nextPositionsByImageId) {
+    const normalizedEntries = Object.entries(nextPositionsByImageId ?? {}).filter(([imageId, position]) =>
+      imageId && position && Number.isFinite(position.x) && Number.isFinite(position.y)
+    );
+
+    if (!normalizedEntries.length) {
+      return;
+    }
+
+    const nextPositionMap = Object.fromEntries(normalizedEntries);
+
+    setBoard((current) => current ? {
+      ...current,
+      images: current.images.map((image) => {
+        const nextPosition = nextPositionMap[image.id];
+
+        return nextPosition
+          ? {
+              ...image,
+              x: Math.round(nextPosition.x),
+              y: Math.round(nextPosition.y)
+            }
+          : image;
+      })
+    } : current);
+  }
+
   function getBoardLayoutOptionsWithMetricOverride(referenceId, metrics) {
     if (!referenceId || !metrics?.naturalWidth || !metrics?.naturalHeight) {
       return getCurrentBoardLayoutOptions();
@@ -11925,7 +11952,10 @@ export default function App() {
 
   function startBoardInteraction(event, interaction) {
     event.preventDefault();
-    boardInteractionRef.current = interaction;
+    boardInteractionRef.current = {
+      ...interaction,
+      hasMoved: false
+    };
 
     function handlePointerMove(moveEvent) {
       const currentInteraction = boardInteractionRef.current;
@@ -11935,6 +11965,7 @@ export default function App() {
 
       const deltaX = moveEvent.clientX - currentInteraction.startClientX;
       const deltaY = moveEvent.clientY - currentInteraction.startClientY;
+      const hasCrossedDragThreshold = Math.abs(deltaX) >= 3 || Math.abs(deltaY) >= 3;
 
       if (currentInteraction.type === "pan") {
         setBoardView((current) => ({
@@ -11942,6 +11973,27 @@ export default function App() {
           x: currentInteraction.originX + deltaX,
           y: currentInteraction.originY + deltaY
         }));
+        return;
+      }
+
+      if (!currentInteraction.hasMoved && !hasCrossedDragThreshold) {
+        return;
+      }
+
+      currentInteraction.hasMoved = true;
+
+      if (currentInteraction.type === "drag-selection") {
+        const nextPositionsByImageId = Object.fromEntries(
+          Object.entries(currentInteraction.originPositions ?? {}).map(([imageId, position]) => [
+            imageId,
+            {
+              x: position.x + deltaX / currentInteraction.zoom,
+              y: position.y + deltaY / currentInteraction.zoom
+            }
+          ])
+        );
+
+        updateBoardImagePositions(nextPositionsByImageId);
         return;
       }
 
@@ -11953,15 +12005,32 @@ export default function App() {
     }
 
     function handlePointerUp() {
-      if (boardInteractionRef.current?.type === "drag" && boardInteractionRef.current.historySnapshot) {
+      if (boardInteractionRef.current?.historySnapshot) {
+        const currentInteraction = boardInteractionRef.current;
         const currentBoard = boardRef.current;
-        const movedImage = currentBoard?.images?.find((image) => image.id === boardInteractionRef.current.imageId);
 
-        if (
-          movedImage &&
-          (movedImage.x !== boardInteractionRef.current.originX || movedImage.y !== boardInteractionRef.current.originY)
-        ) {
-          pushBoardUndoSnapshot(boardInteractionRef.current.historySnapshot);
+        if (currentInteraction.type === "drag") {
+          const movedImage = currentBoard?.images?.find((image) => image.id === currentInteraction.imageId);
+
+          if (
+            movedImage &&
+            (movedImage.x !== currentInteraction.originX || movedImage.y !== currentInteraction.originY)
+          ) {
+            pushBoardUndoSnapshot(currentInteraction.historySnapshot);
+          }
+        } else if (currentInteraction.type === "drag-selection") {
+          const didAnySelectedImageMove = Object.entries(currentInteraction.originPositions ?? {}).some(([imageId, position]) => {
+            const movedImage = currentBoard?.images?.find((image) => image.id === imageId);
+            return movedImage && (movedImage.x !== position.x || movedImage.y !== position.y);
+          });
+
+          if (didAnySelectedImageMove) {
+            pushBoardUndoSnapshot(currentInteraction.historySnapshot);
+          } else if (currentInteraction.clickBehavior === "toggle-selection" && currentInteraction.clickedImageId) {
+            toggleBoardImageSelection(currentInteraction.clickedImageId, null, {
+              forceToggleSelection: true
+            });
+          }
         }
       }
 
@@ -12004,8 +12073,31 @@ export default function App() {
         return;
       }
 
+      if (!selectedBoardImageIdSet.has(image.id) || event.metaKey || event.ctrlKey || event.shiftKey) {
+        event.preventDefault();
+        toggleBoardImageSelection(image.id, event);
+        return;
+      }
+
       event.preventDefault();
-      toggleBoardImageSelection(image.id, event);
+      startBoardInteraction(event, {
+        type: "drag-selection",
+        clickedImageId: image.id,
+        clickBehavior: selectedBoardImageCount === 1 ? "toggle-selection" : "none",
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        zoom: boardView.zoom,
+        historySnapshot: captureCurrentBoardHistorySnapshot(),
+        originPositions: Object.fromEntries(
+          selectedBoardImages.map((selectedImage) => [
+            selectedImage.id,
+            {
+              x: selectedImage.x,
+              y: selectedImage.y
+            }
+          ])
+        )
+      });
       return;
     }
 

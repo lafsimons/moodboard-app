@@ -38,8 +38,8 @@ test("board select mode exposes board-only bulk actions and excludes library-onl
   assert.doesNotMatch(appSource, /board-selection-actions-popover[\s\S]{0,1400}Add Selection to Current Board/);
 });
 
-test("board select mode disables drag and picker behavior and bulk remove uses the undo commit path", () => {
-  assert.match(appSource, /if \(boardSelectMode\) \{\s*if \(event\.detail >= 2 && selectedBoardImageIdSet\.has\(image\.id\)\) \{\s*event\.preventDefault\(\);\s*return;\s*\}\s*event\.preventDefault\(\);\s*toggleBoardImageSelection\(image\.id, event\);\s*return;\s*\}/);
+test("board selection keeps picker disabled, clears on canvas click, and bulk remove uses the undo commit path", () => {
+  assert.match(appSource, /if \(boardSelectMode\) \{\s*if \(event\.detail >= 2 && selectedBoardImageIdSet\.has\(image\.id\)\) \{\s*event\.preventDefault\(\);\s*return;\s*\}\s*if \(!selectedBoardImageIdSet\.has\(image\.id\) \|\| event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey\) \{\s*event\.preventDefault\(\);\s*toggleBoardImageSelection\(image\.id, event\);\s*return;\s*\}/);
   assert.match(appSource, /if \(boardSelectMode\) \{\s*toggleBoardImageSelection\(imageId\);\s*return;\s*\}/);
   assert.match(appSource, /if \(boardSelectMode\) \{\s*clearSelectedBoardImages\(\);\s*setBoardSelectMode\(false\);\s*boardSelectModeBoardIdRef\.current = null;\s*\}/);
   assert.match(appSource, /commitBoardSnapshotChange\(nextImages\.length \? relayoutBoardStateImages\(nextImages\) : null, \{\s*historySnapshot: captureCurrentBoardHistorySnapshot\(\),\s*clearBoardImageUi: true,/);
@@ -79,6 +79,16 @@ test("board selection is transient and auto-enters on image click then exits whe
 test("board selection can be dismissed with escape and double click preview still opens", () => {
   assert.match(appSource, /if \(boardSelectMode \|\| selectedBoardImageCount > 0 \|\| boardSelectionActionsOpen \|\| boardTagActionMode\) \{\s*event\.preventDefault\(\);\s*blurRetainedPointerFocus\(\);\s*exitBoardSelectMode\(\);\s*return;\s*\}/);
   assert.match(appSource, /onImageDoubleClick=\{\(boardImage, boardItem\) => \{\s*openReferencePreview\(boardItem\);\s*\}\}/);
+});
+
+test("dragging a selected board image moves the whole selected set and records one undo snapshot", () => {
+  assert.match(appSource, /function updateBoardImagePositions\(nextPositionsByImageId\)/);
+  assert.match(appSource, /if \(currentInteraction\.type === "drag-selection"\) \{/);
+  assert.match(appSource, /updateBoardImagePositions\(nextPositionsByImageId\);/);
+  assert.match(appSource, /clickBehavior: selectedBoardImageCount === 1 \? "toggle-selection" : "none"/);
+  assert.match(appSource, /originPositions: Object\.fromEntries\(\s*selectedBoardImages\.map/);
+  assert.match(appSource, /const didAnySelectedImageMove = Object\.entries\(currentInteraction\.originPositions \?\? \{\}\)\.some/);
+  assert.match(appSource, /if \(didAnySelectedImageMove\) \{\s*pushBoardUndoSnapshot\(currentInteraction\.historySnapshot\);/);
 });
 
 test("library cards carry current-board border state and move favorite to a corner badge", () => {
