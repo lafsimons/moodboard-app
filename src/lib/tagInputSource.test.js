@@ -26,18 +26,23 @@ test("bulk selection actions use overlay-specific tag input classes without chan
   assert.doesNotMatch(appSource, /selectedTags=\{draft\.tags\}[\s\S]{0,600}?selection-action-tag-input/);
 });
 
-test("both selection action menus place Create Board from Selection above Add tags with a divider", () => {
-  const actionLabel = "Create Board from Selection";
+test("both selection action menus place board actions above tag actions with a divider", () => {
+  const createBoardLabel = "Create Board from Selection";
+  const addToBoardLabel = "Add Selection to Current Board";
   const dividerClass = "selection-actions-popover-section selection-actions-popover-section-divider";
   const tagLabel = "Add tags";
-  const actionIndices = [...appSource.matchAll(new RegExp(actionLabel, "g"))].map((match) => match.index ?? -1);
+  const actionIndices = [...appSource.matchAll(new RegExp(createBoardLabel, "g"))].map((match) => match.index ?? -1);
+  const addToBoardIndices = [...appSource.matchAll(new RegExp(addToBoardLabel, "g"))].map((match) => match.index ?? -1);
 
   assert.equal(actionIndices.length, 2);
+  assert.equal(addToBoardIndices.length, 2);
 
   actionIndices.forEach((actionIndex) => {
-    const dividerIndex = appSource.indexOf(dividerClass, actionIndex);
+    const addToBoardIndex = appSource.indexOf(addToBoardLabel, actionIndex);
+    const dividerIndex = appSource.indexOf(dividerClass, addToBoardIndex);
     const addTagsIndex = appSource.indexOf(tagLabel, dividerIndex);
 
+    assert.ok(addToBoardIndex > actionIndex);
     assert.ok(dividerIndex > actionIndex);
     assert.ok(addTagsIndex > dividerIndex);
   });

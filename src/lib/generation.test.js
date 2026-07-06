@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   applyContextValidityRulesToPool,
+  appendBoardImagesFromReferenceIds,
   buildNextOutfit,
   buildNextOutfitWithDebug,
   generateBoard,
@@ -559,6 +560,96 @@ test("createBoardFromReferenceIds preserves the selected reference order while s
   assert.deepEqual(
     board.images.map((image) => image.referenceItemUuid),
     ["uuid-3", "uuid-1", "uuid-2"]
+  );
+});
+
+test("appendBoardImagesFromReferenceIds preserves existing board images and appends in selected order", () => {
+  const board = {
+    id: "board-existing",
+    boardUuid: "board-uuid",
+    width: 1600,
+    height: 1200,
+    images: [
+      {
+        id: "image-existing-1",
+        referenceId: "ref-1",
+        referenceItemUuid: "uuid-1",
+        generationSlot: "Headwear",
+        x: 40,
+        y: 80,
+        width: 220,
+        height: 300,
+        rotation: 0,
+        zIndex: 1
+      },
+      {
+        id: "image-existing-2",
+        referenceId: "ref-2",
+        referenceItemUuid: "uuid-2",
+        generationSlot: "TopInner",
+        x: 320,
+        y: 140,
+        width: 260,
+        height: 280,
+        rotation: 0,
+        zIndex: 2
+      }
+    ]
+  };
+
+  const result = appendBoardImagesFromReferenceIds(board, ["ref-4", "ref-3"], {
+    itemsByReferenceId: {
+      "ref-3": { id: "ref-3", itemUuid: "uuid-3" },
+      "ref-4": { id: "ref-4", itemUuid: "uuid-4" }
+    }
+  });
+
+  assert.deepEqual(result.addedReferenceIds, ["ref-4", "ref-3"]);
+  assert.deepEqual(result.board.images.slice(0, 2), board.images);
+  assert.deepEqual(
+    result.board.images.slice(2).map((image) => image.referenceId),
+    ["ref-4", "ref-3"]
+  );
+  assert.deepEqual(
+    result.board.images.slice(2).map((image) => image.referenceItemUuid),
+    ["uuid-4", "uuid-3"]
+  );
+  assert.ok(result.board.images[2].x >= board.images[1].x + board.images[1].width);
+  assert.ok(result.board.width >= board.width);
+  assert.ok(result.board.height >= board.height);
+});
+
+test("appendBoardImagesFromReferenceIds skips references already present on the board and dedupes repeated selection ids", () => {
+  const board = {
+    id: "board-existing",
+    width: 1200,
+    height: 900,
+    images: [
+      {
+        id: "image-existing-1",
+        referenceId: "ref-1",
+        referenceItemUuid: "uuid-1",
+        x: 40,
+        y: 60,
+        width: 220,
+        height: 300,
+        zIndex: 1
+      }
+    ]
+  };
+
+  const result = appendBoardImagesFromReferenceIds(board, ["ref-1", "ref-2", "ref-2", "ref-3"], {
+    itemsByReferenceId: {
+      "ref-2": { id: "ref-2", itemUuid: "uuid-2" },
+      "ref-3": { id: "ref-3", itemUuid: "uuid-3" }
+    }
+  });
+
+  assert.deepEqual(result.addedReferenceIds, ["ref-2", "ref-3"]);
+  assert.equal(result.board.images.length, 3);
+  assert.deepEqual(
+    result.board.images.map((image) => image.referenceId),
+    ["ref-1", "ref-2", "ref-3"]
   );
 });
 

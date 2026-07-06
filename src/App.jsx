@@ -71,6 +71,7 @@ import {
   normalizeOutfitFilters,
   normalizeRecentOutfits,
   outfitFilterOptions,
+  appendBoardImagesFromReferenceIds,
   pickNextItemForGeneration,
   pickRandom,
   relayoutBoardImages,
@@ -9757,6 +9758,38 @@ export default function App() {
     });
   }
 
+  function addSelectedReferencesToCurrentBoard() {
+    const validSelectedReferenceIds = selectedReferenceIdList.filter((itemId) => itemsById[itemId]);
+
+    if (!validSelectedReferenceIds.length) {
+      return;
+    }
+
+    const result = appendBoardImagesFromReferenceIds(boardRef.current, validSelectedReferenceIds, {
+      ...getCurrentBoardLayoutOptions(),
+      itemsByReferenceId: itemsById
+    });
+
+    if (!result.addedReferenceIds.length || !result.board) {
+      return;
+    }
+
+    commitBoardSnapshotChange(result.board, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setLibrarySelectionActionsOpen(false);
+        setLibraryTagActionMode(null);
+        setSelectionEditorActive(false);
+        setSelectedReferenceSelection({
+          ids: {},
+          anchorId: null
+        });
+        resetEditorState();
+      }
+    });
+  }
+
   function selectAllVisibleReferences() {
     if (!visibleWardrobeItemIds.length) {
       return;
@@ -14388,6 +14421,13 @@ export default function App() {
                                 >
                                   Create Board from Selection
                                 </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={addSelectedReferencesToCurrentBoard}
+                                >
+                                  Add Selection to Current Board
+                                </button>
                               </div>
                               <div className="selection-actions-popover-section selection-actions-popover-section-divider">
                                 <button
@@ -15336,6 +15376,13 @@ export default function App() {
                                         onClick={createBoardFromSelectedReferences}
                                       >
                                         Create Board from Selection
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="selection-actions-popover-item"
+                                        onClick={addSelectedReferencesToCurrentBoard}
+                                      >
+                                        Add Selection to Current Board
                                       </button>
                                     </div>
                                     <div className="selection-actions-popover-section selection-actions-popover-section-divider">

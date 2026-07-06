@@ -1856,6 +1856,96 @@ export function createBoardFromReferenceIds(referenceIds = [], layoutOptions = {
   };
 }
 
+export function appendBoardImagesFromReferenceIds(board, referenceIds = [], layoutOptions = {}) {
+  const normalizedBoard = board && typeof board === "object" && !Array.isArray(board)
+    ? board
+    : null;
+  const existingImages = Array.isArray(normalizedBoard?.images)
+    ? normalizedBoard.images.filter((image) => image?.referenceId)
+    : [];
+  const existingReferenceIds = new Set(existingImages.map((image) => image.referenceId));
+  const seenReferenceIds = new Set();
+  const appendReferenceIds = referenceIds.filter((referenceId) => {
+    if (!referenceId || seenReferenceIds.has(referenceId) || existingReferenceIds.has(referenceId)) {
+      return false;
+    }
+
+    seenReferenceIds.add(referenceId);
+    return true;
+  });
+
+  if (!appendReferenceIds.length) {
+    return {
+      board: normalizedBoard,
+      addedReferenceIds: []
+    };
+  }
+
+  if (!existingImages.length) {
+    return {
+      board: createBoardFromReferenceIds(appendReferenceIds, layoutOptions),
+      addedReferenceIds: appendReferenceIds
+    };
+  }
+
+  const appendedBoard = createBoardFromReferenceIds(appendReferenceIds, layoutOptions);
+  const existingBounds = existingImages.reduce((bounds, image) => ({
+    minX: Math.min(bounds.minX, Number(image.x) || 0),
+    minY: Math.min(bounds.minY, Number(image.y) || 0),
+    maxX: Math.max(bounds.maxX, (Number(image.x) || 0) + Math.max(1, Number(image.width) || 0)),
+    maxY: Math.max(bounds.maxY, (Number(image.y) || 0) + Math.max(1, Number(image.height) || 0))
+  }), {
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxX: 0,
+    maxY: 0
+  });
+  const appendedBounds = appendedBoard.images.reduce((bounds, image) => ({
+    minX: Math.min(bounds.minX, Number(image.x) || 0),
+    minY: Math.min(bounds.minY, Number(image.y) || 0),
+    maxX: Math.max(bounds.maxX, (Number(image.x) || 0) + Math.max(1, Number(image.width) || 0)),
+    maxY: Math.max(bounds.maxY, (Number(image.y) || 0) + Math.max(1, Number(image.height) || 0))
+  }), {
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxX: 0,
+    maxY: 0
+  });
+  const offsetX = existingBounds.maxX + BOARD_LAYOUT_GUTTER * 2 - appendedBounds.minX;
+  const offsetY = Math.max(BOARD_LAYOUT_GUTTER, existingBounds.minY) - appendedBounds.minY;
+  const zIndexStart = existingImages.reduce(
+    (maxZIndex, image) => Math.max(maxZIndex, Math.round(Number(image.zIndex) || 0)),
+    0
+  );
+  const nextImages = [
+    ...existingImages,
+    ...appendedBoard.images.map((image, index) => ({
+      ...image,
+      x: Math.round(((Number(image.x) || 0) + offsetX) * 1000) / 1000,
+      y: Math.round(((Number(image.y) || 0) + offsetY) * 1000) / 1000,
+      zIndex: zIndexStart + index + 1
+    }))
+  ];
+  const nextBounds = nextImages.reduce((bounds, image) => ({
+    maxX: Math.max(bounds.maxX, (Number(image.x) || 0) + Math.max(1, Number(image.width) || 0)),
+    maxY: Math.max(bounds.maxY, (Number(image.y) || 0) + Math.max(1, Number(image.height) || 0))
+  }), {
+    maxX: 0,
+    maxY: 0
+  });
+
+  return {
+    board: {
+      id: normalizedBoard.id ?? createBoardId("board"),
+      boardUuid: normalizedBoard.boardUuid ?? "",
+      width: Math.max(Math.round(Number(normalizedBoard.width) || 0), Math.ceil(nextBounds.maxX + BOARD_LAYOUT_GUTTER)),
+      height: Math.max(Math.round(Number(normalizedBoard.height) || 0), Math.ceil(nextBounds.maxY + BOARD_LAYOUT_GUTTER)),
+      images: nextImages
+    },
+    addedReferenceIds: appendReferenceIds
+  };
+}
+
 export function relayoutBoardImages(boardImages = [], layoutOptions = {}) {
   const normalizedImages = (Array.isArray(boardImages) ? boardImages : []).filter((image) => image?.referenceId);
   const aspectRatiosByReferenceId = layoutOptions.aspectRatiosByReferenceId ?? {};
