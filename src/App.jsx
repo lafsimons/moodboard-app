@@ -3879,6 +3879,12 @@ export default function App() {
   const boardGenerationInFlightRef = useRef(false);
   const boardRelayoutFrameRef = useRef(null);
   const wardrobePanelScrollRef = useRef(null);
+  const libraryScrollTopRef = useRef(0);
+  const pendingLibraryScrollRestoreRef = useRef(false);
+  const libraryScrollRestoreFrameRef = useRef(0);
+  const libraryScrollRestoreTimeoutRef = useRef(null);
+  const previousLibraryGridOpenRef = useRef(false);
+  const lastLibraryScrollContextKeyRef = useRef("");
   const wardrobeGridRef = useRef(null);
   const boardPickerListRef = useRef(null);
   const generationMetadataFiltersPanelRef = useRef(null);
@@ -6494,6 +6500,14 @@ export default function App() {
   }, [libraryStats.totalImages, libraryStats.visibleImages]);
   const mobileLibrarySelectionStatusLabel = selectedReferenceCount ? `${selectedReferenceCount} selected` : libraryImageCountLabel;
   const showMobileLibrarySelectionToolbar = isMobileViewport && mobileLibrarySelectMode;
+  const libraryScrollContextKey = useMemo(
+    () => JSON.stringify({
+      search: librarySearch,
+      filters: normalizeWardrobeFilterState(wardrobeFilters),
+      sort: normalizeWardrobeSort(wardrobeSort)
+    }),
+    [librarySearch, wardrobeFilters, wardrobeSort]
+  );
   const selectedReferenceIdSet = useMemo(
     () => new Set(selectedReferenceIdList),
     [selectedReferenceIdList]
@@ -6614,6 +6628,10 @@ export default function App() {
       frameId = 0;
       const nextViewport = readLibraryGridViewport(scrollElement, gridElement);
 
+       if (!(pendingLibraryScrollRestoreRef.current && nextViewport.scrollTop === 0 && libraryScrollTopRef.current > 0)) {
+        libraryScrollTopRef.current = nextViewport.scrollTop;
+      }
+
       setLibraryGridViewport((current) => {
         if (areLibraryGridViewportsEqual(current, nextViewport)) {
           return current;
@@ -6718,6 +6736,105 @@ export default function App() {
       });
     };
   }, [activePanel, loading, visibleWardrobeItems.length, wardrobeSavedOpen]);
+
+  useEffect(() => () => {
+    if (libraryScrollRestoreFrameRef.current) {
+      window.cancelAnimationFrame(libraryScrollRestoreFrameRef.current);
+    }
+    if (libraryScrollRestoreTimeoutRef.current) {
+      window.clearTimeout(libraryScrollRestoreTimeoutRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    const isLibraryGridOpen = activePanel === "wardrobe" && !wardrobeSavedOpen;
+
+    if (isLibraryGridOpen && !previousLibraryGridOpenRef.current) {
+      pendingLibraryScrollRestoreRef.current = libraryScrollTopRef.current > 0;
+    }
+
+    previousLibraryGridOpenRef.current = isLibraryGridOpen;
+  }, [activePanel, wardrobeSavedOpen]);
+
+  useEffect(() => {
+    if (!loading) {
+      if (!lastLibraryScrollContextKeyRef.current) {
+        lastLibraryScrollContextKeyRef.current = libraryScrollContextKey;
+        return;
+      }
+
+      if (lastLibraryScrollContextKeyRef.current !== libraryScrollContextKey) {
+        lastLibraryScrollContextKeyRef.current = libraryScrollContextKey;
+        libraryScrollTopRef.current = 0;
+        pendingLibraryScrollRestoreRef.current = false;
+
+        if (libraryScrollRestoreFrameRef.current) {
+          window.cancelAnimationFrame(libraryScrollRestoreFrameRef.current);
+          libraryScrollRestoreFrameRef.current = 0;
+        }
+
+        if (libraryScrollRestoreTimeoutRef.current) {
+          window.clearTimeout(libraryScrollRestoreTimeoutRef.current);
+          libraryScrollRestoreTimeoutRef.current = null;
+        }
+
+        if (activePanel === "wardrobe" && !wardrobeSavedOpen && wardrobePanelScrollRef.current) {
+          wardrobePanelScrollRef.current.scrollTop = 0;
+        }
+      }
+    }
+  }, [activePanel, libraryScrollContextKey, loading, wardrobeSavedOpen]);
+
+  useEffect(() => {
+    if (activePanel !== "wardrobe" || wardrobeSavedOpen || loading || !pendingLibraryScrollRestoreRef.current) {
+      return undefined;
+    }
+
+    const restoreLibraryScrollPosition = () => {
+      const scrollElement = wardrobePanelScrollRef.current;
+      const targetScrollTop = Math.max(0, Math.round(libraryScrollTopRef.current));
+
+      if (!scrollElement || !targetScrollTop) {
+        pendingLibraryScrollRestoreRef.current = false;
+        return;
+      }
+
+      if (Math.abs(scrollElement.scrollTop - targetScrollTop) > 1) {
+        scrollElement.scrollTop = targetScrollTop;
+      }
+
+      if (Math.abs(scrollElement.scrollTop - targetScrollTop) <= 1) {
+        pendingLibraryScrollRestoreRef.current = false;
+      }
+    };
+
+    const scheduleRestore = () => {
+      libraryScrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+        libraryScrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+          restoreLibraryScrollPosition();
+          libraryScrollRestoreFrameRef.current = 0;
+        });
+      });
+
+      libraryScrollRestoreTimeoutRef.current = window.setTimeout(() => {
+        restoreLibraryScrollPosition();
+        libraryScrollRestoreTimeoutRef.current = null;
+      }, 120);
+    };
+
+    scheduleRestore();
+
+    return () => {
+      if (libraryScrollRestoreFrameRef.current) {
+        window.cancelAnimationFrame(libraryScrollRestoreFrameRef.current);
+        libraryScrollRestoreFrameRef.current = 0;
+      }
+      if (libraryScrollRestoreTimeoutRef.current) {
+        window.clearTimeout(libraryScrollRestoreTimeoutRef.current);
+        libraryScrollRestoreTimeoutRef.current = null;
+      }
+    };
+  }, [activePanel, loading, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   useEffect(() => {
     if (!pickerBoardImageId) {

@@ -109,6 +109,18 @@ test("mobile library fullscreen shell reuses the existing wardrobe overlay struc
   assert.equal(appSource.includes('className={`wardrobe-panel-scroll ${isMobileViewport ? "is-mobile-fullscreen-shell" : ""}`}'), true);
 });
 
+test("library scroll position is captured on the shared wardrobe scroll container and restored on reopen", () => {
+  assert.equal(appSource.includes("const libraryScrollTopRef = useRef(0);"), true);
+  assert.equal(appSource.includes("const pendingLibraryScrollRestoreRef = useRef(false);"), true);
+  assert.equal(appSource.includes("const libraryScrollContextKey = useMemo("), true);
+  assert.equal(appSource.includes("libraryScrollTopRef.current = nextViewport.scrollTop;"), true);
+  assert.equal(appSource.includes("pendingLibraryScrollRestoreRef.current = libraryScrollTopRef.current > 0;"), true);
+  assert.equal(appSource.includes("wardrobePanelScrollRef.current.scrollTop = 0;"), true);
+  assert.equal(appSource.includes("scrollElement.scrollTop = targetScrollTop;"), true);
+  assert.equal(appSource.includes("window.requestAnimationFrame(() => {"), true);
+  assert.equal(appSource.includes("window.setTimeout(() => {"), true);
+});
+
 test("mobile library selection actions popover uses mobile-only anchor and clamp classes", () => {
   assert.equal(appSource.includes('className={`library-tag-action-anchor ${isMobileViewport ? "is-mobile-library-actions-anchor" : ""}`}'), true);
   assert.equal(appSource.includes('className={`selection-actions-popover ${isMobileViewport ? "is-mobile-library-actions-popover" : ""}`}'), true);
