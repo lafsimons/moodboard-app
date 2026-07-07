@@ -552,6 +552,51 @@ function createLibraryPerfSession(enabled) {
   };
 }
 
+function createLibraryInteractionPerfSession(enabled, label) {
+  if (!enabled || typeof performance === "undefined") {
+    return null;
+  }
+
+  const startedAt = performance.now();
+  const marks = [];
+
+  return {
+    renderMarked: false,
+    persistenceMarked: false,
+    flushed: false,
+    mark(entryLabel, extra = null) {
+      marks.push({
+        label: entryLabel,
+        extra,
+        time: performance.now()
+      });
+    },
+    flush() {
+      if (this.flushed || !marks.length) {
+        return;
+      }
+
+      this.flushed = true;
+      const totalDuration = Math.round((marks.at(-1).time - startedAt) * 100) / 100;
+      console.groupCollapsed(`[perf] ${label} ${totalDuration}ms`);
+
+      marks.forEach((entry, index) => {
+        const previousTime = index === 0 ? startedAt : marks[index - 1].time;
+        const delta = Math.round((entry.time - previousTime) * 100) / 100;
+        const total = Math.round((entry.time - startedAt) * 100) / 100;
+
+        if (entry.extra) {
+          console.log(`${entry.label} +${delta}ms (${total}ms total)`, entry.extra);
+        } else {
+          console.log(`${entry.label} +${delta}ms (${total}ms total)`);
+        }
+      });
+
+      console.groupEnd();
+    }
+  };
+}
+
 function getFilterDirectionSummary(filters) {
   return uniqueTags(filters?.tags).slice(0, 3);
 }
@@ -3901,6 +3946,7 @@ export default function App() {
   const boardPickerListRef = useRef(null);
   const generationMetadataFiltersPanelRef = useRef(null);
   const libraryPerfRef = useRef(null);
+  const libraryBulkMetadataPerfRef = useRef(null);
   const referencePreviewStageRef = useRef(null);
   const referencePreviewImageFrameRef = useRef(null);
   const mobileReferencePreviewTouchRef = useRef(null);
@@ -3910,6 +3956,7 @@ export default function App() {
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
   const currentPersistedAppStateRef = useRef(null);
+  const lastSavedAppStateRef = useRef(null);
   const previousSnapshotTrackedAppStateRef = useRef(null);
   const localSafetyRef = useRef(normalizeLocalSafetyState());
   const pendingAppStateSaveRef = useRef(null);
@@ -5248,6 +5295,36 @@ export default function App() {
   }, [activePanel, isLibraryPerfDebug, items.length, wardrobeSavedOpen]);
 
   useEffect(() => {
+    const perfSession = libraryBulkMetadataPerfRef.current;
+
+    if (!perfSession || perfSession.renderMarked) {
+      return undefined;
+    }
+
+    perfSession.mark("items state committed", {
+      itemCount: items.length
+    });
+
+    let frameId = window.requestAnimationFrame(() => {
+      perfSession.mark("post-edit frame rendered", {
+        itemCount: items.length
+      });
+      perfSession.renderMarked = true;
+
+      if (perfSession.persistenceMarked) {
+        perfSession.flush();
+        if (libraryBulkMetadataPerfRef.current === perfSession) {
+          libraryBulkMetadataPerfRef.current = null;
+        }
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [items]);
+
+  useEffect(() => {
     setIsReferencePreviewZoomed(false);
     setReferencePreviewZoomFocus(null);
     setMobileReferencePreviewScale(1);
@@ -6551,6 +6628,7 @@ export default function App() {
   }
   const visibleWardrobeItems = useMemo(() => {
     const startedAt = isLibraryPerfDebug ? performance.now() : 0;
+    const bulkPerfSession = libraryBulkMetadataPerfRef.current;
     const filtered = items.filter((item) =>
       matchesLibrarySearch(item, librarySearch) &&
       matchesWardrobeFilters(item, wardrobeFilters) &&
@@ -6571,6 +6649,12 @@ export default function App() {
       });
     }
 
+    bulkPerfSession?.mark("visibleWardrobeItems computed", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      visibleCount: sortedItems.length,
+      totalCount: items.length
+    });
+
     return sortedItems;
   }, [activePanel, excluded, isLibraryPerfDebug, items, librarySearch, wardrobeFilters, wardrobeSort, wardrobeSavedOpen]);
   const visibleWardrobeItemIds = useMemo(
@@ -6586,7 +6670,17 @@ export default function App() {
     () => getMetadataFilteredItems(items, generationMetadataFilters),
     [items, generationMetadataFilters]
   );
-  const visibleLibraryTagEntries = useMemo(() => getTagFrequencyEntries(visibleWardrobeItems), [visibleWardrobeItems]);
+  const visibleLibraryTagEntries = useMemo(() => {
+    const startedAt = isLibraryPerfDebug ? performance.now() : 0;
+    const nextEntries = getTagFrequencyEntries(visibleWardrobeItems);
+
+    libraryBulkMetadataPerfRef.current?.mark("visibleLibraryTagEntries computed", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      tagCount: nextEntries.length
+    });
+
+    return nextEntries;
+  }, [isLibraryPerfDebug, visibleWardrobeItems]);
   const libraryStats = useMemo(() => ({
     totalImages: items.length,
     visibleImages: visibleWardrobeItems.length,
@@ -6596,6 +6690,7 @@ export default function App() {
     topTags: visibleLibraryTagEntries.slice(0, 5)
   }), [items.length, selectedReferenceCount, visibleLibraryTagEntries, visibleWardrobeItems]);
   const libraryParentGroupEntries = useMemo(() => {
+    const startedAt = isLibraryPerfDebug ? performance.now() : 0;
     const counts = new Map();
 
     visibleWardrobeItems.forEach((item) => {
@@ -6607,10 +6702,16 @@ export default function App() {
       });
     });
 
-    return [...counts.entries()]
+    const nextEntries = [...counts.entries()]
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
       .slice(0, 5)
       .map(([group, count]) => ({ group, count }));
+    libraryBulkMetadataPerfRef.current?.mark("libraryParentGroupEntries computed", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      groupCount: nextEntries.length
+    });
+
+    return nextEntries;
   }, [visibleWardrobeItems]);
   const libraryImageCountLabel = useMemo(() => {
     if (libraryStats.visibleImages !== libraryStats.totalImages) {
@@ -7660,6 +7761,7 @@ export default function App() {
         setItems(effectiveItems);
 
         if (storedAppState) {
+          lastSavedAppStateRef.current = storedAppState;
           const resolvedImageCount = resolvePersistedImageCount(storedAppState.imageCount);
           const normalizedGenerationLists = normalizeGenerationLists(storedAppState.generationLists);
           const normalizedGenerationMode = normalizeGenerationMode(storedAppState.generationMode);
@@ -7749,6 +7851,7 @@ export default function App() {
             console.error("Failed to initialize local sync metadata.", syncMetadataError);
           }
         } else {
+          lastSavedAppStateRef.current = null;
           applyDefaultBootstrapState(effectiveItems);
 
           try {
@@ -7930,6 +8033,7 @@ export default function App() {
     }
 
     const saveStartedAt = isGeneratePerfDebug ? performance.now() : 0;
+    const libraryPerfSession = libraryBulkMetadataPerfRef.current;
     if (saveAppStateTimeoutRef.current) {
       clearTimeout(saveAppStateTimeoutRef.current);
       saveAppStateTimeoutRef.current = null;
@@ -7940,21 +8044,36 @@ export default function App() {
     }
 
     const runSave = () => {
+      libraryPerfSession?.mark("app-state save started");
       enqueueAppStateSave(currentPersistedAppState, "debounced").then(() => {
         if (isGeneratePerfDebug) {
           boardGenerationPerfRef.current?.mark("persistence done", {
             durationMs: Math.round((performance.now() - saveStartedAt) * 100) / 100
           });
         }
+
+        if (libraryPerfSession) {
+          libraryPerfSession.mark("app-state save completed");
+          libraryPerfSession.persistenceMarked = true;
+
+          if (libraryPerfSession.renderMarked) {
+            libraryPerfSession.flush();
+            if (libraryBulkMetadataPerfRef.current === libraryPerfSession) {
+              libraryBulkMetadataPerfRef.current = null;
+            }
+          }
+        }
       });
     };
 
     if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      libraryPerfSession?.mark("app-state save queued for idle callback");
       saveAppStateIdleCallbackRef.current = window.requestIdleCallback(() => {
         saveAppStateIdleCallbackRef.current = null;
         runSave();
       }, { timeout: 400 });
     } else {
+      libraryPerfSession?.mark("app-state save queued for timeout");
       saveAppStateTimeoutRef.current = setTimeout(() => {
         saveAppStateTimeoutRef.current = null;
         runSave();
@@ -8068,7 +8187,10 @@ export default function App() {
           const stateToSave = pendingAppStateSaveRef.current;
           pendingAppStateSaveRef.current = null;
           setStartupStorageDebugPhase(`app-state-save:${reason}`);
-          await saveAppState(stateToSave);
+          await saveAppState(stateToSave, {
+            previousAppState: lastSavedAppStateRef.current
+          });
+          lastSavedAppStateRef.current = stateToSave;
         }
       } finally {
         appStateSaveInFlightRef.current = false;
@@ -8130,7 +8252,7 @@ export default function App() {
     };
   }
 
-  function applyLocalSafetyUpdate(buildNextLocalSafety) {
+  function applyLocalSafetyUpdate(buildNextLocalSafety, options = {}) {
     const nextLocalSafety = normalizeLocalSafetyState(buildNextLocalSafety(localSafetyRef.current));
 
     if (areSemanticallyEqualJsonish(nextLocalSafety, localSafetyRef.current)) {
@@ -8140,7 +8262,12 @@ export default function App() {
     localSafetyRef.current = nextLocalSafety;
     setLocalSafety(nextLocalSafety);
 
-    if (!loading && persistenceReady && !importCommitInFlightRef.current) {
+    if (
+      options.persistMode !== "deferred" &&
+      !loading &&
+      persistenceReady &&
+      !importCommitInFlightRef.current
+    ) {
       const nextAppState = {
         ...(currentPersistedAppStateRef.current ?? currentPersistedAppState),
         localSafety: nextLocalSafety
@@ -8151,11 +8278,12 @@ export default function App() {
     return nextLocalSafety;
   }
 
-  function markMetadataDirty(changedItemIds = []) {
+  function markMetadataDirty(changedItemIds = [], options = {}) {
     applyLocalSafetyUpdate((currentLocalSafety) =>
       markMetadataChanged(currentLocalSafety, {
         changedItemIds
-      })
+      }),
+      options
     );
   }
 
@@ -10278,6 +10406,15 @@ export default function App() {
       return;
     }
 
+    const perfSession = createLibraryInteractionPerfSession(
+      isLibraryPerfDebug,
+      "library bulk metadata edit"
+    );
+    libraryBulkMetadataPerfRef.current = perfSession;
+    perfSession?.mark("bulk metadata edit started", {
+      selectedCount: validReferenceIds.length
+    });
+
     const selectedReferenceIdSet = new Set(validReferenceIds);
     const updatedItems = items
       .filter((item) => selectedReferenceIdSet.has(item.id))
@@ -10288,25 +10425,49 @@ export default function App() {
       .filter(Boolean);
 
     if (!updatedItems.length) {
+      perfSession?.mark("no item changes detected");
+      perfSession?.flush();
+      if (libraryBulkMetadataPerfRef.current === perfSession) {
+        libraryBulkMetadataPerfRef.current = null;
+      }
       return;
     }
 
-    await runMetadataSnapshot("before-bulk-edit", {
-      priority: "blocking",
+    perfSession?.mark("updated items prepared", {
+      updatedCount: updatedItems.length
+    });
+
+    void runMetadataSnapshot("before-bulk-edit", {
+      priority: "background",
       changedItemIds: updatedItems.map((item) => item.id)
     });
     await saveItems(updatedItems);
+    perfSession?.mark("items persisted", {
+      updatedCount: updatedItems.length
+    });
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
-    setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
-    markMetadataDirty(updatedItems.map((item) => item.id));
-    applyProvenanceUpdate(
-      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
-      { itemCountSnapshot: items.length }
-    );
+    startTransition(() => {
+      perfSession?.mark("transition scheduled");
+      setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+      markMetadataDirty(updatedItems.map((item) => item.id), { persistMode: "deferred" });
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+    });
   }
 
   async function applyGlobalTagUpdate(buildNextTags) {
+    const perfSession = createLibraryInteractionPerfSession(
+      isLibraryPerfDebug,
+      "library global tag edit"
+    );
+    libraryBulkMetadataPerfRef.current = perfSession;
+    perfSession?.mark("global tag edit started", {
+      totalItems: items.length
+    });
+
     const updatedItems = items
       .map((item) => {
         const currentTags = uniqueTags(item.tags);
@@ -10321,22 +10482,37 @@ export default function App() {
       .filter(Boolean);
 
     if (!updatedItems.length) {
+      perfSession?.mark("no item changes detected");
+      perfSession?.flush();
+      if (libraryBulkMetadataPerfRef.current === perfSession) {
+        libraryBulkMetadataPerfRef.current = null;
+      }
       return 0;
     }
 
-    await runMetadataSnapshot("before-bulk-edit", {
-      priority: "blocking",
+    perfSession?.mark("updated items prepared", {
+      updatedCount: updatedItems.length
+    });
+
+    void runMetadataSnapshot("before-bulk-edit", {
+      priority: "background",
       changedItemIds: updatedItems.map((item) => item.id)
     });
     await saveItems(updatedItems);
+    perfSession?.mark("items persisted", {
+      updatedCount: updatedItems.length
+    });
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
-    setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
-    markMetadataDirty(updatedItems.map((item) => item.id));
-    applyProvenanceUpdate(
-      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
-      { itemCountSnapshot: items.length }
-    );
+    startTransition(() => {
+      perfSession?.mark("transition scheduled");
+      setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+      markMetadataDirty(updatedItems.map((item) => item.id), { persistMode: "deferred" });
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+    });
     return updatedItems.length;
   }
 
