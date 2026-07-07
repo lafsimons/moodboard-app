@@ -215,6 +215,8 @@ function normalizeSearchFragment(value) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+const librarySearchTextCache = new WeakMap();
+
 function collectSearchValues(...values) {
   return values
     .flat()
@@ -223,7 +225,15 @@ function collectSearchValues(...values) {
 }
 
 export function buildLibrarySearchText(item) {
-  return collectSearchValues(
+  if (item && typeof item === "object") {
+    const cachedValue = librarySearchTextCache.get(item);
+
+    if (typeof cachedValue === "string") {
+      return cachedValue;
+    }
+  }
+
+  const searchText = collectSearchValues(
     item?.name,
     item?.description,
     item?.tags,
@@ -241,11 +251,29 @@ export function buildLibrarySearchText(item) {
     item?.colorProfile,
     item?.id
   ).join(" ");
+
+  if (item && typeof item === "object") {
+    librarySearchTextCache.set(item, searchText);
+  }
+
+  return searchText;
 }
 
 export function matchesLibrarySearch(item, query) {
   const normalizedQuery = normalizeSearchFragment(query);
 
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return buildLibrarySearchText(item).includes(normalizedQuery);
+}
+
+export function normalizeLibrarySearchQuery(query) {
+  return normalizeSearchFragment(query);
+}
+
+export function matchesNormalizedLibrarySearch(item, normalizedQuery) {
   if (!normalizedQuery) {
     return true;
   }

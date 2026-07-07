@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
+import { memo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   BACKUP_EXPORT_WARN_BYTES,
   BACKUP_IMPORT_HARD_MAX_BYTES,
@@ -119,10 +119,11 @@ import {
   uniqueTags
 } from "./lib/metadata";
 import {
+  buildLibrarySearchText,
   getCommonTagsForItems,
   getNextLibrarySelection,
   matchesTagFilter,
-  matchesLibrarySearch,
+  normalizeLibrarySearchQuery,
   getTotalUniqueTagCount
 } from "./lib/taggingUx";
 import {
@@ -2957,11 +2958,9 @@ function getMetadataFilteredItems(items, filters) {
   return items.filter((item) => matchesMoodboardMetadataFilters(item, normalizedFilters));
 }
 
-function matchesWardrobeFilters(item, filters, ignoredKeys = []) {
-  const ignored = new Set(ignoredKeys);
-  const normalizedFilters = normalizeWardrobeFilterState(filters);
-  const ignoreTagFilters =
-    ignored.has("tags") || ignored.has("excludedTags") || ignored.has("tagMatchMode");
+function matchesNormalizedWardrobeFilters(item, normalizedFilters, options = {}) {
+  const ignoreTagFilters = Boolean(options.ignoreTagFilters);
+  const ignoreFavorite = Boolean(options.ignoreFavorite);
 
   return (
     (ignoreTagFilters ||
@@ -2971,10 +2970,19 @@ function matchesWardrobeFilters(item, filters, ignoredKeys = []) {
         normalizedFilters.excludedTags,
         normalizedFilters.tagMatchMode
       )) &&
-    (ignored.has("favorite") ||
+    (ignoreFavorite ||
       !normalizedFilters.favorite ||
       (normalizedFilters.favorite === "yes" ? Boolean(item.favorite) : !item.favorite))
   );
+}
+
+function matchesWardrobeFilters(item, filters, ignoredKeys = []) {
+  const ignored = new Set(ignoredKeys);
+
+  return matchesNormalizedWardrobeFilters(item, normalizeWardrobeFilterState(filters), {
+    ignoreTagFilters: ignored.has("tags") || ignored.has("excludedTags") || ignored.has("tagMatchMode"),
+    ignoreFavorite: ignored.has("favorite")
+  });
 }
 
 function matchesMetadataFilter(value, filterValue) {
@@ -3955,6 +3963,8 @@ export default function App() {
   const mobileReferencePreviewScaleRef = useRef(1);
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
+  const deferAppStateSaveUntilRef = useRef(0);
+  const deferAppStateSaveReasonRef = useRef("");
   const currentPersistedAppStateRef = useRef(null);
   const lastSavedAppStateRef = useRef(null);
   const previousSnapshotTrackedAppStateRef = useRef(null);
@@ -4749,14 +4759,15 @@ export default function App() {
       return true;
     });
   }, [items]);
+  const deferredLibraryItems = useDeferredValue(items);
   const nestedTagDebugEnabled = isNestedTagDebugEnabled();
   const tagDebugItems = useMemo(
     () => (nestedTagDebugEnabled ? NESTED_TAG_DEBUG_ITEMS : []),
     [nestedTagDebugEnabled]
   );
   const tagDebugSourceItems = useMemo(
-    () => (tagDebugItems.length ? [...items, ...tagDebugItems] : items),
-    [items, tagDebugItems]
+    () => (tagDebugItems.length ? [...deferredLibraryItems, ...tagDebugItems] : deferredLibraryItems),
+    [deferredLibraryItems, tagDebugItems]
   );
   const allLibraryTags = useMemo(() => getAllTags(tagDebugSourceItems), [tagDebugSourceItems]);
   const draftResolvedPreviewMedia = useResolvedItemMediaSource(editingId ? draft : null, "preview");
@@ -4921,7 +4932,10 @@ export default function App() {
     true
   );
   const canRemoveDraftBackground = isLocalDataImage(draftBackgroundRemovalMedia.src || draftResolvedPreviewMedia.src || draft.imageUrl);
-  const normalizedWardrobeFilters = normalizeWardrobeFilterState(wardrobeFilters);
+  const normalizedWardrobeFilters = useMemo(
+    () => normalizeWardrobeFilterState(wardrobeFilters),
+    [wardrobeFilters]
+  );
   const currentSavedLibraryViewSnapshot = useMemo(
     () => createSavedLibraryViewSnapshot({
       librarySearch,
@@ -5032,16 +5046,25 @@ export default function App() {
     () => tagDebugSourceItems.filter((item) => uniqueTags(item.tags).length === 0).length,
     [tagDebugSourceItems]
   );
+  const normalizedLibrarySearchQuery = useMemo(
+    () => normalizeLibrarySearchQuery(librarySearch),
+    [librarySearch]
+  );
+  const librarySearchTextById = useMemo(
+    () => new Map(deferredLibraryItems.map((item) => [item.id, buildLibrarySearchText(item)])),
+    [deferredLibraryItems]
+  );
   const tagCountBaseItems = useMemo(
     () =>
-      items.filter(
+      deferredLibraryItems.filter(
         (item) =>
-          matchesLibrarySearch(item, librarySearch) &&
-          matchesWardrobeFilters(item, wardrobeFilters, ["tags", "excludedTags", "tagMatchMode"]) &&
+          (!normalizedLibrarySearchQuery ||
+            (librarySearchTextById.get(item.id) ?? "").includes(normalizedLibrarySearchQuery)) &&
+          matchesNormalizedWardrobeFilters(item, normalizedWardrobeFilters, { ignoreTagFilters: true }) &&
           (!normalizedWardrobeFilters.laundry ||
             (normalizedWardrobeFilters.laundry === "show" ? Boolean(excluded[item.id]) : !excluded[item.id]))
       ),
-    [items, librarySearch, wardrobeFilters, normalizedWardrobeFilters.laundry, excluded]
+    [deferredLibraryItems, excluded, librarySearchTextById, normalizedLibrarySearchQuery, normalizedWardrobeFilters]
   );
   const tagCountItemsWithDebug = useMemo(
     () => (tagDebugItems.length ? [...tagCountBaseItems, ...tagDebugItems] : tagCountBaseItems),
@@ -6629,11 +6652,12 @@ export default function App() {
   const visibleWardrobeItems = useMemo(() => {
     const startedAt = isLibraryPerfDebug ? performance.now() : 0;
     const bulkPerfSession = libraryBulkMetadataPerfRef.current;
-    const filtered = items.filter((item) =>
-      matchesLibrarySearch(item, librarySearch) &&
-      matchesWardrobeFilters(item, wardrobeFilters) &&
-      (!wardrobeFilters.laundry ||
-        (wardrobeFilters.laundry === "show" ? Boolean(excluded[item.id]) : !excluded[item.id]))
+    const filtered = deferredLibraryItems.filter((item) =>
+      (!normalizedLibrarySearchQuery ||
+        (librarySearchTextById.get(item.id) ?? "").includes(normalizedLibrarySearchQuery)) &&
+      matchesNormalizedWardrobeFilters(item, normalizedWardrobeFilters) &&
+      (!normalizedWardrobeFilters.laundry ||
+        (normalizedWardrobeFilters.laundry === "show" ? Boolean(excluded[item.id]) : !excluded[item.id]))
     );
 
     const sortedItems = sortLibraryItems(filtered, wardrobeSort, {
@@ -6652,27 +6676,28 @@ export default function App() {
     bulkPerfSession?.mark("visibleWardrobeItems computed", {
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
       visibleCount: sortedItems.length,
-      totalCount: items.length
+      totalCount: deferredLibraryItems.length
     });
 
     return sortedItems;
-  }, [activePanel, excluded, isLibraryPerfDebug, items, librarySearch, wardrobeFilters, wardrobeSort, wardrobeSavedOpen]);
+  }, [activePanel, deferredLibraryItems, excluded, isLibraryPerfDebug, librarySearchTextById, normalizedLibrarySearchQuery, normalizedWardrobeFilters, wardrobeSort, wardrobeSavedOpen]);
   const visibleWardrobeItemIds = useMemo(
     () => visibleWardrobeItems.map((item) => item.id),
     [visibleWardrobeItems]
   );
+  const deferredVisibleWardrobeItems = useDeferredValue(visibleWardrobeItems);
   const referencePreviewNavigation = useMemo(
     () => getReferencePreviewNavigation(visibleWardrobeItems, referencePreview?.id ?? ""),
     [referencePreview?.id, visibleWardrobeItems]
   );
   const isMobileReferencePreview = isMobileViewport && Boolean(referencePreview);
   const visibleBoardPickerItems = useMemo(
-    () => getMetadataFilteredItems(items, generationMetadataFilters),
-    [items, generationMetadataFilters]
+    () => getMetadataFilteredItems(deferredLibraryItems, generationMetadataFilters),
+    [deferredLibraryItems, generationMetadataFilters]
   );
   const visibleLibraryTagEntries = useMemo(() => {
     const startedAt = isLibraryPerfDebug ? performance.now() : 0;
-    const nextEntries = getTagFrequencyEntries(visibleWardrobeItems);
+    const nextEntries = getTagFrequencyEntries(deferredVisibleWardrobeItems);
 
     libraryBulkMetadataPerfRef.current?.mark("visibleLibraryTagEntries computed", {
       durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
@@ -6680,20 +6705,20 @@ export default function App() {
     });
 
     return nextEntries;
-  }, [isLibraryPerfDebug, visibleWardrobeItems]);
+  }, [deferredVisibleWardrobeItems, isLibraryPerfDebug]);
   const libraryStats = useMemo(() => ({
     totalImages: items.length,
     visibleImages: visibleWardrobeItems.length,
     selectedImages: selectedReferenceCount,
-    favoriteImages: visibleWardrobeItems.filter((item) => item.favorite).length,
+    favoriteImages: deferredVisibleWardrobeItems.filter((item) => item.favorite).length,
     totalTags: visibleLibraryTagEntries.length,
     topTags: visibleLibraryTagEntries.slice(0, 5)
-  }), [items.length, selectedReferenceCount, visibleLibraryTagEntries, visibleWardrobeItems]);
+  }), [deferredVisibleWardrobeItems, items.length, selectedReferenceCount, visibleLibraryTagEntries, visibleWardrobeItems.length]);
   const libraryParentGroupEntries = useMemo(() => {
     const startedAt = isLibraryPerfDebug ? performance.now() : 0;
     const counts = new Map();
 
-    visibleWardrobeItems.forEach((item) => {
+    deferredVisibleWardrobeItems.forEach((item) => {
       uniqueTags(item?.tags).forEach((tag) => {
         const group = getBoardTagParentGroup(tag);
         if (group) {
@@ -6712,7 +6737,7 @@ export default function App() {
     });
 
     return nextEntries;
-  }, [visibleWardrobeItems]);
+  }, [deferredVisibleWardrobeItems]);
   const libraryImageCountLabel = useMemo(() => {
     if (libraryStats.visibleImages !== libraryStats.totalImages) {
       return `${libraryStats.visibleImages} of ${libraryStats.totalImages} images`;
@@ -8034,6 +8059,9 @@ export default function App() {
 
     const saveStartedAt = isGeneratePerfDebug ? performance.now() : 0;
     const libraryPerfSession = libraryBulkMetadataPerfRef.current;
+    const now = Date.now();
+    const deferredUntil = deferAppStateSaveUntilRef.current;
+    const remainingDeferredMs = Math.max(0, deferredUntil - now);
     if (saveAppStateTimeoutRef.current) {
       clearTimeout(saveAppStateTimeoutRef.current);
       saveAppStateTimeoutRef.current = null;
@@ -8065,6 +8093,18 @@ export default function App() {
         }
       });
     };
+
+    if (remainingDeferredMs > 0) {
+      libraryPerfSession?.mark("app-state save deferred", {
+        remainingDeferredMs,
+        reason: deferAppStateSaveReasonRef.current || "deferred"
+      });
+      saveAppStateTimeoutRef.current = setTimeout(() => {
+        saveAppStateTimeoutRef.current = null;
+        runSave();
+      }, remainingDeferredMs);
+      return;
+    }
 
     if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
       libraryPerfSession?.mark("app-state save queued for idle callback");
@@ -8213,6 +8253,19 @@ export default function App() {
 
   function dropPendingAppStatePersistence() {
     pendingAppStateSaveRef.current = null;
+  }
+
+  function deferAppStatePersistence(durationMs, reason = "deferred") {
+    const nextDurationMs = Math.max(0, Math.round(Number(durationMs) || 0));
+
+    if (!nextDurationMs) {
+      deferAppStateSaveUntilRef.current = 0;
+      deferAppStateSaveReasonRef.current = "";
+      return;
+    }
+
+    deferAppStateSaveUntilRef.current = Date.now() + nextDurationMs;
+    deferAppStateSaveReasonRef.current = reason;
   }
 
   function applyProvenanceUpdate(buildNextProvenance, options = {}) {
@@ -10411,6 +10464,7 @@ export default function App() {
       "library bulk metadata edit"
     );
     libraryBulkMetadataPerfRef.current = perfSession;
+    deferAppStatePersistence(15000, "bulk metadata edit");
     perfSession?.mark("bulk metadata edit started", {
       selectedCount: validReferenceIds.length
     });
@@ -10464,6 +10518,7 @@ export default function App() {
       "library global tag edit"
     );
     libraryBulkMetadataPerfRef.current = perfSession;
+    deferAppStatePersistence(15000, "global tag edit");
     perfSession?.mark("global tag edit started", {
       totalItems: items.length
     });
