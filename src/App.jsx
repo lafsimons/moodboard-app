@@ -4065,6 +4065,7 @@ export default function App() {
   const [provenance, setProvenance] = useState(() => normalizeLibraryProvenance());
   const [localSafety, setLocalSafety] = useState(() => normalizeLocalSafetyState());
   const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
+  const [controlsReferenceFilterSearch, setControlsReferenceFilterSearch] = useState("");
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
   const [mediaIntegrityReport, setMediaIntegrityReport] = useState(null);
@@ -5041,6 +5042,7 @@ export default function App() {
     [generationMetadataFilters, savedLibraryViews]
   );
   const wardrobeFilterSearchQuery = normalizeTag(wardrobeFilterSearch);
+  const controlsReferenceFilterSearchQuery = normalizeTag(controlsReferenceFilterSearch);
   const allLibraryTagEntries = useMemo(() => getTagFrequencyEntries(tagDebugSourceItems), [tagDebugSourceItems]);
   const allLibraryNoTagsCount = useMemo(
     () => tagDebugSourceItems.filter((item) => uniqueTags(item.tags).length === 0).length,
@@ -5091,6 +5093,22 @@ export default function App() {
       ? libraryNoTagsCount
       : 0;
   }, [libraryNoTagsCount, wardrobeFilterSearchQuery]);
+  const filteredControlsReferenceTagEntries = useMemo(() => {
+    if (!controlsReferenceFilterSearchQuery) {
+      return allLibraryTagEntries;
+    }
+
+    return allLibraryTagEntries.filter(({ tag }) => tag.includes(controlsReferenceFilterSearchQuery));
+  }, [allLibraryTagEntries, controlsReferenceFilterSearchQuery]);
+  const filteredControlsReferenceNoTagsCount = useMemo(() => {
+    if (!controlsReferenceFilterSearchQuery) {
+      return allLibraryNoTagsCount;
+    }
+
+    return "untagged".includes(controlsReferenceFilterSearchQuery) || "no tags".includes(controlsReferenceFilterSearchQuery)
+      ? allLibraryNoTagsCount
+      : 0;
+  }, [allLibraryNoTagsCount, controlsReferenceFilterSearchQuery]);
   const hasVisibleWardrobeFilterOptions = filteredLibraryTagEntries.length > 0 || filteredLibraryNoTagsCount > 0;
   const excludedReferenceCount = useMemo(
     () => Object.values(excluded).filter(Boolean).length,
@@ -15108,15 +15126,26 @@ export default function App() {
                 <div className="outfit-filters-panel">
                   <div className="outfit-filter-groups">
                     <section className="outfit-filter-group controls-reference-filter-module">
+                      <label className="wardrobe-filter-search">
+                        <span className="sr-only">Search reference filter tags</span>
+                        <input
+                          type="search"
+                          value={controlsReferenceFilterSearch}
+                          onChange={(event) => setControlsReferenceFilterSearch(event.target.value)}
+                          placeholder="Search filter options"
+                          aria-label="Search reference filter tags"
+                        />
+                      </label>
                       <TagTree
-                        entries={allLibraryTagEntries}
+                        entries={filteredControlsReferenceTagEntries}
                         selectedTags={generationMetadataFilters.tags}
                         excludedTags={generationMetadataFilters.excludedTags}
                         onToggleTag={toggleGenerationMetadataTagFilter}
                         onToggleGroup={toggleGenerationMetadataTagGroup}
                         storageKey="controls-reference-filters"
-                        noTagsCount={allLibraryNoTagsCount}
+                        noTagsCount={filteredControlsReferenceNoTagsCount}
                         variant="compact"
+                        searchQuery={controlsReferenceFilterSearchQuery}
                         headerActions={(
                           <div className="wardrobe-tag-match-toggle controls-reference-match-toggle" role="group" aria-label="Tag matching">
                             <button
