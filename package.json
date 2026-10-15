@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "library:check": "node scripts/check-folder-library.mjs",
     "dev": "vite",
     "test": "node --test src/lib/*.test.js src/repositories/*.test.js",
     "build": "vite build",

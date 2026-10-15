@@ -15565,6 +15565,7 @@ export default function App() {
                     </div>
 
                     <div className="library-command-bar-main-actions">
+                      <a className="secondary-button" href="?library=folder">Open folder library</a>
                       <button
                         ref={wardrobeFiltersTriggerRef}
                         type="button"
