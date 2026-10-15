@@ -1,0 +1,12 @@
+{
+  "name": "hub-core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./backup": "./src/backup/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
