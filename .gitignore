@@ -136,3 +136,7 @@ dist
 .pnp.*
 .DS_Store
 docs/.DS_Store
+
+# Local migration exports contain private media and metadata.
+library-exports/
+scripts/__pycache__/

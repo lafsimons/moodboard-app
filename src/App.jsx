@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
+import { memo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   BACKUP_EXPORT_WARN_BYTES,
   BACKUP_IMPORT_HARD_MAX_BYTES,
@@ -71,6 +71,7 @@ import {
   normalizeOutfitFilters,
   normalizeRecentOutfits,
   outfitFilterOptions,
+  appendBoardImagesFromReferenceIds,
   pickNextItemForGeneration,
   pickRandom,
   relayoutBoardImages,
@@ -118,10 +119,11 @@ import {
   uniqueTags
 } from "./lib/metadata";
 import {
+  buildLibrarySearchText,
   getCommonTagsForItems,
   getNextLibrarySelection,
   matchesTagFilter,
-  matchesLibrarySearch,
+  normalizeLibrarySearchQuery,
   getTotalUniqueTagCount
 } from "./lib/taggingUx";
 import {
@@ -129,6 +131,14 @@ import {
   getBoardItemRenderedBounds
 } from "./lib/boardBounds.js";
 import { getFittedBoardViewForViewport } from "./lib/boardView.js";
+import {
+  areBoardHistorySnapshotsEqual,
+  BOARD_HISTORY_LIMIT,
+  createBoardHistorySnapshot,
+  pushBoardHistorySnapshot as appendBoardHistorySnapshot,
+  restoreBoardRedoState,
+  restoreBoardUndoState
+} from "./lib/boardHistory.js";
 import {
   exportBackupPackageToDirectory,
   isFileSystemAccessSupported
@@ -538,6 +548,51 @@ function createLibraryPerfSession(enabled) {
           console.log(`${entry.label} +${delta}ms (${total}ms total)`);
         }
       });
+      console.groupEnd();
+    }
+  };
+}
+
+function createLibraryInteractionPerfSession(enabled, label) {
+  if (!enabled || typeof performance === "undefined") {
+    return null;
+  }
+
+  const startedAt = performance.now();
+  const marks = [];
+
+  return {
+    renderMarked: false,
+    persistenceMarked: false,
+    flushed: false,
+    mark(entryLabel, extra = null) {
+      marks.push({
+        label: entryLabel,
+        extra,
+        time: performance.now()
+      });
+    },
+    flush() {
+      if (this.flushed || !marks.length) {
+        return;
+      }
+
+      this.flushed = true;
+      const totalDuration = Math.round((marks.at(-1).time - startedAt) * 100) / 100;
+      console.groupCollapsed(`[perf] ${label} ${totalDuration}ms`);
+
+      marks.forEach((entry, index) => {
+        const previousTime = index === 0 ? startedAt : marks[index - 1].time;
+        const delta = Math.round((entry.time - previousTime) * 100) / 100;
+        const total = Math.round((entry.time - startedAt) * 100) / 100;
+
+        if (entry.extra) {
+          console.log(`${entry.label} +${delta}ms (${total}ms total)`, entry.extra);
+        } else {
+          console.log(`${entry.label} +${delta}ms (${total}ms total)`);
+        }
+      });
+
       console.groupEnd();
     }
   };
@@ -1060,6 +1115,14 @@ function getBoardImageCount(board) {
   }
 
   return normalizeImageCount(board.images.length);
+}
+
+function isEditableKeyboardTarget(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']")) || target.isContentEditable;
 }
 
 
@@ -1765,6 +1828,8 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   image,
   item,
   isActive,
+  isSelected,
+  isSelectMode,
   isEditing,
   isPickerOpen,
   onImagePointerDown,
@@ -1832,19 +1897,20 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
 
   return (
     <div
-      className={`board-image ${isActive ? "is-active" : ""}`}
+      className={`board-image ${isActive ? "is-active" : ""} ${isSelected ? "is-selected" : ""} ${isSelectMode ? "is-select-mode" : ""}`.trim()}
       style={imageStyle}
     >
       <button
         type="button"
-        className="board-image-hit-area"
+        className={`board-image-hit-area ${isSelectMode ? "is-select-mode" : ""}`.trim()}
         onMouseDown={preventMouseButtonFocus}
         onPointerDown={(event) => onImagePointerDown(event, image)}
         onDoubleClick={() => onImageDoubleClick(image, item)}
+        aria-pressed={isSelectMode ? isSelected : undefined}
         aria-label={`${buildDisplayName(item)} preview`}
       >
         <span
-          className={`board-image-visual ${isActive ? "is-active" : ""}`}
+          className={`board-image-visual ${isActive ? "is-active" : ""} ${isSelected ? "is-selected" : ""}`.trim()}
           style={imageVisualStyle}
         >
           <ManagedItemImage
@@ -1907,6 +1973,8 @@ const BoardCanvasImage = memo(function BoardCanvasImage({
   prevProps.image === nextProps.image &&
   prevProps.item === nextProps.item &&
   prevProps.isActive === nextProps.isActive &&
+  prevProps.isSelected === nextProps.isSelected &&
+  prevProps.isSelectMode === nextProps.isSelectMode &&
   prevProps.isEditing === nextProps.isEditing &&
   prevProps.isPickerOpen === nextProps.isPickerOpen
 );
@@ -1982,6 +2050,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
   item,
   isSelected,
   isExcluded,
+  isOnCurrentBoard,
   isMobileViewport,
   isMobileSelectMode,
   cardStyle = null,
@@ -2015,7 +2084,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
 
   return (
     <article
-      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""} ${isMobileViewport ? "is-mobile-card" : ""} ${isMobileViewport && isMobileSelectMode ? "is-mobile-select-mode" : ""}`}
+      className={`wardrobe-card ${presentation.orientationClass} ${isExcluded ? "is-excluded" : ""} ${isSelected ? "is-selected" : ""} ${isOnCurrentBoard ? "is-on-current-board" : ""} ${isMobileViewport ? "is-mobile-card" : ""} ${isMobileViewport && isMobileSelectMode ? "is-mobile-select-mode" : ""}`}
       style={mergedCardStyle}
     >
       {isExcluded || (isMobileViewport && isSelected) ? (
@@ -2073,11 +2142,16 @@ const LibraryGridCard = memo(function LibraryGridCard({
         />
       </button>
 
+      {item.favorite ? (
+        <div className="wardrobe-card-corner-badge" aria-label="Favorite">
+          <span className="wardrobe-card-corner-heart" aria-hidden="true">♥</span>
+        </div>
+      ) : null}
+
       <div className={`wardrobe-meta ${isMobileViewport ? "is-mobile-hidden" : ""}`}>
         {showTitle ? (
           <strong title={itemName}>
             <span>{itemName}</span>
-            {item.favorite ? <span className="wardrobe-meta-favorite" aria-label="Favorite">♥</span> : null}
           </strong>
         ) : null}
         <span title={itemTagsLabel}>{itemTagsLabel}</span>
@@ -2088,6 +2162,7 @@ const LibraryGridCard = memo(function LibraryGridCard({
   prevProps.item === nextProps.item &&
   prevProps.isSelected === nextProps.isSelected &&
   prevProps.isExcluded === nextProps.isExcluded &&
+  prevProps.isOnCurrentBoard === nextProps.isOnCurrentBoard &&
   prevProps.isMobileViewport === nextProps.isMobileViewport &&
   prevProps.isMobileSelectMode === nextProps.isMobileSelectMode &&
   prevProps.cardStyle?.top === nextProps.cardStyle?.top &&
@@ -2883,11 +2958,9 @@ function getMetadataFilteredItems(items, filters) {
   return items.filter((item) => matchesMoodboardMetadataFilters(item, normalizedFilters));
 }
 
-function matchesWardrobeFilters(item, filters, ignoredKeys = []) {
-  const ignored = new Set(ignoredKeys);
-  const normalizedFilters = normalizeWardrobeFilterState(filters);
-  const ignoreTagFilters =
-    ignored.has("tags") || ignored.has("excludedTags") || ignored.has("tagMatchMode");
+function matchesNormalizedWardrobeFilters(item, normalizedFilters, options = {}) {
+  const ignoreTagFilters = Boolean(options.ignoreTagFilters);
+  const ignoreFavorite = Boolean(options.ignoreFavorite);
 
   return (
     (ignoreTagFilters ||
@@ -2897,10 +2970,19 @@ function matchesWardrobeFilters(item, filters, ignoredKeys = []) {
         normalizedFilters.excludedTags,
         normalizedFilters.tagMatchMode
       )) &&
-    (ignored.has("favorite") ||
+    (ignoreFavorite ||
       !normalizedFilters.favorite ||
       (normalizedFilters.favorite === "yes" ? Boolean(item.favorite) : !item.favorite))
   );
+}
+
+function matchesWardrobeFilters(item, filters, ignoredKeys = []) {
+  const ignored = new Set(ignoredKeys);
+
+  return matchesNormalizedWardrobeFilters(item, normalizeWardrobeFilterState(filters), {
+    ignoreTagFilters: ignored.has("tags") || ignored.has("excludedTags") || ignored.has("tagMatchMode"),
+    ignoreFavorite: ignored.has("favorite")
+  });
 }
 
 function matchesMetadataFilter(value, filterValue) {
@@ -3862,10 +3944,17 @@ export default function App() {
   const boardGenerationInFlightRef = useRef(false);
   const boardRelayoutFrameRef = useRef(null);
   const wardrobePanelScrollRef = useRef(null);
+  const libraryScrollTopRef = useRef(0);
+  const pendingLibraryScrollRestoreRef = useRef(false);
+  const libraryScrollRestoreFrameRef = useRef(0);
+  const libraryScrollRestoreTimeoutRef = useRef(null);
+  const previousLibraryGridOpenRef = useRef(false);
+  const lastLibraryScrollContextKeyRef = useRef("");
   const wardrobeGridRef = useRef(null);
   const boardPickerListRef = useRef(null);
   const generationMetadataFiltersPanelRef = useRef(null);
   const libraryPerfRef = useRef(null);
+  const libraryBulkMetadataPerfRef = useRef(null);
   const referencePreviewStageRef = useRef(null);
   const referencePreviewImageFrameRef = useRef(null);
   const mobileReferencePreviewTouchRef = useRef(null);
@@ -3874,7 +3963,10 @@ export default function App() {
   const mobileReferencePreviewScaleRef = useRef(1);
   const saveAppStateTimeoutRef = useRef(null);
   const saveAppStateIdleCallbackRef = useRef(null);
+  const deferAppStateSaveUntilRef = useRef(0);
+  const deferAppStateSaveReasonRef = useRef("");
   const currentPersistedAppStateRef = useRef(null);
+  const lastSavedAppStateRef = useRef(null);
   const previousSnapshotTrackedAppStateRef = useRef(null);
   const localSafetyRef = useRef(normalizeLocalSafetyState());
   const pendingAppStateSaveRef = useRef(null);
@@ -3884,6 +3976,7 @@ export default function App() {
   const pendingPersistenceReadyRef = useRef(false);
   const cropInteractionRef = useRef(null);
   const librarySelectionActionsRef = useRef(null);
+  const boardSelectionActionsRef = useRef(null);
   const wardrobeFiltersPanelRef = useRef(null);
   const wardrobeFiltersTriggerRef = useRef(null);
   const mobileFilterDismissClickSuppressionRef = useRef(false);
@@ -3902,7 +3995,13 @@ export default function App() {
   const paletteCacheRef = useRef(new Map());
   const boardRenderLayoutSignatureRef = useRef("");
   const suppressNextBoardRelayoutRef = useRef(false);
+  const boardRef = useRef(null);
+  const boardViewRef = useRef({ x: 0, y: 0, zoom: 1 });
+  const imageCountRef = useRef(DEFAULT_BOARD_IMAGE_COUNT);
+  const boardUndoStackRef = useRef([]);
+  const boardRedoStackRef = useRef([]);
   const pendingRestoredBoardFitRef = useRef(false);
+  const boardSelectModeBoardIdRef = useRef(null);
   const lastInteractionWasPointerRef = useRef(false);
   const pointerActivatedControlRef = useRef(null);
   const excludedOutfitReconcileFrameRef = useRef(0);
@@ -3935,6 +4034,13 @@ export default function App() {
   const [savedOutfitDraft, setSavedOutfitDraft] = useState({ name: "", description: "" });
   const [activeBoardImageId, setActiveBoardImageId] = useState(null);
   const [pickerBoardImageId, setPickerBoardImageId] = useState(null);
+  const [boardSelectMode, setBoardSelectMode] = useState(false);
+  const [selectedBoardImageSelection, setSelectedBoardImageSelection] = useState({
+    ids: {},
+    anchorId: null
+  });
+  const [boardSelectionActionsOpen, setBoardSelectionActionsOpen] = useState(false);
+  const [boardTagActionMode, setBoardTagActionMode] = useState(null);
   const [activeAccessorySlot, setActiveAccessorySlot] = useState(null);
   const [activeOutfitSlot, setActiveOutfitSlot] = useState(null);
   const [pickerAnchorSlot, setPickerAnchorSlot] = useState(null);
@@ -3959,6 +4065,7 @@ export default function App() {
   const [provenance, setProvenance] = useState(() => normalizeLibraryProvenance());
   const [localSafety, setLocalSafety] = useState(() => normalizeLocalSafetyState());
   const [wardrobeFilterSearch, setWardrobeFilterSearch] = useState("");
+  const [controlsReferenceFilterSearch, setControlsReferenceFilterSearch] = useState("");
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [backupExportFeedback, setBackupExportFeedback] = useState("");
   const [mediaIntegrityReport, setMediaIntegrityReport] = useState(null);
@@ -4028,13 +4135,39 @@ export default function App() {
   const [sideEditorWidth, setSideEditorWidth] = useState(DEFAULT_SIDE_EDITOR_WIDTH);
   const [libraryAddWidth, setLibraryAddWidth] = useState(DEFAULT_LIBRARY_ADD_WIDTH);
   const [libraryTagActionMode, setLibraryTagActionMode] = useState(null);
+  const [boardBulkMetadataDraft, setBoardBulkMetadataDraft] = useState({
+    addTags: [],
+    removeTags: []
+  });
   const [outfitPalette, setOutfitPalette] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [boardView, setBoardView] = useState({ x: 0, y: 0, zoom: 1 });
+  const [boardUndoStack, setBoardUndoStack] = useState([]);
+  const [boardRedoStack, setBoardRedoStack] = useState([]);
 
   useEffect(() => {
     latestExcludedStateRef.current = excluded;
   }, [excluded]);
+
+  useEffect(() => {
+    boardRef.current = board;
+  }, [board]);
+
+  useEffect(() => {
+    boardViewRef.current = boardView;
+  }, [boardView]);
+
+  useEffect(() => {
+    imageCountRef.current = imageCount;
+  }, [imageCount]);
+
+  useEffect(() => {
+    boardUndoStackRef.current = boardUndoStack;
+  }, [boardUndoStack]);
+
+  useEffect(() => {
+    boardRedoStackRef.current = boardRedoStack;
+  }, [boardRedoStack]);
 
   useEffect(() => {
     mobileReferencePreviewScaleRef.current = mobileReferencePreviewScale;
@@ -4136,6 +4269,7 @@ export default function App() {
     return () => window.removeEventListener("resize", handleWindowResize);
   }, [libraryAddWidth, sideEditorWidth]);
   const selectedReferenceIds = selectedReferenceSelection.ids;
+  const selectedBoardImageIds = selectedBoardImageSelection.ids;
   const [isBoardGenerating, setIsBoardGenerating] = useState(false);
   const [showBoardGenerationBusy, setShowBoardGenerationBusy] = useState(false);
   const [boardGenerationError, setBoardGenerationError] = useState("");
@@ -4289,6 +4423,10 @@ export default function App() {
         return true;
       });
   }, [board, itemsById]);
+  const currentBoardReferenceIdSet = useMemo(
+    () => new Set((board?.images ?? []).map((image) => image.referenceId).filter(Boolean)),
+    [board?.images]
+  );
   const boardCanvasImages = useMemo(
     () =>
       (board?.images ?? [])
@@ -4300,6 +4438,43 @@ export default function App() {
         }))
         .filter(({ item }) => Boolean(item)),
     [board?.images, itemsById]
+  );
+  const selectedBoardImageIdList = useMemo(
+    () => Object.entries(selectedBoardImageIds).filter(([, isSelected]) => isSelected).map(([imageId]) => imageId),
+    [selectedBoardImageIds]
+  );
+  const selectedBoardImages = useMemo(
+    () =>
+      selectedBoardImageIdList
+        .map((imageId) => (board?.images ?? []).find((image) => image.id === imageId) ?? null)
+        .filter(Boolean),
+    [board?.images, selectedBoardImageIdList]
+  );
+  const selectedBoardReferenceIdList = useMemo(
+    () => [...new Set(selectedBoardImages.map((image) => image.referenceId).filter(Boolean))],
+    [selectedBoardImages]
+  );
+  const selectedBoardItems = useMemo(
+    () => selectedBoardReferenceIdList.map((referenceId) => itemsById[referenceId]).filter(Boolean),
+    [itemsById, selectedBoardReferenceIdList]
+  );
+  const selectedBoardImageCount = selectedBoardImageIdList.length;
+  const hasSelectedBoardImages = selectedBoardImageCount > 0;
+  const selectedBoardImageIdSet = useMemo(
+    () => new Set(selectedBoardImageIdList),
+    [selectedBoardImageIdList]
+  );
+  const selectedBoardTags = useMemo(
+    () => uniqueTags(selectedBoardItems.flatMap((item) => item.tags ?? [])),
+    [selectedBoardItems]
+  );
+  const selectedBoardFavoriteValues = useMemo(
+    () => [...new Set(selectedBoardItems.map((item) => Boolean(item.favorite)))],
+    [selectedBoardItems]
+  );
+  const selectedBoardExcludedValues = useMemo(
+    () => [...new Set(selectedBoardItems.map((item) => Boolean(excluded[item.id])))],
+    [excluded, selectedBoardItems]
   );
   const boardSurfaceStyle = useMemo(
     () =>
@@ -4585,14 +4760,15 @@ export default function App() {
       return true;
     });
   }, [items]);
+  const deferredLibraryItems = useDeferredValue(items);
   const nestedTagDebugEnabled = isNestedTagDebugEnabled();
   const tagDebugItems = useMemo(
     () => (nestedTagDebugEnabled ? NESTED_TAG_DEBUG_ITEMS : []),
     [nestedTagDebugEnabled]
   );
   const tagDebugSourceItems = useMemo(
-    () => (tagDebugItems.length ? [...items, ...tagDebugItems] : items),
-    [items, tagDebugItems]
+    () => (tagDebugItems.length ? [...deferredLibraryItems, ...tagDebugItems] : deferredLibraryItems),
+    [deferredLibraryItems, tagDebugItems]
   );
   const allLibraryTags = useMemo(() => getAllTags(tagDebugSourceItems), [tagDebugSourceItems]);
   const draftResolvedPreviewMedia = useResolvedItemMediaSource(editingId ? draft : null, "preview");
@@ -4757,7 +4933,10 @@ export default function App() {
     true
   );
   const canRemoveDraftBackground = isLocalDataImage(draftBackgroundRemovalMedia.src || draftResolvedPreviewMedia.src || draft.imageUrl);
-  const normalizedWardrobeFilters = normalizeWardrobeFilterState(wardrobeFilters);
+  const normalizedWardrobeFilters = useMemo(
+    () => normalizeWardrobeFilterState(wardrobeFilters),
+    [wardrobeFilters]
+  );
   const currentSavedLibraryViewSnapshot = useMemo(
     () => createSavedLibraryViewSnapshot({
       librarySearch,
@@ -4863,21 +5042,31 @@ export default function App() {
     [generationMetadataFilters, savedLibraryViews]
   );
   const wardrobeFilterSearchQuery = normalizeTag(wardrobeFilterSearch);
+  const controlsReferenceFilterSearchQuery = normalizeTag(controlsReferenceFilterSearch);
   const allLibraryTagEntries = useMemo(() => getTagFrequencyEntries(tagDebugSourceItems), [tagDebugSourceItems]);
   const allLibraryNoTagsCount = useMemo(
     () => tagDebugSourceItems.filter((item) => uniqueTags(item.tags).length === 0).length,
     [tagDebugSourceItems]
   );
+  const normalizedLibrarySearchQuery = useMemo(
+    () => normalizeLibrarySearchQuery(librarySearch),
+    [librarySearch]
+  );
+  const librarySearchTextById = useMemo(
+    () => new Map(deferredLibraryItems.map((item) => [item.id, buildLibrarySearchText(item)])),
+    [deferredLibraryItems]
+  );
   const tagCountBaseItems = useMemo(
     () =>
-      items.filter(
+      deferredLibraryItems.filter(
         (item) =>
-          matchesLibrarySearch(item, librarySearch) &&
-          matchesWardrobeFilters(item, wardrobeFilters, ["tags", "excludedTags", "tagMatchMode"]) &&
+          (!normalizedLibrarySearchQuery ||
+            (librarySearchTextById.get(item.id) ?? "").includes(normalizedLibrarySearchQuery)) &&
+          matchesNormalizedWardrobeFilters(item, normalizedWardrobeFilters, { ignoreTagFilters: true }) &&
           (!normalizedWardrobeFilters.laundry ||
             (normalizedWardrobeFilters.laundry === "show" ? Boolean(excluded[item.id]) : !excluded[item.id]))
       ),
-    [items, librarySearch, wardrobeFilters, normalizedWardrobeFilters.laundry, excluded]
+    [deferredLibraryItems, excluded, librarySearchTextById, normalizedLibrarySearchQuery, normalizedWardrobeFilters]
   );
   const tagCountItemsWithDebug = useMemo(
     () => (tagDebugItems.length ? [...tagCountBaseItems, ...tagDebugItems] : tagCountBaseItems),
@@ -4904,6 +5093,22 @@ export default function App() {
       ? libraryNoTagsCount
       : 0;
   }, [libraryNoTagsCount, wardrobeFilterSearchQuery]);
+  const filteredControlsReferenceTagEntries = useMemo(() => {
+    if (!controlsReferenceFilterSearchQuery) {
+      return allLibraryTagEntries;
+    }
+
+    return allLibraryTagEntries.filter(({ tag }) => tag.includes(controlsReferenceFilterSearchQuery));
+  }, [allLibraryTagEntries, controlsReferenceFilterSearchQuery]);
+  const filteredControlsReferenceNoTagsCount = useMemo(() => {
+    if (!controlsReferenceFilterSearchQuery) {
+      return allLibraryNoTagsCount;
+    }
+
+    return "untagged".includes(controlsReferenceFilterSearchQuery) || "no tags".includes(controlsReferenceFilterSearchQuery)
+      ? allLibraryNoTagsCount
+      : 0;
+  }, [allLibraryNoTagsCount, controlsReferenceFilterSearchQuery]);
   const hasVisibleWardrobeFilterOptions = filteredLibraryTagEntries.length > 0 || filteredLibraryNoTagsCount > 0;
   const excludedReferenceCount = useMemo(
     () => Object.values(excluded).filter(Boolean).length,
@@ -4944,11 +5149,31 @@ export default function App() {
   }, [selectionEditorActive]);
 
   useEffect(() => {
+    if (selectedBoardImageCount <= 1) {
+      setBoardBulkMetadataDraft({
+        addTags: [],
+        removeTags: []
+      });
+    }
+  }, [selectedBoardImageCount]);
+
+  useEffect(() => {
     if (!selectedReferenceCount) {
       setLibrarySelectionActionsOpen(false);
       setLibraryTagActionMode(null);
     }
   }, [selectedReferenceCount]);
+
+  useEffect(() => {
+    if (!selectedBoardImageCount) {
+      setBoardSelectionActionsOpen(false);
+      setBoardTagActionMode(null);
+      setBoardBulkMetadataDraft({
+        addTags: [],
+        removeTags: []
+      });
+    }
+  }, [selectedBoardImageCount]);
 
   useEffect(() => {
     function handlePointerDown(event) {
@@ -4967,6 +5192,22 @@ export default function App() {
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
 
   useEffect(() => {
+    function handlePointerDown(event) {
+      if (!boardSelectionActionsOpen && !boardTagActionMode) {
+        return;
+      }
+
+      if (!boardSelectionActionsRef.current?.contains(event.target)) {
+        setBoardSelectionActionsOpen(false);
+        setBoardTagActionMode(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [boardSelectionActionsOpen, boardTagActionMode]);
+
+  useEffect(() => {
     function handleKeyDown(event) {
       if (event.key !== "Escape") {
         return;
@@ -4983,6 +5224,24 @@ export default function App() {
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [librarySelectionActionsOpen, libraryTagActionMode]);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (!boardSelectionActionsOpen && !boardTagActionMode) {
+        return;
+      }
+
+      setBoardSelectionActionsOpen(false);
+      setBoardTagActionMode(null);
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [boardSelectionActionsOpen, boardTagActionMode]);
 
   useEffect(() => {
     if (!wardrobeViewsOpen && !controlsViewsOpen && !mobileLibraryMoreOpen && !wardrobeManageOpen && !wardrobeAddOpen) {
@@ -5075,6 +5334,36 @@ export default function App() {
       libraryPerfRef.current = null;
     };
   }, [activePanel, isLibraryPerfDebug, items.length, wardrobeSavedOpen]);
+
+  useEffect(() => {
+    const perfSession = libraryBulkMetadataPerfRef.current;
+
+    if (!perfSession || perfSession.renderMarked) {
+      return undefined;
+    }
+
+    perfSession.mark("items state committed", {
+      itemCount: items.length
+    });
+
+    let frameId = window.requestAnimationFrame(() => {
+      perfSession.mark("post-edit frame rendered", {
+        itemCount: items.length
+      });
+      perfSession.renderMarked = true;
+
+      if (perfSession.persistenceMarked) {
+        perfSession.flush();
+        if (libraryBulkMetadataPerfRef.current === perfSession) {
+          libraryBulkMetadataPerfRef.current = null;
+        }
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [items]);
 
   useEffect(() => {
     setIsReferencePreviewZoomed(false);
@@ -6380,11 +6669,13 @@ export default function App() {
   }
   const visibleWardrobeItems = useMemo(() => {
     const startedAt = isLibraryPerfDebug ? performance.now() : 0;
-    const filtered = items.filter((item) =>
-      matchesLibrarySearch(item, librarySearch) &&
-      matchesWardrobeFilters(item, wardrobeFilters) &&
-      (!wardrobeFilters.laundry ||
-        (wardrobeFilters.laundry === "show" ? Boolean(excluded[item.id]) : !excluded[item.id]))
+    const bulkPerfSession = libraryBulkMetadataPerfRef.current;
+    const filtered = deferredLibraryItems.filter((item) =>
+      (!normalizedLibrarySearchQuery ||
+        (librarySearchTextById.get(item.id) ?? "").includes(normalizedLibrarySearchQuery)) &&
+      matchesNormalizedWardrobeFilters(item, normalizedWardrobeFilters) &&
+      (!normalizedWardrobeFilters.laundry ||
+        (normalizedWardrobeFilters.laundry === "show" ? Boolean(excluded[item.id]) : !excluded[item.id]))
     );
 
     const sortedItems = sortLibraryItems(filtered, wardrobeSort, {
@@ -6400,34 +6691,52 @@ export default function App() {
       });
     }
 
+    bulkPerfSession?.mark("visibleWardrobeItems computed", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      visibleCount: sortedItems.length,
+      totalCount: deferredLibraryItems.length
+    });
+
     return sortedItems;
-  }, [activePanel, excluded, isLibraryPerfDebug, items, librarySearch, wardrobeFilters, wardrobeSort, wardrobeSavedOpen]);
+  }, [activePanel, deferredLibraryItems, excluded, isLibraryPerfDebug, librarySearchTextById, normalizedLibrarySearchQuery, normalizedWardrobeFilters, wardrobeSort, wardrobeSavedOpen]);
   const visibleWardrobeItemIds = useMemo(
     () => visibleWardrobeItems.map((item) => item.id),
     [visibleWardrobeItems]
   );
+  const deferredVisibleWardrobeItems = useDeferredValue(visibleWardrobeItems);
   const referencePreviewNavigation = useMemo(
     () => getReferencePreviewNavigation(visibleWardrobeItems, referencePreview?.id ?? ""),
     [referencePreview?.id, visibleWardrobeItems]
   );
   const isMobileReferencePreview = isMobileViewport && Boolean(referencePreview);
   const visibleBoardPickerItems = useMemo(
-    () => getMetadataFilteredItems(items, generationMetadataFilters),
-    [items, generationMetadataFilters]
+    () => getMetadataFilteredItems(deferredLibraryItems, generationMetadataFilters),
+    [deferredLibraryItems, generationMetadataFilters]
   );
-  const visibleLibraryTagEntries = useMemo(() => getTagFrequencyEntries(visibleWardrobeItems), [visibleWardrobeItems]);
+  const visibleLibraryTagEntries = useMemo(() => {
+    const startedAt = isLibraryPerfDebug ? performance.now() : 0;
+    const nextEntries = getTagFrequencyEntries(deferredVisibleWardrobeItems);
+
+    libraryBulkMetadataPerfRef.current?.mark("visibleLibraryTagEntries computed", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      tagCount: nextEntries.length
+    });
+
+    return nextEntries;
+  }, [deferredVisibleWardrobeItems, isLibraryPerfDebug]);
   const libraryStats = useMemo(() => ({
     totalImages: items.length,
     visibleImages: visibleWardrobeItems.length,
     selectedImages: selectedReferenceCount,
-    favoriteImages: visibleWardrobeItems.filter((item) => item.favorite).length,
+    favoriteImages: deferredVisibleWardrobeItems.filter((item) => item.favorite).length,
     totalTags: visibleLibraryTagEntries.length,
     topTags: visibleLibraryTagEntries.slice(0, 5)
-  }), [items.length, selectedReferenceCount, visibleLibraryTagEntries, visibleWardrobeItems]);
+  }), [deferredVisibleWardrobeItems, items.length, selectedReferenceCount, visibleLibraryTagEntries, visibleWardrobeItems.length]);
   const libraryParentGroupEntries = useMemo(() => {
+    const startedAt = isLibraryPerfDebug ? performance.now() : 0;
     const counts = new Map();
 
-    visibleWardrobeItems.forEach((item) => {
+    deferredVisibleWardrobeItems.forEach((item) => {
       uniqueTags(item?.tags).forEach((tag) => {
         const group = getBoardTagParentGroup(tag);
         if (group) {
@@ -6436,11 +6745,17 @@ export default function App() {
       });
     });
 
-    return [...counts.entries()]
+    const nextEntries = [...counts.entries()]
       .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
       .slice(0, 5)
       .map(([group, count]) => ({ group, count }));
-  }, [visibleWardrobeItems]);
+    libraryBulkMetadataPerfRef.current?.mark("libraryParentGroupEntries computed", {
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      groupCount: nextEntries.length
+    });
+
+    return nextEntries;
+  }, [deferredVisibleWardrobeItems]);
   const libraryImageCountLabel = useMemo(() => {
     if (libraryStats.visibleImages !== libraryStats.totalImages) {
       return `${libraryStats.visibleImages} of ${libraryStats.totalImages} images`;
@@ -6450,6 +6765,14 @@ export default function App() {
   }, [libraryStats.totalImages, libraryStats.visibleImages]);
   const mobileLibrarySelectionStatusLabel = selectedReferenceCount ? `${selectedReferenceCount} selected` : libraryImageCountLabel;
   const showMobileLibrarySelectionToolbar = isMobileViewport && mobileLibrarySelectMode;
+  const libraryScrollContextKey = useMemo(
+    () => JSON.stringify({
+      search: librarySearch,
+      filters: normalizeWardrobeFilterState(wardrobeFilters),
+      sort: normalizeWardrobeSort(wardrobeSort)
+    }),
+    [librarySearch, wardrobeFilters, wardrobeSort]
+  );
   const selectedReferenceIdSet = useMemo(
     () => new Set(selectedReferenceIdList),
     [selectedReferenceIdList]
@@ -6570,6 +6893,10 @@ export default function App() {
       frameId = 0;
       const nextViewport = readLibraryGridViewport(scrollElement, gridElement);
 
+       if (!(pendingLibraryScrollRestoreRef.current && nextViewport.scrollTop === 0 && libraryScrollTopRef.current > 0)) {
+        libraryScrollTopRef.current = nextViewport.scrollTop;
+      }
+
       setLibraryGridViewport((current) => {
         if (areLibraryGridViewportsEqual(current, nextViewport)) {
           return current;
@@ -6674,6 +7001,105 @@ export default function App() {
       });
     };
   }, [activePanel, loading, visibleWardrobeItems.length, wardrobeSavedOpen]);
+
+  useEffect(() => () => {
+    if (libraryScrollRestoreFrameRef.current) {
+      window.cancelAnimationFrame(libraryScrollRestoreFrameRef.current);
+    }
+    if (libraryScrollRestoreTimeoutRef.current) {
+      window.clearTimeout(libraryScrollRestoreTimeoutRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    const isLibraryGridOpen = activePanel === "wardrobe" && !wardrobeSavedOpen;
+
+    if (isLibraryGridOpen && !previousLibraryGridOpenRef.current) {
+      pendingLibraryScrollRestoreRef.current = libraryScrollTopRef.current > 0;
+    }
+
+    previousLibraryGridOpenRef.current = isLibraryGridOpen;
+  }, [activePanel, wardrobeSavedOpen]);
+
+  useEffect(() => {
+    if (!loading) {
+      if (!lastLibraryScrollContextKeyRef.current) {
+        lastLibraryScrollContextKeyRef.current = libraryScrollContextKey;
+        return;
+      }
+
+      if (lastLibraryScrollContextKeyRef.current !== libraryScrollContextKey) {
+        lastLibraryScrollContextKeyRef.current = libraryScrollContextKey;
+        libraryScrollTopRef.current = 0;
+        pendingLibraryScrollRestoreRef.current = false;
+
+        if (libraryScrollRestoreFrameRef.current) {
+          window.cancelAnimationFrame(libraryScrollRestoreFrameRef.current);
+          libraryScrollRestoreFrameRef.current = 0;
+        }
+
+        if (libraryScrollRestoreTimeoutRef.current) {
+          window.clearTimeout(libraryScrollRestoreTimeoutRef.current);
+          libraryScrollRestoreTimeoutRef.current = null;
+        }
+
+        if (activePanel === "wardrobe" && !wardrobeSavedOpen && wardrobePanelScrollRef.current) {
+          wardrobePanelScrollRef.current.scrollTop = 0;
+        }
+      }
+    }
+  }, [activePanel, libraryScrollContextKey, loading, wardrobeSavedOpen]);
+
+  useEffect(() => {
+    if (activePanel !== "wardrobe" || wardrobeSavedOpen || loading || !pendingLibraryScrollRestoreRef.current) {
+      return undefined;
+    }
+
+    const restoreLibraryScrollPosition = () => {
+      const scrollElement = wardrobePanelScrollRef.current;
+      const targetScrollTop = Math.max(0, Math.round(libraryScrollTopRef.current));
+
+      if (!scrollElement || !targetScrollTop) {
+        pendingLibraryScrollRestoreRef.current = false;
+        return;
+      }
+
+      if (Math.abs(scrollElement.scrollTop - targetScrollTop) > 1) {
+        scrollElement.scrollTop = targetScrollTop;
+      }
+
+      if (Math.abs(scrollElement.scrollTop - targetScrollTop) <= 1) {
+        pendingLibraryScrollRestoreRef.current = false;
+      }
+    };
+
+    const scheduleRestore = () => {
+      libraryScrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+        libraryScrollRestoreFrameRef.current = window.requestAnimationFrame(() => {
+          restoreLibraryScrollPosition();
+          libraryScrollRestoreFrameRef.current = 0;
+        });
+      });
+
+      libraryScrollRestoreTimeoutRef.current = window.setTimeout(() => {
+        restoreLibraryScrollPosition();
+        libraryScrollRestoreTimeoutRef.current = null;
+      }, 120);
+    };
+
+    scheduleRestore();
+
+    return () => {
+      if (libraryScrollRestoreFrameRef.current) {
+        window.cancelAnimationFrame(libraryScrollRestoreFrameRef.current);
+        libraryScrollRestoreFrameRef.current = 0;
+      }
+      if (libraryScrollRestoreTimeoutRef.current) {
+        window.clearTimeout(libraryScrollRestoreTimeoutRef.current);
+        libraryScrollRestoreTimeoutRef.current = null;
+      }
+    };
+  }, [activePanel, loading, virtualizedWardrobeGrid.virtualItems.length, visibleWardrobeItems.length, wardrobeSavedOpen]);
 
   useEffect(() => {
     if (!pickerBoardImageId) {
@@ -6932,7 +7358,11 @@ export default function App() {
       return;
     }
 
-    const { fitView = true } = options;
+    const {
+      fitView = true,
+      historySnapshot = null,
+      recordHistory = false
+    } = options;
     const perfSession = options.perfSession ?? null;
     perfSession?.mark("generation logic done", {
       boardImageCount: result.board?.images?.length ?? 0
@@ -6941,16 +7371,16 @@ export default function App() {
       perfSession.expectedBoardId = result.board?.id ?? null;
     }
 
-    startBoardTransition(() => {
-      setBoard(result.board);
-      setOutfit(result.syntheticOutfit);
-      setGuidedDebugPayload(result.guidedDebugPayload);
-
-      if (fitView) {
-        setBoardView(getFittedBoardView(result.board));
+    commitBoardSnapshotChange(result.board, {
+      historySnapshot,
+      recordHistory,
+      nextBoardView: fitView ? getFittedBoardView(result.board) : boardViewRef.current,
+      nextGuidedDebugPayload: result.guidedDebugPayload,
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setOutfit(result.syntheticOutfit);
+        perfSession?.mark("state commit scheduled");
       }
-
-      perfSession?.mark("state commit scheduled");
     });
 
     if (!perfSession) {
@@ -6960,7 +7390,7 @@ export default function App() {
         });
       });
     }
-  }, [clearBoardGenerationFeedback, startBoardTransition]);
+  }, [clearBoardGenerationFeedback]);
 
   const scheduleBoardGeneration = useCallback((buildBoard, options = {}) => {
     if (boardGenerationInFlightRef.current) {
@@ -7038,6 +7468,153 @@ export default function App() {
     };
   }
 
+  function captureCurrentBoardHistorySnapshot() {
+    return createBoardHistorySnapshot({
+      board: boardRef.current,
+      boardView: boardViewRef.current,
+      imageCount: imageCountRef.current
+    });
+  }
+
+  function applyBoardHistorySnapshot(snapshot, options = {}) {
+    const normalizedSnapshot = createBoardHistorySnapshot(snapshot);
+    const nextGuidedDebugPayload = options.nextGuidedDebugPayload ?? [];
+
+    startBoardTransition(() => {
+      setBoard(normalizedSnapshot.board);
+      setBoardView(normalizedSnapshot.boardView);
+      setImageCount(normalizedSnapshot.imageCount);
+      setOutfit(boardToSyntheticOutfit(normalizedSnapshot.board));
+      setGuidedDebugPayload(nextGuidedDebugPayload);
+
+      if (options.clearBoardImageUi) {
+        setActiveBoardImageId(null);
+        setPickerBoardImageId(null);
+        setActiveAccessorySlot(null);
+        setActiveOutfitSlot(null);
+      }
+
+      options.onAfterApply?.();
+    });
+  }
+
+  function pushBoardUndoSnapshot(snapshot) {
+    const normalizedSnapshot = createBoardHistorySnapshot(snapshot);
+    const currentSnapshot = captureCurrentBoardHistorySnapshot();
+
+    if (areBoardHistorySnapshotsEqual(normalizedSnapshot, currentSnapshot)) {
+      return false;
+    }
+
+    setBoardUndoStack((current) => appendBoardHistorySnapshot(current, normalizedSnapshot, BOARD_HISTORY_LIMIT));
+    setBoardRedoStack([]);
+    return true;
+  }
+
+  function commitBoardSnapshotChange(nextBoard, options = {}) {
+    const historySnapshot = createBoardHistorySnapshot(options.historySnapshot ?? captureCurrentBoardHistorySnapshot());
+    const nextSnapshot = createBoardHistorySnapshot({
+      board: nextBoard,
+      boardView: options.nextBoardView ?? boardViewRef.current,
+      imageCount: options.nextImageCount ?? imageCountRef.current
+    });
+
+    if (options.recordHistory !== false && !areBoardHistorySnapshotsEqual(historySnapshot, nextSnapshot)) {
+      setBoardUndoStack((current) => appendBoardHistorySnapshot(current, historySnapshot, BOARD_HISTORY_LIMIT));
+      setBoardRedoStack([]);
+    }
+
+    applyBoardHistorySnapshot(nextSnapshot, {
+      nextGuidedDebugPayload: options.nextGuidedDebugPayload,
+      clearBoardImageUi: Boolean(options.clearBoardImageUi),
+      onAfterApply: options.onAfterApply
+    });
+  }
+
+  function handleUndoBoardChange() {
+    const result = restoreBoardUndoState({
+      undoStack: boardUndoStackRef.current,
+      redoStack: boardRedoStackRef.current,
+      currentSnapshot: captureCurrentBoardHistorySnapshot()
+    });
+
+    if (!result.snapshot) {
+      return;
+    }
+
+    setBoardUndoStack(result.undoStack);
+    setBoardRedoStack(result.redoStack);
+    applyBoardHistorySnapshot(result.snapshot, {
+      clearBoardImageUi: true
+    });
+  }
+
+  function handleRedoBoardChange() {
+    const result = restoreBoardRedoState({
+      undoStack: boardUndoStackRef.current,
+      redoStack: boardRedoStackRef.current,
+      currentSnapshot: captureCurrentBoardHistorySnapshot()
+    });
+
+    if (!result.snapshot) {
+      return;
+    }
+
+    setBoardUndoStack(result.undoStack);
+    setBoardRedoStack(result.redoStack);
+    applyBoardHistorySnapshot(result.snapshot, {
+      clearBoardImageUi: true
+    });
+  }
+
+  function handleRearrangeCurrentBoard() {
+    const currentBoard = boardRef.current;
+
+    if (!currentBoard?.images?.length || currentBoard.images.length <= 1) {
+      return;
+    }
+
+    const nextBoard = relayoutBoardStateImages(currentBoard.images);
+
+    if (!nextBoard) {
+      return;
+    }
+
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      clearBoardImageUi: true
+    });
+  }
+
+  function removeSelectedBoardImages() {
+    const currentBoard = boardRef.current;
+
+    if (!currentBoard?.images?.length || !selectedBoardImageIdList.length) {
+      return;
+    }
+
+    const selectedImageIdSet = new Set(selectedBoardImageIdList);
+    const nextImages = currentBoard.images.filter((image) => !selectedImageIdSet.has(image.id));
+
+    commitBoardSnapshotChange(nextImages.length ? relayoutBoardStateImages(nextImages) : null, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        clearSelectedBoardImages();
+      }
+    });
+  }
+
+  function openBoardSelectionEditor() {
+    if (selectedBoardItems.length !== 1) {
+      return;
+    }
+
+    const [selectedItem] = selectedBoardItems;
+    exitBoardSelectMode();
+    startFloatingEdit(selectedItem);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -7080,6 +7657,53 @@ export default function App() {
 
     setOutfit(boardToSyntheticOutfit(board));
   }, [board]);
+
+  useEffect(() => {
+    if (!boardSelectMode) {
+      return;
+    }
+
+    if (!board?.images?.length) {
+      exitBoardSelectMode();
+      return;
+    }
+
+    const currentBoardImageIds = new Set(board.images.map((image) => image.id));
+
+    setSelectedBoardImageSelection((current) => {
+      const nextIds = Object.fromEntries(
+        Object.entries(current.ids).filter(([imageId, isSelected]) => isSelected && currentBoardImageIds.has(imageId))
+      );
+
+      if (Object.keys(nextIds).length === Object.keys(current.ids).length) {
+        return current;
+      }
+
+      return {
+        ids: nextIds,
+        anchorId: current.anchorId && currentBoardImageIds.has(current.anchorId) ? current.anchorId : null
+      };
+    });
+  }, [board, boardSelectMode]);
+
+  useEffect(() => {
+    if (!boardSelectMode || !board) {
+      return;
+    }
+
+    if (board.id !== boardSelectModeBoardIdRef.current) {
+      exitBoardSelectMode();
+    }
+  }, [board?.id, boardSelectMode]);
+
+  useEffect(() => {
+    if (!boardSelectMode || selectedBoardImageCount > 0) {
+      return;
+    }
+
+    boardSelectModeBoardIdRef.current = null;
+    setBoardSelectMode(false);
+  }, [boardSelectMode, selectedBoardImageCount]);
 
   useEffect(() => {
     if (!pendingRestoredBoardFitRef.current || loading || !board?.images?.length || !boardViewportRef.current) {
@@ -7180,6 +7804,7 @@ export default function App() {
         setItems(effectiveItems);
 
         if (storedAppState) {
+          lastSavedAppStateRef.current = storedAppState;
           const resolvedImageCount = resolvePersistedImageCount(storedAppState.imageCount);
           const normalizedGenerationLists = normalizeGenerationLists(storedAppState.generationLists);
           const normalizedGenerationMode = normalizeGenerationMode(storedAppState.generationMode);
@@ -7269,6 +7894,7 @@ export default function App() {
             console.error("Failed to initialize local sync metadata.", syncMetadataError);
           }
         } else {
+          lastSavedAppStateRef.current = null;
           applyDefaultBootstrapState(effectiveItems);
 
           try {
@@ -7450,6 +8076,10 @@ export default function App() {
     }
 
     const saveStartedAt = isGeneratePerfDebug ? performance.now() : 0;
+    const libraryPerfSession = libraryBulkMetadataPerfRef.current;
+    const now = Date.now();
+    const deferredUntil = deferAppStateSaveUntilRef.current;
+    const remainingDeferredMs = Math.max(0, deferredUntil - now);
     if (saveAppStateTimeoutRef.current) {
       clearTimeout(saveAppStateTimeoutRef.current);
       saveAppStateTimeoutRef.current = null;
@@ -7460,21 +8090,48 @@ export default function App() {
     }
 
     const runSave = () => {
+      libraryPerfSession?.mark("app-state save started");
       enqueueAppStateSave(currentPersistedAppState, "debounced").then(() => {
         if (isGeneratePerfDebug) {
           boardGenerationPerfRef.current?.mark("persistence done", {
             durationMs: Math.round((performance.now() - saveStartedAt) * 100) / 100
           });
         }
+
+        if (libraryPerfSession) {
+          libraryPerfSession.mark("app-state save completed");
+          libraryPerfSession.persistenceMarked = true;
+
+          if (libraryPerfSession.renderMarked) {
+            libraryPerfSession.flush();
+            if (libraryBulkMetadataPerfRef.current === libraryPerfSession) {
+              libraryBulkMetadataPerfRef.current = null;
+            }
+          }
+        }
       });
     };
 
+    if (remainingDeferredMs > 0) {
+      libraryPerfSession?.mark("app-state save deferred", {
+        remainingDeferredMs,
+        reason: deferAppStateSaveReasonRef.current || "deferred"
+      });
+      saveAppStateTimeoutRef.current = setTimeout(() => {
+        saveAppStateTimeoutRef.current = null;
+        runSave();
+      }, remainingDeferredMs);
+      return;
+    }
+
     if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      libraryPerfSession?.mark("app-state save queued for idle callback");
       saveAppStateIdleCallbackRef.current = window.requestIdleCallback(() => {
         saveAppStateIdleCallbackRef.current = null;
         runSave();
       }, { timeout: 400 });
     } else {
+      libraryPerfSession?.mark("app-state save queued for timeout");
       saveAppStateTimeoutRef.current = setTimeout(() => {
         saveAppStateTimeoutRef.current = null;
         runSave();
@@ -7588,7 +8245,10 @@ export default function App() {
           const stateToSave = pendingAppStateSaveRef.current;
           pendingAppStateSaveRef.current = null;
           setStartupStorageDebugPhase(`app-state-save:${reason}`);
-          await saveAppState(stateToSave);
+          await saveAppState(stateToSave, {
+            previousAppState: lastSavedAppStateRef.current
+          });
+          lastSavedAppStateRef.current = stateToSave;
         }
       } finally {
         appStateSaveInFlightRef.current = false;
@@ -7611,6 +8271,19 @@ export default function App() {
 
   function dropPendingAppStatePersistence() {
     pendingAppStateSaveRef.current = null;
+  }
+
+  function deferAppStatePersistence(durationMs, reason = "deferred") {
+    const nextDurationMs = Math.max(0, Math.round(Number(durationMs) || 0));
+
+    if (!nextDurationMs) {
+      deferAppStateSaveUntilRef.current = 0;
+      deferAppStateSaveReasonRef.current = "";
+      return;
+    }
+
+    deferAppStateSaveUntilRef.current = Date.now() + nextDurationMs;
+    deferAppStateSaveReasonRef.current = reason;
   }
 
   function applyProvenanceUpdate(buildNextProvenance, options = {}) {
@@ -7650,7 +8323,7 @@ export default function App() {
     };
   }
 
-  function applyLocalSafetyUpdate(buildNextLocalSafety) {
+  function applyLocalSafetyUpdate(buildNextLocalSafety, options = {}) {
     const nextLocalSafety = normalizeLocalSafetyState(buildNextLocalSafety(localSafetyRef.current));
 
     if (areSemanticallyEqualJsonish(nextLocalSafety, localSafetyRef.current)) {
@@ -7660,7 +8333,12 @@ export default function App() {
     localSafetyRef.current = nextLocalSafety;
     setLocalSafety(nextLocalSafety);
 
-    if (!loading && persistenceReady && !importCommitInFlightRef.current) {
+    if (
+      options.persistMode !== "deferred" &&
+      !loading &&
+      persistenceReady &&
+      !importCommitInFlightRef.current
+    ) {
       const nextAppState = {
         ...(currentPersistedAppStateRef.current ?? currentPersistedAppState),
         localSafety: nextLocalSafety
@@ -7671,11 +8349,12 @@ export default function App() {
     return nextLocalSafety;
   }
 
-  function markMetadataDirty(changedItemIds = []) {
+  function markMetadataDirty(changedItemIds = [], options = {}) {
     applyLocalSafetyUpdate((currentLocalSafety) =>
       markMetadataChanged(currentLocalSafety, {
         changedItemIds
-      })
+      }),
+      options
     );
   }
 
@@ -7911,6 +8590,30 @@ export default function App() {
         }
       }
 
+      if (!event.altKey && !isEditableKeyboardTarget(event.target)) {
+        const isPrimaryModifier = event.metaKey || event.ctrlKey;
+        const normalizedKey = event.key.toLowerCase();
+
+        if (isPrimaryModifier && normalizedKey === "z") {
+          event.preventDefault();
+          blurRetainedPointerFocus();
+
+          if (event.shiftKey) {
+            handleRedoBoardChange();
+          } else {
+            handleUndoBoardChange();
+          }
+          return;
+        }
+
+        if (isPrimaryModifier && normalizedKey === "y") {
+          event.preventDefault();
+          blurRetainedPointerFocus();
+          handleRedoBoardChange();
+          return;
+        }
+      }
+
       if (
         referencePreview &&
         !event.metaKey &&
@@ -8033,6 +8736,13 @@ export default function App() {
         return;
       }
 
+      if (boardSelectMode || selectedBoardImageCount > 0 || boardSelectionActionsOpen || boardTagActionMode) {
+        event.preventDefault();
+        blurRetainedPointerFocus();
+        exitBoardSelectMode();
+        return;
+      }
+
       if (activePanel) {
         event.preventDefault();
         blurRetainedPointerFocus();
@@ -8045,6 +8755,9 @@ export default function App() {
   }, [
     pickerBoardImageId,
     activePanel,
+    boardSelectMode,
+    boardSelectionActionsOpen,
+    boardTagActionMode,
     confirmation,
     editingId,
     fitpicPreview,
@@ -8054,6 +8767,7 @@ export default function App() {
     cropEditorState,
     librarySelectionActionsOpen,
     libraryTagActionMode,
+    selectedBoardImageCount,
     wardrobeFiltersOpen,
     wardrobeAddOpen,
     wardrobeWorthOpen,
@@ -8069,6 +8783,7 @@ export default function App() {
       return;
     }
 
+    const historySnapshot = captureCurrentBoardHistorySnapshot();
     const perfSession = createGeneratePerfSession(isGeneratePerfDebug);
     perfSession?.mark("generate button click handler");
 
@@ -8105,6 +8820,8 @@ export default function App() {
         }),
       {
         perfSession,
+        historySnapshot,
+        recordHistory: true,
         onComplete: (result) => {
           if (generationMode !== "guided") {
             return;
@@ -9054,10 +9771,9 @@ export default function App() {
     }
 
     const generationSlot = resolveSlotForItem(item) || visibleSlots[0];
-
-    setBoard((current) => {
-      if (!current?.images?.length) {
-        return createBoardFromReferenceIds([item.id], {
+    const currentBoard = boardRef.current;
+    const nextBoard = !currentBoard?.images?.length
+      ? createBoardFromReferenceIds([item.id], {
           aspectRatiosByReferenceId: {
             [item.id]: getItemPresentationAspectRatio(item)
           },
@@ -9066,18 +9782,24 @@ export default function App() {
           },
           renderMetadataByReferenceId: {
             [item.id]: buildBoardRenderMetadata(item)
+          },
+          itemsByReferenceId: {
+            [item.id]: item
           }
-        });
-      }
+        })
+      : relayoutBoardStateImages([
+          ...currentBoard.images,
+          {
+            id: `board_image_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            referenceId: item.id,
+            referenceItemUuid: item.itemUuid ?? "",
+            generationSlot,
+            zIndex: currentBoard.images.length + 1
+          }
+        ]);
 
-      const nextImage = {
-        id: `board_image_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        referenceId: item.id,
-        generationSlot,
-        zIndex: current.images.length + 1
-      };
-
-      return relayoutBoardStateImages([...current.images, nextImage]);
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot()
     });
   }
 
@@ -9295,6 +10017,83 @@ export default function App() {
     setActiveBoardImageId(null);
   }
 
+  function clearSelectedBoardImages() {
+    setBoardSelectionActionsOpen(false);
+    setBoardTagActionMode(null);
+    setBoardBulkMetadataDraft({
+      addTags: [],
+      removeTags: []
+    });
+    setSelectedBoardImageSelection({
+      ids: {},
+      anchorId: null
+    });
+  }
+
+  function exitBoardSelectMode() {
+    boardSelectModeBoardIdRef.current = null;
+    setBoardSelectMode(false);
+    clearSelectedBoardImages();
+  }
+
+  function toggleBoardSelectMode() {
+    setBoardSelectMode((current) => {
+      const nextValue = !current;
+
+      if (nextValue) {
+        boardSelectModeBoardIdRef.current = boardRef.current?.id ?? null;
+        closePickerOverlay();
+        setActiveBoardImageId(null);
+        setSelectionEditorActive(false);
+        resetEditorState();
+      } else {
+        boardSelectModeBoardIdRef.current = null;
+        clearSelectedBoardImages();
+      }
+
+      return nextValue;
+    });
+  }
+
+  function startBoardImageSelection(imageId, event = null, options = {}) {
+    if (!imageId) {
+      return;
+    }
+
+    boardSelectModeBoardIdRef.current = boardRef.current?.id ?? null;
+    closePickerOverlay();
+    setActiveBoardImageId(null);
+    setSelectionEditorActive(false);
+    resetEditorState();
+    setBoardSelectMode(true);
+    toggleBoardImageSelection(imageId, event, options);
+  }
+
+  function toggleBoardImageSelection(imageId, event = null, options = {}) {
+    if (!imageId) {
+      return;
+    }
+
+    setSelectedBoardImageSelection((current) => {
+      const currentBoardImageIds = boardRef.current?.images?.map((image) => image.id) ?? [];
+      const isToggleSelection = Boolean(options.forceToggleSelection || event?.metaKey || event?.ctrlKey);
+      const isRangeSelection = Boolean(event?.shiftKey);
+      const { nextSelection, nextAnchorId } = getNextLibrarySelection({
+        currentSelection: current.ids,
+        itemId: imageId,
+        visibleItemIds: currentBoardImageIds,
+        anchorId: current.anchorId,
+        isToggleSelection,
+        isRangeSelection
+      });
+
+      return {
+        ids: nextSelection,
+        anchorId: nextAnchorId
+      };
+    });
+  }
+
   function scheduleExcludedOutfitReconcile(nextExcluded) {
     latestExcludedStateRef.current = nextExcluded;
 
@@ -9391,6 +10190,16 @@ export default function App() {
   function clearExcluded() {
     latestExcludedStateRef.current = {};
     setExcluded({});
+  }
+
+  function getExplicitSelectedReferenceItems(referenceIds) {
+    const uniqueReferenceIds = [...new Set((referenceIds ?? []).filter(Boolean))];
+    const resolvedItems = uniqueReferenceIds.map((referenceId) => itemsById[referenceId]).filter(Boolean);
+
+    return {
+      referenceIds: resolvedItems.map((item) => item.id),
+      items: resolvedItems
+    };
   }
 
   function syncSelectionEditor(nextSelected) {
@@ -9547,6 +10356,70 @@ export default function App() {
     resetEditorState();
   }
 
+  function createBoardFromSelectedReferences() {
+    const validSelectedReferenceIds = selectedReferenceIdList.filter((itemId) => itemsById[itemId]);
+
+    if (!validSelectedReferenceIds.length) {
+      return;
+    }
+
+    const nextBoard = createBoardFromReferenceIds(validSelectedReferenceIds, {
+      ...getCurrentBoardLayoutOptions(),
+      itemsByReferenceId: itemsById
+    });
+
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      nextImageCount: validSelectedReferenceIds.length,
+      nextBoardView: getFittedBoardView(nextBoard),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setActivePanel(null);
+        setWardrobeSavedOpen(false);
+        setLibrarySelectionActionsOpen(false);
+        setLibraryTagActionMode(null);
+        setSelectionEditorActive(false);
+        setSelectedReferenceSelection({
+          ids: {},
+          anchorId: null
+        });
+        resetEditorState();
+      }
+    });
+  }
+
+  function addSelectedReferencesToCurrentBoard() {
+    const validSelectedReferenceIds = selectedReferenceIdList.filter((itemId) => itemsById[itemId]);
+
+    if (!validSelectedReferenceIds.length) {
+      return;
+    }
+
+    const result = appendBoardImagesFromReferenceIds(boardRef.current, validSelectedReferenceIds, {
+      ...getCurrentBoardLayoutOptions(),
+      itemsByReferenceId: itemsById
+    });
+
+    if (!result.addedReferenceIds.length || !result.board) {
+      return;
+    }
+
+    commitBoardSnapshotChange(result.board, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setLibrarySelectionActionsOpen(false);
+        setLibraryTagActionMode(null);
+        setSelectionEditorActive(false);
+        setSelectedReferenceSelection({
+          ids: {},
+          anchorId: null
+        });
+        resetEditorState();
+      }
+    });
+  }
+
   function selectAllVisibleReferences() {
     if (!visibleWardrobeItemIds.length) {
       return;
@@ -9594,11 +10467,27 @@ export default function App() {
   }
 
   async function applyBulkMetadataUpdate(buildNextItem) {
-    if (!selectedReferenceIdList.length) {
+    return applyBulkMetadataUpdateForReferenceIds(selectedReferenceIdList, buildNextItem);
+  }
+
+  async function applyBulkMetadataUpdateForReferenceIds(referenceIds, buildNextItem) {
+    const { referenceIds: validReferenceIds } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!validReferenceIds.length) {
       return;
     }
 
-    const selectedReferenceIdSet = new Set(selectedReferenceIdList);
+    const perfSession = createLibraryInteractionPerfSession(
+      isLibraryPerfDebug,
+      "library bulk metadata edit"
+    );
+    libraryBulkMetadataPerfRef.current = perfSession;
+    deferAppStatePersistence(15000, "bulk metadata edit");
+    perfSession?.mark("bulk metadata edit started", {
+      selectedCount: validReferenceIds.length
+    });
+
+    const selectedReferenceIdSet = new Set(validReferenceIds);
     const updatedItems = items
       .filter((item) => selectedReferenceIdSet.has(item.id))
       .map((item) => {
@@ -9608,25 +10497,50 @@ export default function App() {
       .filter(Boolean);
 
     if (!updatedItems.length) {
+      perfSession?.mark("no item changes detected");
+      perfSession?.flush();
+      if (libraryBulkMetadataPerfRef.current === perfSession) {
+        libraryBulkMetadataPerfRef.current = null;
+      }
       return;
     }
 
-    await runMetadataSnapshot("before-bulk-edit", {
-      priority: "blocking",
+    perfSession?.mark("updated items prepared", {
+      updatedCount: updatedItems.length
+    });
+
+    void runMetadataSnapshot("before-bulk-edit", {
+      priority: "background",
       changedItemIds: updatedItems.map((item) => item.id)
     });
     await saveItems(updatedItems);
+    perfSession?.mark("items persisted", {
+      updatedCount: updatedItems.length
+    });
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
-    setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
-    markMetadataDirty(updatedItems.map((item) => item.id));
-    applyProvenanceUpdate(
-      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
-      { itemCountSnapshot: items.length }
-    );
+    startTransition(() => {
+      perfSession?.mark("transition scheduled");
+      setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+      markMetadataDirty(updatedItems.map((item) => item.id), { persistMode: "deferred" });
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+    });
   }
 
   async function applyGlobalTagUpdate(buildNextTags) {
+    const perfSession = createLibraryInteractionPerfSession(
+      isLibraryPerfDebug,
+      "library global tag edit"
+    );
+    libraryBulkMetadataPerfRef.current = perfSession;
+    deferAppStatePersistence(15000, "global tag edit");
+    perfSession?.mark("global tag edit started", {
+      totalItems: items.length
+    });
+
     const updatedItems = items
       .map((item) => {
         const currentTags = uniqueTags(item.tags);
@@ -9641,22 +10555,37 @@ export default function App() {
       .filter(Boolean);
 
     if (!updatedItems.length) {
+      perfSession?.mark("no item changes detected");
+      perfSession?.flush();
+      if (libraryBulkMetadataPerfRef.current === perfSession) {
+        libraryBulkMetadataPerfRef.current = null;
+      }
       return 0;
     }
 
-    await runMetadataSnapshot("before-bulk-edit", {
-      priority: "blocking",
+    perfSession?.mark("updated items prepared", {
+      updatedCount: updatedItems.length
+    });
+
+    void runMetadataSnapshot("before-bulk-edit", {
+      priority: "background",
       changedItemIds: updatedItems.map((item) => item.id)
     });
     await saveItems(updatedItems);
+    perfSession?.mark("items persisted", {
+      updatedCount: updatedItems.length
+    });
 
     const updatedItemsById = Object.fromEntries(updatedItems.map((item) => [item.id, item]));
-    setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
-    markMetadataDirty(updatedItems.map((item) => item.id));
-    applyProvenanceUpdate(
-      (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
-      { itemCountSnapshot: items.length }
-    );
+    startTransition(() => {
+      perfSession?.mark("transition scheduled");
+      setItems((current) => current.map((item) => updatedItemsById[item.id] ?? item));
+      markMetadataDirty(updatedItems.map((item) => item.id), { persistMode: "deferred" });
+      applyProvenanceUpdate(
+        (current) => markLibraryEdited(current, { itemCountSnapshot: items.length }),
+        { itemCountSnapshot: items.length }
+      );
+    });
     return updatedItems.length;
   }
 
@@ -9819,13 +10748,18 @@ export default function App() {
   }
 
   async function applyImmediateBulkTagEdit(mode, tag) {
-    const normalizedTag = normalizeTag(tag);
+    return applyImmediateBulkTagEditForReferenceIds(selectedReferenceIdList, mode, tag);
+  }
 
-    if (!normalizedTag || !selectedReferenceIdList.length) {
+  async function applyImmediateBulkTagEditForReferenceIds(referenceIds, mode, tag) {
+    const normalizedTag = normalizeTag(tag);
+    const { referenceIds: validReferenceIds, items: selectedItemsForAction } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!normalizedTag || !validReferenceIds.length) {
       return;
     }
 
-    const changedCount = selectedReferenceItems.reduce((count, item) => {
+    const changedCount = selectedItemsForAction.reduce((count, item) => {
       const currentTags = uniqueTags(item.tags);
       const willChange = mode === "add"
         ? !currentTags.includes(normalizedTag)
@@ -9838,7 +10772,7 @@ export default function App() {
       return;
     }
 
-    await applyBulkMetadataUpdate((item) => {
+    await applyBulkMetadataUpdateForReferenceIds(validReferenceIds, (item) => {
       const currentTags = uniqueTags(item.tags);
       const nextTags = mode === "add"
         ? uniqueTags([...currentTags, normalizedTag])
@@ -9856,12 +10790,18 @@ export default function App() {
   }
 
   async function applyImmediateBulkFavoriteEdit(nextValue) {
-    if (!selectedReferenceIdList.length || !nextValue) {
+    return applyImmediateBulkFavoriteEditForReferenceIds(selectedReferenceIdList, nextValue);
+  }
+
+  async function applyImmediateBulkFavoriteEditForReferenceIds(referenceIds, nextValue) {
+    const { referenceIds: validReferenceIds, items: selectedItemsForAction } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!validReferenceIds.length || !nextValue) {
       return;
     }
 
     const nextFavorite = nextValue === "yes";
-    const changedCount = selectedReferenceItems.reduce(
+    const changedCount = selectedItemsForAction.reduce(
       (count, item) => count + (Boolean(item.favorite) !== nextFavorite ? 1 : 0),
       0
     );
@@ -9871,7 +10811,7 @@ export default function App() {
       return;
     }
 
-    await applyBulkMetadataUpdate((item) => ({
+    await applyBulkMetadataUpdateForReferenceIds(validReferenceIds, (item) => ({
       ...item,
       favorite: nextFavorite
     }));
@@ -9882,12 +10822,18 @@ export default function App() {
   }
 
   async function applyImmediateBulkExcludedEdit(nextValue) {
-    if (!selectedReferenceIdList.length || !nextValue) {
+    return applyImmediateBulkExcludedEditForReferenceIds(selectedReferenceIdList, nextValue);
+  }
+
+  async function applyImmediateBulkExcludedEditForReferenceIds(referenceIds, nextValue) {
+    const { referenceIds: validReferenceIds, items: selectedItemsForAction } = getExplicitSelectedReferenceItems(referenceIds);
+
+    if (!validReferenceIds.length || !nextValue) {
       return;
     }
 
     const nextExcludedValue = nextValue === "yes";
-    const changedCount = selectedReferenceItems.reduce(
+    const changedCount = selectedItemsForAction.reduce(
       (count, item) => count + (Boolean(excluded[item.id]) !== nextExcludedValue ? 1 : 0),
       0
     );
@@ -9897,7 +10843,7 @@ export default function App() {
       return;
     }
 
-    setReferencesExcluded(selectedReferenceIdList, nextExcludedValue);
+    setReferencesExcluded(validReferenceIds, nextExcludedValue);
 
     showTemporaryBulkMetadataFeedback(
       `${nextExcludedValue ? "Excluded" : "Included"} ${changedCount} ${changedCount === 1 ? "item" : "items"}`
@@ -9920,6 +10866,27 @@ export default function App() {
 
     await applyImmediateBulkTagEdit(mode, committedTags[0]);
     setBulkMetadataDraft((current) => ({
+      ...current,
+      [draftKey]: []
+    }));
+  }
+
+  async function handleBoardBulkTagDraftChange(mode, nextTags) {
+    const draftKey = mode === "add" ? "addTags" : "removeTags";
+    const currentTags = boardBulkMetadataDraft[draftKey];
+    const committedTags = nextTags.filter((tag) => !currentTags.includes(tag));
+
+    setBoardBulkMetadataDraft((current) => ({
+      ...current,
+      [draftKey]: nextTags
+    }));
+
+    if (!committedTags.length) {
+      return;
+    }
+
+    await applyImmediateBulkTagEditForReferenceIds(selectedBoardReferenceIdList, mode, committedTags[0]);
+    setBoardBulkMetadataDraft((current) => ({
       ...current,
       [draftKey]: []
     }));
@@ -11032,20 +11999,23 @@ export default function App() {
   }
 
   function replaceBoardImageReference(imageId, referenceId) {
-    setGuidedDebugPayload([]);
     suppressNextBoardRelayoutRef.current = true;
-    setBoard((current) => {
-      if (!current) {
-        return current;
-      }
+    const currentBoard = boardRef.current;
 
-      const nextItemUuid = itemsById[referenceId]?.itemUuid ?? "";
-      return replaceBoardImageReferencePreservingLayout(
-        current,
-        imageId,
-        referenceId,
-        nextItemUuid || current.images.find((image) => image.id === imageId)?.referenceItemUuid || ""
-      );
+    if (!currentBoard) {
+      return;
+    }
+
+    const nextItemUuid = itemsById[referenceId]?.itemUuid ?? "";
+    const nextBoard = replaceBoardImageReferencePreservingLayout(
+      currentBoard,
+      imageId,
+      referenceId,
+      nextItemUuid || currentBoard.images.find((image) => image.id === imageId)?.referenceItemUuid || ""
+    );
+
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot()
     });
   }
 
@@ -11096,33 +12066,31 @@ export default function App() {
     }
 
     const nextBoardImages = board.images.map((image) => image.id === result.boardImage.id ? result.boardImage : image);
+    const nextGuidedDebugPayload = result.guidedDebugEntry
+      ? mergeGuidedDebugEntryIntoPayload(guidedDebugPayload, result.guidedDebugEntry, nextBoardImages)
+      : guidedDebugPayload;
 
     suppressNextBoardRelayoutRef.current = true;
-    setBoard((current) => {
-      if (!current) {
-        return current;
+    commitBoardSnapshotChange(
+      replaceBoardImagePreservingLayout(board, result.boardImage),
+      {
+        historySnapshot: captureCurrentBoardHistorySnapshot(),
+        nextGuidedDebugPayload
       }
-
-      return replaceBoardImagePreservingLayout(current, result.boardImage);
-    });
-    setGuidedDebugPayload((current) =>
-      result.guidedDebugEntry
-        ? mergeGuidedDebugEntryIntoPayload(current, result.guidedDebugEntry, nextBoardImages)
-        : current
     );
-    setOutfit(boardToSyntheticOutfit({
-      ...board,
-      images: nextBoardImages
-    }));
   }
 
   function selectBoardImage(imageId) {
+    if (boardSelectMode) {
+      toggleBoardImageSelection(imageId);
+      return;
+    }
+
     closeUtilityWindows();
     setActivePanel(null);
     setActiveAccessorySlot(null);
     setActiveOutfitSlot(null);
-    setActiveBoardImageId((current) => current === imageId ? null : imageId);
-    setPickerBoardImageId(null);
+    startBoardImageSelection(imageId);
   }
 
   function openBoardImagePicker(image) {
@@ -11146,6 +12114,33 @@ export default function App() {
             }
           : image
       )
+    } : current);
+  }
+
+  function updateBoardImagePositions(nextPositionsByImageId) {
+    const normalizedEntries = Object.entries(nextPositionsByImageId ?? {}).filter(([imageId, position]) =>
+      imageId && position && Number.isFinite(position.x) && Number.isFinite(position.y)
+    );
+
+    if (!normalizedEntries.length) {
+      return;
+    }
+
+    const nextPositionMap = Object.fromEntries(normalizedEntries);
+
+    setBoard((current) => current ? {
+      ...current,
+      images: current.images.map((image) => {
+        const nextPosition = nextPositionMap[image.id];
+
+        return nextPosition
+          ? {
+              ...image,
+              x: Math.round(nextPosition.x),
+              y: Math.round(nextPosition.y)
+            }
+          : image;
+      })
     } : current);
   }
 
@@ -11206,7 +12201,10 @@ export default function App() {
 
   function startBoardInteraction(event, interaction) {
     event.preventDefault();
-    boardInteractionRef.current = interaction;
+    boardInteractionRef.current = {
+      ...interaction,
+      hasMoved: false
+    };
 
     function handlePointerMove(moveEvent) {
       const currentInteraction = boardInteractionRef.current;
@@ -11216,6 +12214,7 @@ export default function App() {
 
       const deltaX = moveEvent.clientX - currentInteraction.startClientX;
       const deltaY = moveEvent.clientY - currentInteraction.startClientY;
+      const hasCrossedDragThreshold = Math.abs(deltaX) >= 3 || Math.abs(deltaY) >= 3;
 
       if (currentInteraction.type === "pan") {
         setBoardView((current) => ({
@@ -11223,6 +12222,27 @@ export default function App() {
           x: currentInteraction.originX + deltaX,
           y: currentInteraction.originY + deltaY
         }));
+        return;
+      }
+
+      if (!currentInteraction.hasMoved && !hasCrossedDragThreshold) {
+        return;
+      }
+
+      currentInteraction.hasMoved = true;
+
+      if (currentInteraction.type === "drag-selection") {
+        const nextPositionsByImageId = Object.fromEntries(
+          Object.entries(currentInteraction.originPositions ?? {}).map(([imageId, position]) => [
+            imageId,
+            {
+              x: position.x + deltaX / currentInteraction.zoom,
+              y: position.y + deltaY / currentInteraction.zoom
+            }
+          ])
+        );
+
+        updateBoardImagePositions(nextPositionsByImageId);
         return;
       }
 
@@ -11234,6 +12254,35 @@ export default function App() {
     }
 
     function handlePointerUp() {
+      if (boardInteractionRef.current?.historySnapshot) {
+        const currentInteraction = boardInteractionRef.current;
+        const currentBoard = boardRef.current;
+
+        if (currentInteraction.type === "drag") {
+          const movedImage = currentBoard?.images?.find((image) => image.id === currentInteraction.imageId);
+
+          if (
+            movedImage &&
+            (movedImage.x !== currentInteraction.originX || movedImage.y !== currentInteraction.originY)
+          ) {
+            pushBoardUndoSnapshot(currentInteraction.historySnapshot);
+          }
+        } else if (currentInteraction.type === "drag-selection") {
+          const didAnySelectedImageMove = Object.entries(currentInteraction.originPositions ?? {}).some(([imageId, position]) => {
+            const movedImage = currentBoard?.images?.find((image) => image.id === imageId);
+            return movedImage && (movedImage.x !== position.x || movedImage.y !== position.y);
+          });
+
+          if (didAnySelectedImageMove) {
+            pushBoardUndoSnapshot(currentInteraction.historySnapshot);
+          } else if (currentInteraction.clickBehavior === "toggle-selection" && currentInteraction.clickedImageId) {
+            toggleBoardImageSelection(currentInteraction.clickedImageId, null, {
+              forceToggleSelection: true
+            });
+          }
+        }
+      }
+
       boardInteractionRef.current = null;
       document.removeEventListener("pointermove", handlePointerMove);
       document.removeEventListener("pointerup", handlePointerUp);
@@ -11246,6 +12295,12 @@ export default function App() {
   function handleBoardViewportPointerDown(event) {
     if (event.target instanceof Element && event.target.closest(".board-image")) {
       return;
+    }
+
+    if (boardSelectMode) {
+      clearSelectedBoardImages();
+      setBoardSelectMode(false);
+      boardSelectModeBoardIdRef.current = null;
     }
 
     setActiveBoardImageId(null);
@@ -11261,7 +12316,41 @@ export default function App() {
 
   function handleBoardImagePointerDown(event, image) {
     event.stopPropagation();
-    selectBoardImage(image.id);
+    if (boardSelectMode) {
+      if (event.detail >= 2 && selectedBoardImageIdSet.has(image.id)) {
+        event.preventDefault();
+        return;
+      }
+
+      if (!selectedBoardImageIdSet.has(image.id) || event.metaKey || event.ctrlKey || event.shiftKey) {
+        event.preventDefault();
+        toggleBoardImageSelection(image.id, event);
+        return;
+      }
+
+      event.preventDefault();
+      startBoardInteraction(event, {
+        type: "drag-selection",
+        clickedImageId: image.id,
+        clickBehavior: selectedBoardImageCount === 1 ? "toggle-selection" : "none",
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        zoom: boardView.zoom,
+        historySnapshot: captureCurrentBoardHistorySnapshot(),
+        originPositions: Object.fromEntries(
+          selectedBoardImages.map((selectedImage) => [
+            selectedImage.id,
+            {
+              x: selectedImage.x,
+              y: selectedImage.y
+            }
+          ])
+        )
+      });
+      return;
+    }
+
+    startBoardImageSelection(image.id, event);
     startBoardInteraction(event, {
       type: "drag",
       imageId: image.id,
@@ -11269,7 +12358,8 @@ export default function App() {
       startClientY: event.clientY,
       originX: image.x,
       originY: image.y,
-      zoom: boardView.zoom
+      zoom: boardView.zoom,
+      historySnapshot: captureCurrentBoardHistorySnapshot()
     });
   }
 
@@ -11527,25 +12617,25 @@ export default function App() {
       return;
     }
 
-    setBoard(nextBoard);
-    setImageCount(getBoardImageCount(nextBoard));
-    setBoardView(getFittedBoardView(nextBoard));
-    setOutfit(boardToSyntheticOutfit(nextBoard));
-    setRecentOutfits((current) =>
-      rememberRecentOutfit(
-        current,
-        boardToSyntheticOutfit(nextBoard),
-        true,
-        {
-          preserveLiked: true,
-          liked: Boolean(likedOutfitKeys[getBoardKey(nextBoard)])
-        }
-      )
-    );
-    setActiveBoardImageId(null);
-    setPickerBoardImageId(null);
-    setActiveAccessorySlot(null);
-    setActiveOutfitSlot(null);
+    commitBoardSnapshotChange(nextBoard, {
+      historySnapshot: captureCurrentBoardHistorySnapshot(),
+      nextImageCount: getBoardImageCount(nextBoard),
+      nextBoardView: getFittedBoardView(nextBoard),
+      clearBoardImageUi: true,
+      onAfterApply: () => {
+        setRecentOutfits((current) =>
+          rememberRecentOutfit(
+            current,
+            boardToSyntheticOutfit(nextBoard),
+            true,
+            {
+              preserveLiked: true,
+              liked: Boolean(likedOutfitKeys[getBoardKey(nextBoard)])
+            }
+          )
+        );
+      }
+    });
   }
 
   function renderSavedOutfitPreview(savedOutfit) {
@@ -12481,18 +13571,16 @@ export default function App() {
             type="button"
             className="ghost-button danger"
             onClick={() => {
-              setBoard((current) => {
-                if (!current) {
-                  return current;
-                }
+              const currentBoard = boardRef.current;
+              if (!currentBoard) {
+                return;
+              }
 
-                const nextImages = current.images.filter((image) => image.id !== pickerBoardImage.id);
-
-                return nextImages.length ? relayoutBoardStateImages(nextImages) : null;
+              const nextImages = currentBoard.images.filter((image) => image.id !== pickerBoardImage.id);
+              commitBoardSnapshotChange(nextImages.length ? relayoutBoardStateImages(nextImages) : null, {
+                historySnapshot: captureCurrentBoardHistorySnapshot(),
+                clearBoardImageUi: true
               });
-              setActiveBoardImageId(null);
-              setPickerBoardImageId(null);
-              setGuidedDebugPayload([]);
             }}
           >
             Remove
@@ -12664,9 +13752,202 @@ export default function App() {
     : [];
 
   function renderBoardCanvas() {
+    const boardTagActionSuggestions = boardTagActionMode === "remove" ? selectedBoardTags : allLibraryTags;
+    const boardTagActionSelectedTags =
+      boardTagActionMode === "remove" ? boardBulkMetadataDraft.removeTags : boardBulkMetadataDraft.addTags;
+    const showFavoriteBoardAction = selectedBoardFavoriteValues.length > 1 || !selectedBoardFavoriteValues[0];
+    const showUnfavoriteBoardAction = selectedBoardFavoriteValues.length > 1 || Boolean(selectedBoardFavoriteValues[0]);
+    const showExcludeBoardAction = selectedBoardExcludedValues.length > 1 || !selectedBoardExcludedValues[0];
+    const showIncludeBoardAction = selectedBoardExcludedValues.length > 1 || Boolean(selectedBoardExcludedValues[0]);
+
     return (
       <div className="board-stage">
         <div className="board-canvas-toolbar" aria-label="Canvas controls">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleUndoBoardChange}
+            disabled={!boardUndoStack.length}
+            title="Undo"
+            aria-label="Undo"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleRedoBoardChange}
+            disabled={!boardRedoStack.length}
+            title="Redo"
+            aria-label="Redo"
+          >
+            Redo
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={handleRearrangeCurrentBoard}
+            disabled={!board?.images?.length || board.images.length <= 1}
+            title="Rearrange board"
+            aria-label="Rearrange board"
+          >
+            Rearrange
+          </button>
+          {boardSelectMode ? (
+            <>
+              <span className="board-canvas-selection-count">{selectedBoardImageCount} selected</span>
+              <div ref={boardSelectionActionsRef} className="board-selection-actions-anchor">
+                <button
+                  type="button"
+                  className={`ghost-button board-selection-actions-trigger ${boardSelectionActionsOpen || boardTagActionMode ? "is-active" : ""}`}
+                  onMouseDown={preventMouseButtonFocus}
+                  onClick={() => setBoardSelectionActionsOpen((current) => !current)}
+                  aria-expanded={boardSelectionActionsOpen || Boolean(boardTagActionMode)}
+                  aria-haspopup="menu"
+                  aria-controls="board-selection-actions-popover"
+                  disabled={!hasSelectedBoardImages}
+                >
+                  Actions ▾
+                </button>
+                {(boardSelectionActionsOpen || boardTagActionMode) ? (
+                  <div
+                    id="board-selection-actions-popover"
+                    className="selection-actions-popover"
+                    aria-label="Board selection actions"
+                  >
+                    {boardTagActionMode ? (
+                      <div className="selection-action-editor">
+                        <button
+                          type="button"
+                          className="ghost-button selection-action-back"
+                          onClick={() => setBoardTagActionMode(null)}
+                        >
+                          Back
+                        </button>
+                        <p className="selection-action-title">
+                          {boardTagActionMode === "add" ? "Add tags" : "Remove tags"}
+                        </p>
+                        <TagInput
+                          selectedTags={boardTagActionSelectedTags}
+                          allTags={boardTagActionSuggestions}
+                          onChange={(nextTags) => {
+                            void handleBoardBulkTagDraftChange(boardTagActionMode, nextTags);
+                          }}
+                          placeholder={boardTagActionMode === "add" ? "Add tag" : "Remove tag"}
+                          autoFocus
+                          showAllSuggestionsOnFocus
+                          className="selection-action-tag-input"
+                          suggestionsClassName="selection-action-tag-input-suggestions"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="selection-actions-popover-section">
+                          {selectedBoardImageCount === 1 ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={openBoardSelectionEditor}
+                            >
+                              Edit
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="selection-actions-popover-item"
+                            onClick={() => setBoardTagActionMode("add")}
+                          >
+                            Add tags
+                          </button>
+                          <button
+                            type="button"
+                            className="selection-actions-popover-item"
+                            onClick={() => setBoardTagActionMode("remove")}
+                          >
+                            Remove tags
+                          </button>
+                        </div>
+                        <div className="selection-actions-popover-section selection-actions-popover-section-divider">
+                          {showFavoriteBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkFavoriteEditForReferenceIds(selectedBoardReferenceIdList, "yes");
+                              }}
+                            >
+                              Favorite
+                            </button>
+                          ) : null}
+                          {showUnfavoriteBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkFavoriteEditForReferenceIds(selectedBoardReferenceIdList, "no");
+                              }}
+                            >
+                              Unfavorite
+                            </button>
+                          ) : null}
+                          {showExcludeBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkExcludedEditForReferenceIds(selectedBoardReferenceIdList, "yes");
+                              }}
+                            >
+                              Exclude
+                            </button>
+                          ) : null}
+                          {showIncludeBoardAction ? (
+                            <button
+                              type="button"
+                              className="selection-actions-popover-item"
+                              onClick={async () => {
+                                setBoardSelectionActionsOpen(false);
+                                await applyImmediateBulkExcludedEditForReferenceIds(selectedBoardReferenceIdList, "no");
+                              }}
+                            >
+                              Include
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="selection-actions-popover-section selection-actions-popover-section-danger">
+                          <button
+                            type="button"
+                            className="selection-actions-popover-item is-danger"
+                            onClick={removeSelectedBoardImages}
+                          >
+                            Remove selected images
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={clearSelectedBoardImages}
+                disabled={!hasSelectedBoardImages}
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={exitBoardSelectMode}
+              >
+                Done
+              </button>
+            </>
+          ) : null}
           <button
             type="button"
             className="ghost-button"
@@ -12710,12 +13991,13 @@ export default function App() {
                   image={image}
                   item={item}
                   isActive={activeBoardImageId === image.id}
+                  isSelected={selectedBoardImageIdSet.has(image.id)}
+                  isSelectMode={boardSelectMode}
                   isEditing={editingId === item.id && editorReturnTarget === "outfit"}
                   isPickerOpen={pickerBoardImageId === image.id}
                   onMetrics={(metrics) => syncBoardImageDimensions(image.id, item, metrics)}
                   onImagePointerDown={handleBoardImagePointerDown}
                   onImageDoubleClick={(boardImage, boardItem) => {
-                    selectBoardImage(boardImage.id);
                     openReferencePreview(boardItem);
                   }}
                   onEditImage={toggleBoardImageEdit}
@@ -12752,6 +14034,7 @@ export default function App() {
                 item={item}
                 isSelected={selectedReferenceIdSet.has(item.id)}
                 isExcluded={Boolean(excluded[item.id])}
+                isOnCurrentBoard={currentBoardReferenceIdSet.has(item.id)}
                 isMobileViewport={isMobileViewport}
                 isMobileSelectMode={mobileLibrarySelectMode}
                 cardStyle={style}
@@ -12768,6 +14051,7 @@ export default function App() {
               item={item}
               isSelected={selectedReferenceIdSet.has(item.id)}
               isExcluded={Boolean(excluded[item.id])}
+              isOnCurrentBoard={currentBoardReferenceIdSet.has(item.id)}
               isMobileViewport={isMobileViewport}
               isMobileSelectMode={mobileLibrarySelectMode}
               cardStyle={style}
@@ -13842,15 +15126,26 @@ export default function App() {
                 <div className="outfit-filters-panel">
                   <div className="outfit-filter-groups">
                     <section className="outfit-filter-group controls-reference-filter-module">
+                      <label className="wardrobe-filter-search">
+                        <span className="sr-only">Search reference filter tags</span>
+                        <input
+                          type="search"
+                          value={controlsReferenceFilterSearch}
+                          onChange={(event) => setControlsReferenceFilterSearch(event.target.value)}
+                          placeholder="Search filter options"
+                          aria-label="Search reference filter tags"
+                        />
+                      </label>
                       <TagTree
-                        entries={allLibraryTagEntries}
+                        entries={filteredControlsReferenceTagEntries}
                         selectedTags={generationMetadataFilters.tags}
                         excludedTags={generationMetadataFilters.excludedTags}
                         onToggleTag={toggleGenerationMetadataTagFilter}
                         onToggleGroup={toggleGenerationMetadataTagGroup}
                         storageKey="controls-reference-filters"
-                        noTagsCount={allLibraryNoTagsCount}
+                        noTagsCount={filteredControlsReferenceNoTagsCount}
                         variant="compact"
+                        searchQuery={controlsReferenceFilterSearchQuery}
                         headerActions={(
                           <div className="wardrobe-tag-match-toggle controls-reference-match-toggle" role="group" aria-label="Tag matching">
                             <button
@@ -14146,6 +15441,22 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="selection-actions-popover-item"
+                                  onClick={createBoardFromSelectedReferences}
+                                >
+                                  Create Board from Selection
+                                </button>
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
+                                  onClick={addSelectedReferencesToCurrentBoard}
+                                >
+                                  Add Selection to Current Board
+                                </button>
+                              </div>
+                              <div className="selection-actions-popover-section selection-actions-popover-section-divider">
+                                <button
+                                  type="button"
+                                  className="selection-actions-popover-item"
                                   onClick={() => toggleLibraryTagAction("add")}
                                 >
                                   Add tags
@@ -14254,6 +15565,7 @@ export default function App() {
                     </div>
 
                     <div className="library-command-bar-main-actions">
+                      <a className="secondary-button" href="?library=folder">Open folder library</a>
                       <button
                         ref={wardrobeFiltersTriggerRef}
                         type="button"
@@ -15083,6 +16395,22 @@ export default function App() {
                                 ) : (
                                   <>
                                     <div className="selection-actions-popover-section">
+                                      <button
+                                        type="button"
+                                        className="selection-actions-popover-item"
+                                        onClick={createBoardFromSelectedReferences}
+                                      >
+                                        Create Board from Selection
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="selection-actions-popover-item"
+                                        onClick={addSelectedReferencesToCurrentBoard}
+                                      >
+                                        Add Selection to Current Board
+                                      </button>
+                                    </div>
+                                    <div className="selection-actions-popover-section selection-actions-popover-section-divider">
                                       <button
                                         type="button"
                                         className="selection-actions-popover-item"

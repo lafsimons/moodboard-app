@@ -90,7 +90,24 @@ let indexedDbFactory = () => globalThis.indexedDB;
 let databaseReadyPromise = null;
 let activeMetadataSnapshotRequest = null;
 let pendingMetadataSnapshotRequest = null;
+let backgroundMetadataSnapshotDrainScheduled = false;
 let startupStorageDebugPhase = "idle";
+let cachedDeviceId = "";
+let cachedPersistedAppState = null;
+let hasCachedPersistedAppState = false;
+
+function resetRuntimeStorageCaches() {
+  cachedDeviceId = "";
+  cachedPersistedAppState = null;
+  hasCachedPersistedAppState = false;
+}
+
+function setCachedPersistedAppState(value) {
+  cachedPersistedAppState = value && typeof value === "object" && !Array.isArray(value)
+    ? cloneData(value)
+    : value ?? null;
+  hasCachedPersistedAppState = true;
+}
 
 function isStartupStorageDebugEnabled() {
   return true;
@@ -143,6 +160,81 @@ function instrumentStoreWriteCounters(store, writeCounts) {
 
 function cloneData(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function isLibraryPerfDebugEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("debugLibraryPerf") === "1") {
+      return true;
+    }
+
+    return window.localStorage.getItem("debug:library-perf") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function isStorageSaveDebugEnabled() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("debugStorageSave") === "1") {
+      return true;
+    }
+
+    return window.localStorage.getItem("debug:storage-save") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function createStoragePerfSession(enabled, label) {
+  if (!enabled || typeof performance === "undefined") {
+    return null;
+  }
+
+  const startedAt = performance.now();
+  const marks = [];
+
+  return {
+    mark(entryLabel, extra = null) {
+      marks.push({
+        label: entryLabel,
+        extra,
+        time: performance.now()
+      });
+    },
+    flush() {
+      if (!marks.length) {
+        return;
+      }
+
+      const totalDuration = Math.round((marks.at(-1).time - startedAt) * 100) / 100;
+      console.groupCollapsed(`[perf] ${label} ${totalDuration}ms`);
+
+      marks.forEach((entry, index) => {
+        const previousTime = index === 0 ? startedAt : marks[index - 1].time;
+        const delta = Math.round((entry.time - previousTime) * 100) / 100;
+        const total = Math.round((entry.time - startedAt) * 100) / 100;
+
+        if (entry.extra) {
+          console.log(`${entry.label} +${delta}ms (${total}ms total)`, entry.extra);
+        } else {
+          console.log(`${entry.label} +${delta}ms (${total}ms total)`);
+        }
+      });
+
+      console.groupEnd();
+    }
+  };
 }
 
 function normalizePersistedId(value) {
@@ -1481,6 +1573,7 @@ export async function saveSafeModeAppState(value) {
       value
     })
   );
+  setCachedPersistedAppState(value);
 }
 
 export async function deleteSafeModeItems(ids = []) {
@@ -1784,7 +1877,8 @@ export async function loadItems(options = {}) {
   return defaultWardrobe.map(migrateReferenceMetadataToTags);
 }
 
-export async function saveItem(item) {
+export async function saveItem(item, options = {}) {
+  const shouldMaterializeResult = options.materializeResult !== false;
   const incomingItem = omitMediaUpdateIntent(item);
   const existingItem = typeof incomingItem?.id === "string" && incomingItem.id.trim()
     ? await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) => store.get(incomingItem.id.trim()))
@@ -1797,13 +1891,17 @@ export async function saveItem(item) {
   const mergedItem = mergeItemImageState(existingOwnerItem, incomingItem);
   const normalizedMergedImages = normalizeItemImages(mergedItem);
   const storedItem = stripItemInlineMediaFields(mergedItem);
-  const beforeSnapshot = await createSaveMediaDebugSnapshot(existingOwnerItem);
+  const storageSaveDebugEnabled = isStorageSaveDebugEnabled();
 
-  console.log("[storage.saveItem] before", {
-    saveKind,
-    mediaUpdateIntent: normalizeMediaUpdateIntent(item?.mediaUpdateIntent),
-    snapshot: beforeSnapshot
-  });
+  if (storageSaveDebugEnabled) {
+    const beforeSnapshot = await createSaveMediaDebugSnapshot(existingOwnerItem);
+
+    console.log("[storage.saveItem] before", {
+      saveKind,
+      mediaUpdateIntent: normalizeMediaUpdateIntent(item?.mediaUpdateIntent),
+      snapshot: beforeSnapshot
+    });
+  }
 
   await withStore(ITEM_STORE, "readwrite", (store) => store.put(storedItem));
 
@@ -1811,30 +1909,34 @@ export async function saveItem(item) {
   const thumbnailAsset = normalizedMergedImages.thumbnail;
 
   if (saveKind === "metadataOnly") {
-    const [storedPreviewAsset, storedThumbnailAsset, storedOriginalEntry] = await Promise.all([
-      loadStoredItemMediaAsset(storedItem.id, "preview"),
-      loadStoredItemMediaAsset(storedItem.id, "thumbnail"),
-      storedItem.itemUuid ? loadOriginalImageBlobEntry(storedItem.itemUuid) : Promise.resolve(null)
-    ]);
+    const requiresMetadataMediaBackfill = !existingItem || (existingOwnerItem?.id && existingOwnerItem.id !== storedItem.id);
 
-    if (!storedPreviewAsset && previewAsset?.src) {
-      await saveStoredItemMediaAsset(storedItem.id, "preview", previewAsset);
-    }
+    if (requiresMetadataMediaBackfill) {
+      const [storedPreviewAsset, storedThumbnailAsset, storedOriginalEntry] = await Promise.all([
+        loadStoredItemMediaAsset(storedItem.id, "preview"),
+        loadStoredItemMediaAsset(storedItem.id, "thumbnail"),
+        storedItem.itemUuid ? loadOriginalImageBlobEntry(storedItem.itemUuid) : Promise.resolve(null)
+      ]);
 
-    if (!storedThumbnailAsset && thumbnailAsset?.src) {
-      await saveStoredItemMediaAsset(storedItem.id, "thumbnail", thumbnailAsset);
-    }
-
-    if (!storedOriginalEntry && storedItem.originalPreserved && storedItem.itemUuid && normalizedMergedImages.original?.src) {
-      const originalBlob = await convertImageAssetToBlob(normalizedMergedImages.original);
-
-      if (originalBlob) {
-        await saveOriginalImageBlob(storedItem.itemUuid, originalBlob, normalizedMergedImages.original);
+      if (!storedPreviewAsset && previewAsset?.src) {
+        await saveStoredItemMediaAsset(storedItem.id, "preview", previewAsset);
       }
-    }
 
-    if (!existingItem && existingOwnerItem?.id && existingOwnerItem.id !== storedItem.id) {
-      await copyStoredItemMediaAssets(existingOwnerItem.id, storedItem.id);
+      if (!storedThumbnailAsset && thumbnailAsset?.src) {
+        await saveStoredItemMediaAsset(storedItem.id, "thumbnail", thumbnailAsset);
+      }
+
+      if (!storedOriginalEntry && storedItem.originalPreserved && storedItem.itemUuid && normalizedMergedImages.original?.src) {
+        const originalBlob = await convertImageAssetToBlob(normalizedMergedImages.original);
+
+        if (originalBlob) {
+          await saveOriginalImageBlob(storedItem.itemUuid, originalBlob, normalizedMergedImages.original);
+        }
+      }
+
+      if (!existingItem && existingOwnerItem?.id && existingOwnerItem.id !== storedItem.id) {
+        await copyStoredItemMediaAssets(existingOwnerItem.id, storedItem.id);
+      }
     }
   } else if (saveKind === "mediaRemove") {
     await deleteStoredItemMediaAssets(storedItem.id);
@@ -1864,18 +1966,111 @@ export async function saveItem(item) {
     }
   }
 
-  const materializedMergedItem = await materializeStoredItemMedia(mergedItem);
-  const afterSnapshot = await createSaveMediaDebugSnapshot(storedItem);
+  const materializedMergedItem = shouldMaterializeResult
+    ? await materializeStoredItemMedia(mergedItem)
+    : null;
 
-  console.log("[storage.saveItem] after", {
-    saveKind,
-    mediaUpdateIntent: normalizeMediaUpdateIntent(item?.mediaUpdateIntent),
-    snapshot: afterSnapshot
-  });
+  if (storageSaveDebugEnabled) {
+    const afterSnapshot = await createSaveMediaDebugSnapshot(storedItem);
+
+    console.log("[storage.saveItem] after", {
+      saveKind,
+      mediaUpdateIntent: normalizeMediaUpdateIntent(item?.mediaUpdateIntent),
+      snapshot: afterSnapshot
+    });
+  }
 
   await markReferenceSyncMetadataDirtyForItem(storedItem);
 
-  return materializedMergedItem;
+  return materializedMergedItem ?? mergedItem;
+}
+
+export async function saveItems(items, options = {}) {
+  const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
+
+  if (!normalizedItems.length) {
+    return [];
+  }
+
+  const shouldMaterializeResult = options.materializeResult !== false;
+  const incomingItems = normalizedItems.map((item) => omitMediaUpdateIntent(item));
+  const incomingIds = [...new Set(incomingItems.map((item) => normalizeSyncText(item?.id)).filter(Boolean))];
+
+  if (incomingIds.length !== incomingItems.length) {
+    return Promise.all(normalizedItems.map((item) => saveItem(item, options)));
+  }
+
+  const existingItems = await withStoreWithoutMigration(ITEM_STORE, "readonly", (store) =>
+    Promise.all(incomingIds.map((itemId) => requestToPromise(store.get(itemId))))
+  );
+  const existingItemsById = Object.fromEntries(
+    incomingIds.map((itemId, index) => [itemId, existingItems[index] ?? null])
+  );
+
+  const batchableItems = [];
+
+  for (let index = 0; index < normalizedItems.length; index += 1) {
+    const originalItem = normalizedItems[index];
+    const incomingItem = incomingItems[index];
+    const existingItem = existingItemsById[normalizeSyncText(incomingItem?.id)] ?? null;
+
+    if (!existingItem) {
+      return Promise.all(normalizedItems.map((item) => saveItem(item, options)));
+    }
+
+    if (classifyItemSave(existingItem, originalItem) !== "metadataOnly") {
+      return Promise.all(normalizedItems.map((item) => saveItem(item, options)));
+    }
+
+    batchableItems.push({
+      mergedItem: mergeItemImageState(existingItem, incomingItem),
+      existingItem
+    });
+  }
+
+  const metadataKeys = batchableItems
+    .map(({ mergedItem }) => createReferenceSyncMetadataKey(mergedItem?.itemUuid))
+    .filter(Boolean);
+  const existingMetadataEntries = metadataKeys.length
+    ? await withStore(SYNC_METADATA_STORE, "readonly", (store) =>
+        Promise.all(metadataKeys.map((metadataKey) => requestToPromise(store.get(metadataKey))))
+      )
+    : [];
+  const existingMetadataByKey = Object.fromEntries(
+    metadataKeys.map((metadataKey, index) => [metadataKey, existingMetadataEntries[index] ?? null])
+  );
+  const deviceId = await getOrCreateDeviceId();
+
+  await withStores([ITEM_STORE, SYNC_METADATA_STORE], "readwrite", ({ items: itemStore, syncMetadata }) => {
+    batchableItems.forEach(({ mergedItem }) => {
+      const storedItem = stripItemInlineMediaFields(mergedItem);
+      itemStore.put(storedItem);
+
+      const metadataKey = createReferenceSyncMetadataKey(storedItem.itemUuid);
+
+      if (!metadataKey) {
+        return;
+      }
+
+      syncMetadata.put(
+        createNextDirtySyncMetadataRecord({
+          key: metadataKey,
+          entityType: "mbaReference",
+          stableKey: normalizeSyncText(storedItem.itemUuid),
+          localId: normalizeSyncText(storedItem.id),
+          existingRecord: existingMetadataByKey[metadataKey] ?? null,
+          deviceId,
+          pendingDelete: false
+        })
+      );
+    });
+  });
+
+  if (shouldMaterializeResult) {
+    return Promise.all(batchableItems.map(({ mergedItem }) => materializeStoredItemMedia(mergedItem)));
+  }
+
+  return batchableItems.map(({ mergedItem }) => mergedItem);
 }
 
 export async function markItemOriginalRecovered(itemOrId, recoveryItem = {}) {
@@ -2025,31 +2220,54 @@ export async function deleteItem(id) {
 }
 
 export async function loadAppState() {
+  if (hasCachedPersistedAppState) {
+    return cloneData(cachedPersistedAppState);
+  }
+
   const entry = await withStore(APP_STORE, "readonly", (store) => store.get("state"));
-  return entry?.value ?? null;
+  setCachedPersistedAppState(entry?.value ?? null);
+  return cloneData(cachedPersistedAppState);
 }
 
 export async function saveAppState(value, options = {}) {
+  const perfSession = createStoragePerfSession(isLibraryPerfDebugEnabled(), "save app state");
   const sanitizedValue = sanitizePersistedAppState(value);
   const { serialized, approxBytes } = getApproxSerializedBytes(sanitizedValue);
+  perfSession?.mark("next app state sanitized", {
+    approxBytes
+  });
 
   if (approxBytes > PERSISTED_APP_STATE_MAX_BYTES) {
+    perfSession?.mark("aborted: app state too large");
+    perfSession?.flush();
     return false;
   }
 
   const hasPreviousAppStateOverride = Object.prototype.hasOwnProperty.call(options, "previousAppState");
   const previousAppState = hasPreviousAppStateOverride
     ? options.previousAppState
-    : await loadAppState();
+    : hasCachedPersistedAppState
+      ? cachedPersistedAppState
+      : await loadAppState();
+  perfSession?.mark(
+    hasPreviousAppStateOverride || hasCachedPersistedAppState
+      ? "previous app state reused from memory"
+      : "previous app state loaded"
+  );
   const sanitizedPreviousAppState = sanitizePersistedAppState(
     previousAppState && typeof previousAppState === "object" && !Array.isArray(previousAppState)
       ? previousAppState
       : {}
   );
+  perfSession?.mark("previous app state sanitized");
 
   if (serialized === JSON.stringify(sanitizedPreviousAppState)) {
+    setCachedPersistedAppState(sanitizedPreviousAppState);
+    perfSession?.mark("skipped: app state unchanged");
+    perfSession?.flush();
     return true;
   }
+  perfSession?.mark("app state diff detected");
 
   await withStore(APP_STORE, "readwrite", (store) =>
     store.put({
@@ -2057,6 +2275,8 @@ export async function saveAppState(value, options = {}) {
       value: sanitizedValue
     })
   );
+  setCachedPersistedAppState(sanitizedValue);
+  perfSession?.mark("app state record persisted");
 
   const previousSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(sanitizedPreviousAppState?.savedOutfits);
   const nextSavedBoardsByStableKey = createSavedBoardMetadataByStableKey(sanitizedValue?.savedOutfits);
@@ -2064,12 +2284,18 @@ export async function saveAppState(value, options = {}) {
     ...Object.keys(previousSavedBoardsByStableKey),
     ...Object.keys(nextSavedBoardsByStableKey)
   ]);
+  perfSession?.mark("saved board metadata diff prepared", {
+    affectedStableKeyCount: affectedStableKeys.size
+  });
 
   if (!affectedStableKeys.size) {
+    perfSession?.mark("completed: no saved board sync metadata updates");
+    perfSession?.flush();
     return true;
   }
 
   const deviceId = await getOrCreateDeviceId();
+  perfSession?.mark("device id resolved");
   const nextMetadataEntries = await Promise.all(
     [...affectedStableKeys].map(async (stableKey) => {
       const previousSavedBoard = previousSavedBoardsByStableKey[stableKey] ?? null;
@@ -2105,12 +2331,21 @@ export async function saveAppState(value, options = {}) {
       });
     })
   );
+  perfSession?.mark("saved board sync metadata computed", {
+    dirtyEntryCount: nextMetadataEntries.filter(Boolean).length
+  });
 
   await Promise.all(nextMetadataEntries.filter(Boolean).map((entry) => upsertSyncMetadata(entry)));
+  perfSession?.mark("saved board sync metadata persisted");
+  perfSession?.flush();
   return true;
 }
 
 export async function getOrCreateDeviceId() {
+  if (cachedDeviceId) {
+    return cachedDeviceId;
+  }
+
   const existingState = await withStore(SYNC_STATE_STORE, "readonly", (store) => store.get(SYNC_STATE_KEY));
   const normalizedExistingState = normalizeSyncState(existingState);
 
@@ -2119,7 +2354,8 @@ export async function getOrCreateDeviceId() {
       await withStore(SYNC_STATE_STORE, "readwrite", (store) => store.put(normalizedExistingState));
     }
 
-    return normalizedExistingState.deviceId;
+    cachedDeviceId = normalizedExistingState.deviceId;
+    return cachedDeviceId;
   }
 
   const nextDeviceId = createDeviceId();
@@ -2127,7 +2363,8 @@ export async function getOrCreateDeviceId() {
   await withStore(SYNC_STATE_STORE, "readwrite", (store) =>
     store.put(nextState)
   );
-  return nextDeviceId;
+  cachedDeviceId = nextDeviceId;
+  return cachedDeviceId;
 }
 
 export async function getSyncMetadata(key = null) {
@@ -2830,6 +3067,26 @@ async function drainMetadataSnapshotQueue() {
   }
 }
 
+function scheduleMetadataSnapshotDrain(priority = "background") {
+  if (priority === "blocking") {
+    void drainMetadataSnapshotQueue();
+    return;
+  }
+
+  if (backgroundMetadataSnapshotDrainScheduled) {
+    return;
+  }
+
+  backgroundMetadataSnapshotDrainScheduled = true;
+  setTimeout(() => {
+    backgroundMetadataSnapshotDrainScheduled = false;
+
+    if (activeMetadataSnapshotRequest) {
+      void drainMetadataSnapshotQueue();
+    }
+  }, 0);
+}
+
 export function requestMetadataSnapshot(options = {}) {
   const requestDescriptor = {
     ...options,
@@ -2846,7 +3103,7 @@ export function requestMetadataSnapshot(options = {}) {
 
     if (!activeMetadataSnapshotRequest) {
       activeMetadataSnapshotRequest = nextRequest;
-      void drainMetadataSnapshotQueue();
+      scheduleMetadataSnapshotDrain(nextRequest.priority);
       return;
     }
 
@@ -2922,6 +3179,7 @@ export async function exportBackup(options = {}) {
 
 export async function replaceWithPreparedBackup(backup) {
   const validatedBackup = validatePreparedBackupForReplacement(backup);
+  resetRuntimeStorageCaches();
 
   await withStores(
     [ITEM_STORE, APP_STORE, ITEM_MEDIA_STORE, ORIGINAL_STORE, SYNC_METADATA_STORE, ORIGINAL_RECOVERY_STORE],
@@ -2942,11 +3200,14 @@ export async function replaceWithPreparedBackup(backup) {
     }
   );
 
+  setCachedPersistedAppState(validatedBackup.appState);
+
   await backfillLocalSyncMetadata(validatedBackup.items, validatedBackup.appState?.savedOutfits ?? []);
 }
 
 export async function replaceWithPreparedBackupPackage(preparedPackage, options = {}) {
   const validatedPackage = validatePreparedBackupPackageForReplacement(preparedPackage);
+  resetRuntimeStorageCaches();
   const previewChunkSize = Math.max(
     1,
     Math.round(Number(options.previewChunkSize) || BACKUP_PACKAGE_PREVIEW_IMPORT_CHUNK_SIZE)
@@ -2972,6 +3233,8 @@ export async function replaceWithPreparedBackupPackage(preparedPackage, options 
       });
     }
   );
+
+  setCachedPersistedAppState(validatedPackage.appState);
 
   if (publishProgress) {
     publishProgress({
@@ -3088,4 +3351,6 @@ export async function resetToDefaults() {
 export function __setIndexedDbFactoryForTests(factory) {
   indexedDbFactory = typeof factory === "function" ? factory : () => globalThis.indexedDB;
   databaseReadyPromise = null;
+  backgroundMetadataSnapshotDrainScheduled = false;
+  resetRuntimeStorageCaches();
 }

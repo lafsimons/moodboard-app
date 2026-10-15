@@ -1,9 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
-import SafeModeRecovery from "./components/SafeModeRecovery.jsx";
-import { resetToDefaults } from "./repositories/backupRepository.js";
 import "./styles.css";
+
+// Folder mode never imports or mounts the legacy persistence/editor graph.
+const folderMode = new URLSearchParams(window.location.search).get("library") === "folder";
+const App = React.lazy(() => import("./App"));
+const SafeModeRecovery = React.lazy(() => import("./components/SafeModeRecovery.jsx"));
+const FolderLibrary = React.lazy(() => import("./components/FolderLibrary.jsx"));
 
 function isSafeModeRecoveryEnabled() {
   try {
@@ -34,6 +37,8 @@ class RootErrorBoundary extends React.Component {
     this.setState({ resetting: true });
 
     try {
+      if (folderMode) return;
+      const { resetToDefaults } = await import("./repositories/backupRepository.js");
       await resetToDefaults();
       window.location.reload();
     } catch (error) {
@@ -44,6 +49,9 @@ class RootErrorBoundary extends React.Component {
 
   render() {
     if (this.state.error) {
+      if (folderMode) {
+        return <main className="safe-mode-recovery-shell"><h1>Folder library could not be displayed.</h1><p>No library data was changed.</p><a href={window.location.pathname}>Return to browser library</a></main>;
+      }
       return (
         <main className="app-shell crash-state">
           <div className="crash-panel panel">
@@ -70,7 +78,9 @@ class RootErrorBoundary extends React.Component {
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <RootErrorBoundary>
-      {isSafeModeRecoveryEnabled() ? <SafeModeRecovery /> : <App />}
+      <React.Suspense fallback={<p role="status">Loading…</p>}>
+        {folderMode ? <FolderLibrary /> : isSafeModeRecoveryEnabled() ? <SafeModeRecovery /> : <App />}
+      </React.Suspense>
     </RootErrorBoundary>
   </React.StrictMode>
 );

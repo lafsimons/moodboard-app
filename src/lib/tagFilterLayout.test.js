@@ -48,7 +48,11 @@ test("MBA library filter panel contains the saved views controls instead of a st
 });
 
 test("MBA controls reference filters include grouped matching, compact expand collapse, and apply shared library views", () => {
+  assert.match(appSource, /value=\{controlsReferenceFilterSearch\}/);
+  assert.match(appSource, /setControlsReferenceFilterSearch\(event\.target\.value\)/);
+  assert.match(appSource, /placeholder="Search filter options"/);
   assert.match(appSource, /storageKey="controls-reference-filters"[\s\S]*variant="compact"/);
+  assert.match(appSource, /storageKey="controls-reference-filters"[\s\S]*searchQuery=\{controlsReferenceFilterSearchQuery\}/);
   assert.match(appSource, /generationMetadataFilters\.tagMatchMode === "grouped"/);
   assert.match(appSource, /controls-reference-views-button/);
   assert.match(appSource, /id="controls-library-views-popover"/);

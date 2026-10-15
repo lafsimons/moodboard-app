@@ -8,6 +8,7 @@ import {
   loadMediaIntegritySnapshot as loadStoredMediaIntegritySnapshot,
   loadItems as loadStoredItems,
   loadOriginalImageBlobEntry,
+  saveItems as saveStoredItems,
   loadStartupAppState as loadStoredStartupAppState,
   markItemOriginalRecovered as markStoredItemOriginalRecovered,
   loadStartupItemMetadata as loadStoredStartupItemMetadata,
@@ -708,7 +709,7 @@ export async function saveItem(item) {
 
 export async function saveItems(items) {
   const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
-  await Promise.all(normalizedItems.map((item) => saveStoredItem(item)));
+  await saveStoredItems(normalizedItems, { materializeResult: false });
 }
 
 export async function deleteItem(id) {

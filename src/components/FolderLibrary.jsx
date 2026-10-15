@@ -1,0 +1,126 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { folderLibraryTagOptions, selectFolderLibraryItems } from '../lib/folderLibraryView.js';
+import { getReferencePreviewNavigation } from '../lib/referencePreview.js';
+import './FolderLibrary.css';
+
+const PAGE_SIZE = 80;
+const badge = (item) => !item.assets.image ? 'Image unavailable' : item.imageKind === 'preview-fallback' ? 'Preview fallback' : '';
+
+function LibraryImage({ item, large = false }) {
+  const [failed, setFailed] = useState(false);
+  const desktop = item.assets['image-thumbs']?.url;
+  const mobile = item.assets['image-thumbs-mobile']?.url;
+  const src = large ? desktop || item.assets.image?.url : mobile || desktop;
+  if (!src || failed) return <span className="folder-image-missing">Image unavailable</span>;
+  return <picture>
+    {!large && desktop && mobile ? <source media="(min-width: 900px)" srcSet={desktop} /> : null}
+    <img src={src} alt={item.name} loading={large ? 'eager' : 'lazy'} decoding="async" onError={() => setFailed(true)} />
+  </picture>;
+}
+
+function ItemViewer({ item, navigation, onSelect, onClose }) {
+  const dialog = useRef(null);
+  useEffect(() => {
+    const element = dialog.current;
+    const trigger = document.activeElement;
+    element.showModal();
+    return () => { element.close(); trigger?.focus?.(); };
+  }, []);
+  return <dialog className="folder-viewer" ref={dialog} onCancel={onClose} aria-labelledby="folder-item-title">
+    <header>
+      <button className="secondary-button" onClick={onClose}>Close preview</button>
+      <span>{navigation.activeIndex + 1} / {navigation.total}</span>
+      <button className="secondary-button" disabled={!navigation.hasPrevious} onClick={() => onSelect(navigation.previousItem.id)}>Previous</button>
+      <button className="secondary-button" disabled={!navigation.hasNext} onClick={() => onSelect(navigation.nextItem.id)}>Next</button>
+    </header>
+    <div className="folder-viewer-body">
+      <div className="folder-viewer-image"><LibraryImage key={item.id} item={item} large /></div>
+      <section>
+        <p className="eyebrow">Read-only metadata</p>
+        <h2 id="folder-item-title">{item.name || 'Untitled'}</h2>
+        <p>{item.folder}</p>
+        {badge(item) ? <p className="folder-status">{badge(item)} — {item.imageKind === 'preview-fallback' ? 'the original is unresolved.' : 'metadata is preserved.'}</p> : null}
+        {item.description ? <p className="folder-description">{item.description}</p> : null}
+        <h3>Tags</h3>
+        <ul className="folder-viewer-tags">{item.tags.map((tag, index) => <li key={`${tag}-${index}`}>{tag}</li>)}</ul>
+        <p className="folder-item-id">ID: {item.itemUuid}</p>
+        {item.assets.image ? <a href={item.assets.image.url} target="_blank" rel="noreferrer">{item.imageKind === 'original' ? 'Open original image' : 'Open available preview'}</a> : null}
+      </section>
+    </div>
+  </dialog>;
+}
+
+export default function FolderLibrary() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [reload, setReload] = useState(0);
+  const [search, setSearch] = useState('');
+  const [tags, setTags] = useState([]);
+  const [tagSearch, setTagSearch] = useState('');
+  const [tagMode, setTagMode] = useState('all');
+  const [folder, setFolder] = useState('');
+  const [sort, setSort] = useState('name');
+  const [page, setPage] = useState(0);
+  const [activeId, setActiveId] = useState(null);
+  useEffect(() => {
+    const abort = new AbortController();
+    setData(null); setError(''); setActiveId(null);
+    fetch('/__folder-library/catalog', { signal: abort.signal, cache: 'no-store' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('The folder library is unavailable. Check the local server and library location, then retry.');
+        if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Folder browsing needs the local app server.');
+        const result = await response.json();
+        if (!Array.isArray(result.items)) throw new Error('The library response is invalid.');
+        return result;
+      }).then(setData).catch((failure) => { if (failure.name !== 'AbortError') setError(failure.message); });
+    return () => abort.abort();
+  }, [reload]);
+  useEffect(() => { setPage(0); }, [search, tags, folder, sort, tagMode]);
+  const items = data?.items ?? [];
+  const visible = useMemo(() => selectFolderLibraryItems(items, { search, tags, tagMode, folder, sort }), [data, search, tags, tagMode, folder, sort]);
+  const tagOptions = useMemo(() => folderLibraryTagOptions(items), [data]);
+  const folders = useMemo(() => [...new Set(items.map((item) => item.folder))].sort(), [data]);
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const active = visible.find((item) => item.id === activeId);
+  const toggleTag = (tag) => setTags((current) => current.includes(tag) ? current.filter((value) => value !== tag) : [...current, tag]);
+  const clear = () => { setSearch(''); setTags([]); setFolder(''); setTagSearch(''); };
+  return <main className="folder-library">
+    <header className="folder-library-header">
+      <div><p className="eyebrow">Moodboard</p><h1>Folder library <span className="folder-readonly">Read-only</span></h1></div>
+      <div className="folder-header-actions">
+        <button className="secondary-button" onClick={() => setReload((n) => n + 1)}>Reload library</button>
+        <a className="secondary-button" href={window.location.pathname}>Return to browser library</a>
+      </div>
+    </header>
+    <p className="folder-library-note">Browse the exported library. Editing, board viewing, and folder sync are not enabled in this mode yet.</p>
+    {error ? <div role="alert" className="folder-load-state"><p>{error}</p><button className="primary-button" onClick={() => setReload((n) => n + 1)}>Retry</button></div>
+      : !data ? <p role="status" className="folder-load-state">Loading folder library…</p>
+      : <>
+        <div className="folder-tools">
+          <label>Search<input type="search" placeholder="Names, descriptions, tags…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+          <label>Folder<select value={folder} onChange={(event) => setFolder(event.target.value)}><option value="">All folders</option>{folders.map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label>Sort<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="favorites">Favorites first</option></select></label>
+          <button className="ghost-button" onClick={clear}>Clear filters</button>
+        </div>
+        <details className="folder-tag-filter">
+          <summary>Filter tags{tags.length ? ` (${tags.length})` : ''}</summary>
+          <div className="folder-tag-tools"><label>Find a tag<input type="search" value={tagSearch} onChange={(event) => setTagSearch(event.target.value)} /></label><label>Match<select value={tagMode} onChange={(event) => setTagMode(event.target.value)}><option value="all">All selected tags</option><option value="any">Any selected tag</option></select></label></div>
+          <div className="folder-tag-options">{tagOptions.filter((tag) => tag.toLowerCase().includes(tagSearch.toLowerCase())).map((tag) => <label key={tag}><input type="checkbox" checked={tags.includes(tag)} onChange={() => toggleTag(tag)} />{tag}</label>)}</div>
+        </details>
+        {tags.length ? <div className="folder-active-tags">{tags.map((tag) => <button key={tag} className="secondary-button" onClick={() => toggleTag(tag)} aria-label={`Remove filter ${tag}`}>{tag} ×</button>)}</div> : null}
+        <div className="folder-results-summary"><p role="status">{visible.length.toLocaleString()} of {items.length.toLocaleString()} images</p><p>{data.inventory.previewFallbacks} preview fallbacks · {data.inventory.metadataOnly} metadata-only</p></div>
+        {Object.keys(data.warningCounts).some((code) => !['ORIGINAL_UNRESOLVED', 'NO_MAIN_IMAGE', 'NO_THUMBNAIL'].includes(code)) ? <details><summary>Library warnings</summary><ul>{Object.entries(data.warningCounts).map(([code, count]) => <li key={code}>{code}: {count}</li>)}</ul></details> : null}
+        <div className="folder-grid">
+          {visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map((item) => <button type="button" className="folder-card" key={item.id} onClick={() => setActiveId(item.id)} aria-label={`View ${item.name || 'Untitled'}`}>
+            <div className="folder-card-image"><LibraryImage key={`${reload}-${item.id}`} item={item} /></div>
+            <span className="folder-card-title">{item.name || 'Untitled'}</span>
+            {badge(item) ? <span className="folder-status">{badge(item)}</span> : null}
+          </button>)}
+        </div>
+        {!visible.length ? <p className="folder-load-state">No images match these filters.</p> : null}
+        <nav className="folder-pagination" aria-label="Image pages"><button className="secondary-button" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>Previous page</button><span>Page {currentPage + 1} of {pageCount}</span><button className="secondary-button" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Next page</button></nav>
+        {active ? <ItemViewer item={active} navigation={getReferencePreviewNavigation(visible, active.id)} onSelect={setActiveId} onClose={() => setActiveId(null)} /> : null}
+      </>}
+  </main>;
+}
