@@ -3,6 +3,8 @@ import path from 'node:path';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream';
 import { readFolderLibrary, inspectPath } from './folderLibraryReader.node.js';
+import { projectFolderBoard } from './folderBoardView.js';
+import { readFolderLibraryEdits, effectiveMetadata, saveFolderLibraryMetadata, MetadataEditError } from './folderLibraryEdits.node.js';
 
 export const FOLDER_LIBRARY_PREFIX = '/__folder-library';
 const renderVariants = new Set(['image', 'image-thumbs', 'image-thumbs-mobile']);
@@ -12,10 +14,11 @@ const assetKey = (id, variant) => JSON.stringify([id, variant]);
 
 // Deliberate allowlist: never serialize sourceMetadata, filesystem paths, raw
 // warnings, or appState into the browser response. Full records stay on disk.
-export function folderLibraryClientSnapshot(snapshot) {
+export function folderLibraryClientSnapshot(snapshot, edits = { version: 1, items: [] }) {
   const indexed = new Map(snapshot.assets.map((asset) => [assetKey(asset.itemUuid, asset.variant), asset]));
   return {
     inventory: snapshot.inventory,
+    currentBoard: projectFolderBoard(snapshot.appState.board),
     warningCounts: snapshot.warnings.reduce((counts, warning) => {
       counts[warning.code] = (counts[warning.code] ?? 0) + 1;
       return counts;
@@ -36,15 +39,12 @@ export function folderLibraryClientSnapshot(snapshot) {
       }
       return {
         id: record.legacyId, itemUuid: record.itemUuid,
-        name: typeof record.name === 'string' ? record.name : '',
-        description: typeof source.description === 'string' ? source.description : '',
-        tags: Array.isArray(record.tags) ? record.tags.filter((tag) => typeof tag === 'string') : [],
         folder: typeof record.folder === 'string' ? record.folder : '',
-        favorite: Boolean(source.favorite),
         createdAt: typeof source.createdAt === 'number' || typeof source.createdAt === 'string' ? source.createdAt : null,
         imageKind: record.assets.image?.kind ?? 'metadata-only',
         presentation: Object.fromEntries(presentationFields.filter((field) => Number.isFinite(source[field])).map((field) => [field, source[field]])),
-        assets
+        assets,
+        ...effectiveMetadata(record, edits)
       };
     })
   };
@@ -84,14 +84,34 @@ export function createFolderLibraryMiddleware(root) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     if (!localRequest(req)) return fail(403, 'Folder library access is local and same-origin only.');
-    if (!['GET', 'HEAD'].includes(req.method)) {
+    const editMatch = pathname.match(/^\/__folder-library\/items\/([^/]+)\/metadata$/);
+    if (!['GET', 'HEAD'].includes(req.method) && !(editMatch && req.method === 'PATCH')) {
       res.setHeader('Allow', 'GET, HEAD');
-      return fail(405, 'Folder library is read-only.');
+      return fail(405, 'This resource does not accept that method.');
     }
     try {
+      if (editMatch && req.method === 'PATCH') {
+        // JSON + a mandatory matching Origin prevent cross-site form writes.
+        if (!req.headers.origin) return fail(403, 'Metadata saves require a same-origin request.');
+        if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') return fail(415, 'Metadata saves require JSON.');
+        let uuid;
+        try { uuid = decodeURIComponent(editMatch[1]); } catch { return fail(400, 'Invalid image identity.'); }
+        const chunks = []; let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > 256 * 1024) return fail(413, 'Metadata request is too large.');
+          chunks.push(chunk);
+        }
+        let request;
+        try { request = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return fail(400, 'Invalid metadata JSON.'); }
+        const snapshot = await load(true);
+        const metadata = await saveFolderLibraryMetadata(snapshot, uuid, request);
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        return res.end(JSON.stringify({ itemUuid: uuid, ...metadata }));
+      }
       if (pathname === `${FOLDER_LIBRARY_PREFIX}/catalog`) {
         const snapshot = await load(true);
-        const body = JSON.stringify(folderLibraryClientSnapshot(snapshot));
+        const body = JSON.stringify(folderLibraryClientSnapshot(snapshot, await readFolderLibraryEdits(snapshot)));
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         return res.end(req.method === 'HEAD' ? undefined : body);
       }
@@ -110,9 +130,10 @@ export function createFolderLibraryMiddleware(root) {
       res.setHeader('Content-Length', file.actualByteSize);
       if (req.method === 'HEAD') return res.end();
       pipeline(createReadStream(file.absolutePath), res, () => {});
-    } catch {
+    } catch (error) {
+      if (error instanceof MetadataEditError) return fail(error.status, error.message);
       // Do not disclose local filesystem paths in HTTP errors.
-      fail(503, 'The folder library could not be read. Check its location and run npm run library:check.');
+      fail(503, req.method === 'PATCH' ? 'Metadata save could not be confirmed. Your draft is still here. Check the library files and permissions, then load the saved version before retrying.' : 'The folder library could not be read. Check its location and run npm run library:check.');
     }
   };
 }
@@ -122,5 +143,5 @@ export function folderLibraryPlugin() {
     ? path.resolve(process.env.MOODBOARD_LIBRARY_ROOT)
     : fileURLToPath(new URL('../../library-exports/moodboard-library-2026-09-21/', import.meta.url));
   const install = (server) => { server.middlewares.use(createFolderLibraryMiddleware(root)); };
-  return { name: 'local-read-only-folder-library', configureServer: install, configurePreviewServer: install };
+  return { name: 'local-folder-library', configureServer: install, configurePreviewServer: install };
 }
