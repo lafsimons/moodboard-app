@@ -5,6 +5,7 @@ import { pipeline } from 'node:stream';
 import { readFolderLibrary, inspectPath } from './folderLibraryReader.node.js';
 import { projectFolderBoard } from './folderBoardView.js';
 import { readFolderLibraryEdits, effectiveMetadata, saveFolderLibraryMetadata, MetadataEditError } from './folderLibraryEdits.node.js';
+import { scanFolderLibrary, syncPreview, applyFolderLibrarySync } from './folderLibrarySync.node.js';
 
 export const FOLDER_LIBRARY_PREFIX = '/__folder-library';
 const renderVariants = new Set(['image', 'image-thumbs', 'image-thumbs-mobile']);
@@ -23,7 +24,7 @@ export function folderLibraryClientSnapshot(snapshot, edits = { version: 1, item
       counts[warning.code] = (counts[warning.code] ?? 0) + 1;
       return counts;
     }, {}),
-    items: snapshot.items.map((record) => {
+    items: snapshot.items.filter((record) => !record.syncDeletedAt).map((record) => {
       const source = record.sourceMetadata;
       const assets = {};
       for (const variant of renderVariants) {
@@ -63,6 +64,7 @@ function localRequest(req) {
 export function createFolderLibraryMiddleware(root) {
   let current = null;
   let pending = null;
+  let scanRevision = null;
   async function load(refresh = false) {
     if (pending) return pending;
     if (current && !refresh) return current;
@@ -85,11 +87,40 @@ export function createFolderLibraryMiddleware(root) {
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     if (!localRequest(req)) return fail(403, 'Folder library access is local and same-origin only.');
     const editMatch = pathname.match(/^\/__folder-library\/items\/([^/]+)\/metadata$/);
-    if (!['GET', 'HEAD'].includes(req.method) && !(editMatch && req.method === 'PATCH')) {
+    const syncAction = pathname === `${FOLDER_LIBRARY_PREFIX}/sync/scan` ? 'scan' : pathname === `${FOLDER_LIBRARY_PREFIX}/sync/apply` ? 'apply' : null;
+    if (!['GET', 'HEAD'].includes(req.method) && !(editMatch && req.method === 'PATCH') && !(syncAction && req.method === 'POST')) {
       res.setHeader('Allow', 'GET, HEAD');
       return fail(405, 'This resource does not accept that method.');
     }
     try {
+      if (syncAction && req.method === 'POST') {
+        if (!req.headers.origin) return fail(403, 'Folder sync requires a same-origin request.');
+        if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') return fail(415, 'Folder sync requires JSON.');
+        const chunks = []; let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > 4096) return fail(413, 'Sync request is too large.');
+          chunks.push(chunk);
+        }
+        let request;
+        try { request = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return fail(400, 'Invalid sync JSON.'); }
+        let result;
+        if (syncAction === 'scan') {
+          scanRevision = null;
+          result = syncPreview(await scanFolderLibrary(root));
+          scanRevision = result.revision;
+        } else {
+          if (!scanRevision || request?.revision !== scanRevision) return fail(409, 'Scan folders and review the changes before applying.');
+          result = await applyFolderLibrarySync(root, scanRevision);
+          scanRevision = null;
+          // A catalogue read started before the commit must not repopulate the
+          // media cache with old paths after this invalidation.
+          if (pending) await pending.catch(() => {});
+          current = null;
+        }
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        return res.end(JSON.stringify(result));
+      }
       if (editMatch && req.method === 'PATCH') {
         // JSON + a mandatory matching Origin prevent cross-site form writes.
         if (!req.headers.origin) return fail(403, 'Metadata saves require a same-origin request.');
@@ -132,6 +163,7 @@ export function createFolderLibraryMiddleware(root) {
       pipeline(createReadStream(file.absolutePath), res, () => {});
     } catch (error) {
       if (error instanceof MetadataEditError) return fail(error.status, error.message);
+      if (syncAction) return fail(503, 'Folder sync could not finish. Check the library files and permissions, then scan again. Existing records are retained.');
       // Do not disclose local filesystem paths in HTTP errors.
       fail(503, req.method === 'PATCH' ? 'Metadata save could not be confirmed. Your draft is still here. Check the library files and permissions, then load the saved version before retrying.' : 'The folder library could not be read. Check its location and run npm run library:check.');
     }

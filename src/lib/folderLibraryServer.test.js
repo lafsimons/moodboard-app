@@ -124,3 +124,34 @@ test('metadata writes require a matching origin and JSON, with bounded payloads'
   assert.equal((await f.request(endpoint, { ...options, body: JSON.stringify({ value: 'x'.repeat(300000) }) })).status, 413);
   assert.equal((await f.request('/metadata/edits.json')).status, 404);
 });
+
+test('sync API requires same-origin review and serves newly registered media after applying', async (t) => {
+  const f = await serve(t);
+  const { default: sharp } = await import('sharp');
+  const bytes = await sharp({ create: { width: 40, height: 20, channels: 3, background: '#ff0000' } }).png().toBuffer();
+  await mkdir(path.join(f.root, 'public/images/Inbox'));
+  await writeFile(path.join(f.root, 'public/images/Inbox/New.png'), bytes);
+  const post = (endpoint, body = {}, origin = f.url) => f.request(endpoint, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.equal((await post('/sync/apply', { revision: 'made-up' })).status, 409);
+  assert.equal((await post('/sync/scan', {}, 'https://example.com')).status, 403);
+  assert.equal((await f.request('/sync/scan', { method: 'POST' })).status, 403);
+  assert.equal((await f.request('/sync/scan')).status, 404);
+  const response = await post('/sync/scan'); assert.equal(response.status, 200);
+  const preview = await response.json(); assert.equal(preview.additions.length, 1); assert.ok(!JSON.stringify(preview).includes(f.root));
+  assert.equal((await (await f.request('/catalog')).json()).items.length, 1);
+  const applied = await post('/sync/apply', { revision: preview.revision }); assert.equal(applied.status, 200);
+  assert.deepEqual(await applied.json(), { added: 1, moved: 0, removed: 0, restored: 0, updated: 0 });
+  const catalogue = await (await f.request('/catalog')).json(); assert.equal(catalogue.items.length, 2);
+  const added = catalogue.items.find((item) => item.name === 'New'); assert.equal(added.folder, 'Inbox');
+  const image = await fetch(f.url + added.assets['image-thumbs'].url); assert.equal(image.status, 200); assert.equal(image.headers.get('content-type'), 'image/webp');
+  assert.equal((await post('/sync/apply', { revision: preview.revision })).status, 409);
+  await rm(path.join(f.root, 'public/images/Inbox/New.png'));
+  const deletion = await (await post('/sync/scan')).json(); assert.equal(deletion.removals.length, 1);
+  assert.equal((await post('/sync/apply', { revision: deletion.revision })).status, 200);
+  assert.equal((await (await f.request('/catalog')).json()).items.length, 1);
+  assert.equal((await fetch(f.url + added.assets['image-thumbs'].url)).status, 404);
+  await writeFile(path.join(f.root, 'public/images/Inbox/New.png'), bytes);
+  const restore = await (await post('/sync/scan')).json(); assert.deepEqual(restore.restores, [added.itemUuid]);
+  assert.equal((await post('/sync/apply', { revision: restore.revision })).status, 200);
+  assert.equal((await (await f.request('/catalog')).json()).items[1].itemUuid, added.itemUuid);
+});

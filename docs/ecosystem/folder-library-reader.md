@@ -18,8 +18,10 @@ a readable library with warnings exits with status 0 and prints warning counts.
 `readFolderLibrary(root)` in `src/lib/folderLibraryReader.node.js` returns:
 
 - `root`: canonical library directory.
-- `manifest`, `items`, `appState`: parsed source objects without field removal or
-  normalization. Item `sourceMetadata` retains the complete original record.
+- `manifest`, `items`, `appState`: parsed records without field removal or
+  normalization. After manual sync, `items` comes from the atomic catalogue and
+  `manifest` has updated inventory/folder counts; `baseManifest` retains the original
+  export manifest. Item `sourceMetadata` retains the complete original record.
 - `assets`: separate resolved entries containing item identity, variant, original
   descriptor, absolute path, existence, regular-file status, and actual byte size.
   The main three variants are `image`, `image-thumbs`, and `image-thumbs-mobile`.
@@ -73,7 +75,8 @@ lazy-loaded only outside folder mode. Filters, pagination, and selection are
 session memory only; refresh resets them.
 
 `Reload library` rereads the export catalogue. It does **not** scan folders or
-repair moved-file paths. Folder sync remains deferred. Explicit metadata saves are described below.
+repair moved-file paths. Explicit metadata saves are described below. Manual sync now uses a separate
+**Scan folders → Apply sync** review flow; see [folder sync](folder-library-sync.md).
 
 The Vite plugin provides GET/HEAD `/__folder-library/catalog` and registered media
 URLs `/__folder-library/media/:itemUuid/:variant`. Only `image`, `image-thumbs`, and
@@ -179,8 +182,9 @@ run `npm run library:check`, then restart/reload. A crash can leave `edits.lock`
 only remove that file after stopping all local servers and checking that no save
 is still running. Uncommitted `.edits-*.tmp` files are not loaded automatically.
 
-Boards remain read-only. Moving folders, manual folder synchronization, cloud
-access, and thumbnail regeneration remain separate follow-ups.
+Boards remain read-only. Manual folder synchronization is described in
+[folder sync](folder-library-sync.md). Edited originals now refresh their thumbnails during sync. Cloud access and
+standalone thumbnail repair remain separate follow-ups.
 
 Validation for metadata editing: 579 tests passed, including durable rereads,
 exact backups, conflicts/concurrent writers, rejected fields/identities, malformed
@@ -190,3 +194,9 @@ failed-save draft retention, discard prompts, active-filter changes, metadata-on
 editing, and mobile layout. Baseline metadata, board and image bytes remained
 identical; browser storage was never called. The real export check still reports
 1,922 records and the same 29 warnings, with zero metadata edits created by testing.
+
+
+After deletion sync, Node `items` retains recoverable records marked with
+`syncDeletedAt`. Active inventory, resolved assets and the browser catalogue
+exclude these records. Their board placements remain unresolved placeholders.
+Restoring the file and applying sync clears the marker without changing its IDs.

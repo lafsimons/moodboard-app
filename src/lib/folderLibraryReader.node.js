@@ -1,5 +1,6 @@
 import { readFile, realpath, lstat, readlink } from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const identity = (value) => typeof value === 'string' && value.trim().length > 0;
@@ -63,14 +64,53 @@ function parse(text, location) {
  */
 export async function readFolderLibrary(directory) {
   const root = await realpath(path.resolve(directory));
-  const manifest = parse(await requiredText(root, 'manifest.json'), 'manifest.json');
+  const manifestText = await requiredText(root, 'manifest.json');
+  const baseManifest = parse(manifestText, 'manifest.json');
+  let manifest = baseManifest;
   const appState = parse(await requiredText(root, 'metadata/appState.json'), 'metadata/appState.json');
   requireValue(object(manifest) && manifest.version === 1 && Number.isSafeInteger(manifest.itemCount) && manifest.itemCount >= 0,
     'Invalid library manifest: expected version 1 and nonnegative itemCount');
   requireValue(object(appState), 'Invalid appState: expected an object');
-  const lines = (await requiredText(root, 'metadata/items.ndjson')).split(/\r?\n/);
-  const items = lines.flatMap((line, index) => line.trim() ? [parse(line, `metadata/items.ndjson line ${index + 1}`)] : []);
+  const itemsText = await requiredText(root, 'metadata/items.ndjson');
+  const lines = itemsText.split(/\r?\n/);
+  let items = lines.flatMap((line, index) => line.trim() ? [parse(line, `metadata/items.ndjson line ${index + 1}`)] : []);
   requireValue(items.length === manifest.itemCount, `Record count mismatch: manifest ${manifest.itemCount}, records ${items.length}`);
+  const baselineUuids = new Set(), baselineIds = new Set();
+  for (const item of items) {
+    requireValue(object(item) && identity(item.itemUuid) && identity(item.legacyId) && object(item.sourceMetadata) && object(item.assets), 'Invalid baseline item identity or record');
+    requireValue(!baselineUuids.has(item.itemUuid) && !baselineIds.has(item.legacyId), 'Duplicate baseline identity');
+    requireValue(item.sourceMetadata.id === item.legacyId && item.sourceMetadata.itemUuid === item.itemUuid, 'Conflicting baseline source identity');
+    baselineUuids.add(item.itemUuid); baselineIds.add(item.legacyId);
+  }
+  const baseRevision = createHash('sha256').update(manifestText + '\n' + itemsText).digest('hex');
+  // Keep the original export immutable. A single atomic catalogue file contains
+  // synced records, avoiding a partially updated manifest/items pair on crashes.
+  const baseItems = items;
+  const countRecords = (allRecords) => { const records = allRecords.filter((item) => !item.syncDeletedAt); return ({
+    itemCount: records.length,
+    originals: records.filter((item) => item.assets?.image?.kind === 'original').length,
+    previewFallbacks: records.filter((item) => item.assets?.image?.kind === 'preview-fallback').length,
+    metadataOnly: records.filter((item) => !item.assets?.image).length,
+    desktopThumbnails: records.filter((item) => item.assets?.['image-thumbs']).length,
+    mobileThumbnails: records.filter((item) => item.assets?.['image-thumbs-mobile']).length
+  }); };
+  for (const [key, count] of Object.entries(countRecords(baseItems))) {
+    if (baseManifest[key] !== undefined) requireValue(baseManifest[key] === count, `Manifest ${key} count mismatch`);
+  }
+  const catalogueFile = await inspectPath(root, 'metadata/catalogue.json');
+  let catalogueRevision = 'none';
+  if (catalogueFile.exists) {
+    requireValue(catalogueFile.isFile, 'Synced catalogue must be a file');
+    const text = await readFile(catalogueFile.absolutePath, 'utf8');
+    const catalogue = parse(text, 'metadata/catalogue.json');
+    requireValue(object(catalogue) && catalogue.version === 1 && catalogue.baseRevision === baseRevision && Array.isArray(catalogue.items), 'Invalid synced catalogue or changed baseline export');
+    const indexed = new Map(catalogue.items.map((item) => [item?.itemUuid, item]));
+    requireValue(baseItems.every((item) => indexed.get(item.itemUuid)?.legacyId === item.legacyId), 'Synced catalogue cannot remove or change baseline identities');
+    items = catalogue.items;
+    requireValue(items.every((item) => object(item)), 'Invalid synced item record');
+    manifest = { ...baseManifest, ...countRecords(items), folders: Object.fromEntries([...new Set(items.map((item) => item.folder))].map((folder) => [folder, items.filter((item) => !item.syncDeletedAt && item.folder === folder).length])) };
+    catalogueRevision = createHash('sha256').update(text).digest('hex');
+  }
   const byUuid = new Map();
   const byId = new Map();
   for (const [index, item] of items.entries()) {
@@ -84,11 +124,12 @@ export async function readFolderLibrary(directory) {
   }
   const warnings = [];
   const assets = [];
-  const inventory = { itemCount: items.length, originals: 0, previewFallbacks: 0, metadataOnly: 0,
+  const inventory = { itemCount: items.filter((item) => !item.syncDeletedAt).length, originals: 0, previewFallbacks: 0, metadataOnly: 0,
     desktopThumbnails: 0, mobileThumbnails: 0 };
   const availableAssets = { image: 0, 'image-thumbs': 0, 'image-thumbs-mobile': 0 };
   const warn = (code, message, context = {}) => warnings.push({ code, message, ...context });
   for (const item of items) {
+    if (item.syncDeletedAt) { byUuid.delete(item.itemUuid); byId.delete(item.legacyId); continue; }
     const context = { itemUuid: item.itemUuid, legacyId: item.legacyId };
     if (!item.assets.image) {
       inventory.metadataOnly++;
@@ -161,5 +202,5 @@ export async function readFolderLibrary(directory) {
       checkBoard(saved.board, `savedOutfits[${index}].board`);
     });
   }
-  return { root, manifest, items, appState, assets, inventory, availableAssets, warnings };
+  return { root, manifest, baseManifest, baseRevision, catalogueRevision, items, appState, assets, inventory, availableAssets, warnings };
 }
