@@ -96,3 +96,31 @@ test('filtering keeps multiple tags, parent matching, all/any and metadata-only 
   assert.ok(folderLibraryTagOptions(items).includes('people'));
   assert.equal(items[0].id, 'a');
 });
+
+test('same-origin metadata PATCH persists through catalogue reload and rejects stale drafts', async (t) => {
+  const f = await serve(t);
+  const item = (await (await f.request('/catalog')).json()).items[0];
+  const metadata = { name: 'Edited 日本', description: 'Saved description', tags: ['media/film', 'people/aapo'], favorite: true };
+  const options = { method: 'PATCH', headers: { Origin: f.url, 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: item.metadataRevision, metadata }) };
+  const response = await f.request('/items/uuid%20one/metadata', options);
+  assert.equal(response.status, 200);
+  const saved = await response.json(); assert.notEqual(saved.metadataRevision, item.metadataRevision);
+  const reloaded = (await (await f.request('/catalog')).json()).items[0];
+  for (const [field, value] of Object.entries(metadata)) assert.deepEqual(reloaded[field], value);
+  assert.equal(reloaded.folder, item.folder); assert.deepEqual(reloaded.assets, item.assets); assert.equal(reloaded.id, item.id);
+  assert.equal((await f.request('/items/uuid%20one/metadata', options)).status, 409);
+  assert.equal((await f.request('/items/unknown/metadata', options)).status, 404);
+});
+
+test('metadata writes require a matching origin and JSON, with bounded payloads', async (t) => {
+  const f = await serve(t);
+  const endpoint = '/items/uuid%20one/metadata';
+  assert.equal((await f.request(endpoint, { method: 'PATCH' })).status, 403);
+  assert.equal((await f.request(endpoint, { method: 'PATCH', headers: { Origin: 'https://elsewhere.test', 'Content-Type': 'application/json' } })).status, 403);
+  assert.equal((await f.request(endpoint, { method: 'PATCH', headers: { Origin: f.url, 'Content-Type': 'text/plain' } })).status, 415);
+  const options = { method: 'PATCH', headers: { Origin: f.url, 'Content-Type': 'application/json' } };
+  assert.equal((await f.request(endpoint, { ...options, body: '{broken' })).status, 400);
+  assert.equal((await f.request(endpoint, { ...options, body: '{}' })).status, 400);
+  assert.equal((await f.request(endpoint, { ...options, body: JSON.stringify({ value: 'x'.repeat(300000) }) })).status, 413);
+  assert.equal((await f.request('/metadata/edits.json')).status, 404);
+});

@@ -32,6 +32,14 @@
 .folder-description { white-space: pre-wrap; }
 .folder-viewer-tags { padding-left: 18px; overflow-wrap: anywhere; font-size: 12px; }
 .folder-item-id { font-size: 10px; overflow-wrap: anywhere; color: var(--muted); }
+.folder-metadata-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 12px; }
+.folder-metadata-form label { display: grid; gap: 6px; font-size: 12px; }
+.folder-metadata-field { display: grid; gap: 6px; }
+.folder-metadata-form input:not([type="checkbox"]), .folder-metadata-form textarea { width: 100%; box-sizing: border-box; padding: 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-solid); color: inherit; font: inherit; }
+.folder-metadata-form textarea { resize: vertical; }
+.folder-metadata-form .folder-favorite { display: flex; align-items: center; }
+.folder-metadata-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.folder-metadata-form [role="status"], .folder-metadata-form [role="alert"] { font-size: 12px; overflow-wrap: anywhere; }
 @media(max-width:600px) {
   .folder-library { padding: 14px; }
   .folder-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }

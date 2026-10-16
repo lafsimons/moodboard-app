@@ -73,15 +73,15 @@ lazy-loaded only outside folder mode. Filters, pagination, and selection are
 session memory only; refresh resets them.
 
 `Reload library` rereads the export catalogue. It does **not** scan folders or
-repair moved-file paths. Folder sync and editing remain deferred.
+repair moved-file paths. Folder sync remains deferred. Explicit metadata saves are described below.
 
 The Vite plugin provides GET/HEAD `/__folder-library/catalog` and registered media
 URLs `/__folder-library/media/:itemUuid/:variant`. Only `image`, `image-thumbs`, and
 `image-thumbs-mobile` variants are exposed. The browser catalogue uses an explicit
 field allowlist (IDs, tags, descriptive metadata, presentation settings, and media
 URLs); raw source records, absolute paths, raw app state, and private backup files are
-not API responses. Mutations, foreign origins/hosts, and non-loopback clients are
-rejected. Registered file paths are revalidated on every media request.
+not API responses. Foreign origins/hosts and non-loopback clients are rejected. The metadata
+endpoint below is the only supported mutation. Registered file paths are revalidated on every media request.
 
 An alternative root can be configured in the server environment:
 
@@ -130,3 +130,63 @@ were instrumented to fail if called; none were called. Before/after hashes of th
 manifest, item metadata, and app state were identical. A separate clean install
 and build without the sibling hub-core folder also passed using the vendored
 package fix from the preceding commit.
+
+
+## Local metadata editing
+
+Open an image in folder mode to edit its name, description, tags (one per line),
+and favorite flag. **Save metadata** explicitly saves the draft. Search, tag
+filters, and sorting immediately use the saved values. The viewer stays open if
+an edit makes the image fall outside the active filters. Leaving a dirty draft
+asks before discarding it; failed saves keep the draft visible. **Load saved
+version** retrieves current metadata and asks before replacing a dirty draft.
+
+Edits are stored in `metadata/edits.json`, version 1, as an `items` array keyed by
+`itemUuid`. Each entry contains `metadata` with the four editable fields and an
+`updatedAt` timestamp. Unedited items use their original exported metadata.
+`items.ndjson`, original source metadata, app state/boards, images, thumbnails,
+identities, presentation settings, and folder paths are not rewritten. Tags do
+not move files. No IndexedDB or browser-storage persistence is involved.
+
+`readFolderLibrary` still returns the untouched export snapshot. The server reads
+and validates the optional overlay separately and projects effective metadata to
+the browser. `npm run library:check` also validates this file and reports the
+number of edited records. A malformed, duplicate, or unknown overlay identity
+fails validation rather than being silently ignored or deleted.
+
+`PATCH /__folder-library/items/:itemUuid/metadata` accepts only a revision token
+and the four editable fields. It requires JSON, a matching Origin, and the
+existing local-client checks. Requests are bounded to 256 KiB. Names are limited
+to 1,000 characters, descriptions to 20,000, and tags to 200 entries of at most
+200 characters each. Content-based per-item revisions reject stale drafts with
+409. Reloading saved metadata resolves a conflict explicitly; there is no forced
+overwrite or silent merge.
+
+Saves acquire an exclusive `metadata/edits.lock`, reread the overlay, check the
+revision, and write an exact copy of the previous overlay into
+`metadata/edit-backups/edits-<time>-<uuid>.json`. The initial backup represents an
+empty overlay. A new file is flushed and atomically renamed to `edits.json`;
+directory entries are flushed before reporting success. Backup failure prevents
+the replacement. Other writers receive a retryable 423 instead of overwriting
+one another. Metadata write destinations cannot be symlinks. Unknown top-level
+and per-entry overlay fields are retained.
+
+Backups contain metadata edits only and depend on the original exported
+`items.ndjson`; keep both when copying/backing up the library. There is no backup
+pruning or restore UI yet. To restore an earlier edit version, stop local servers,
+preserve the current `edits.json`, copy a chosen backup to `metadata/edits.json`,
+run `npm run library:check`, then restart/reload. A crash can leave `edits.lock`:
+only remove that file after stopping all local servers and checking that no save
+is still running. Uncommitted `.edits-*.tmp` files are not loaded automatically.
+
+Boards remain read-only. Moving folders, manual folder synchronization, cloud
+access, and thumbnail regeneration remain separate follow-ups.
+
+Validation for metadata editing: 579 tests passed, including durable rereads,
+exact backups, conflicts/concurrent writers, rejected fields/identities, malformed
+overlays, symlink targets, blocked backups, and HTTP write restrictions. A browser
+check against a temporary library verified save/reopen, two-tab conflicts,
+failed-save draft retention, discard prompts, active-filter changes, metadata-only
+editing, and mobile layout. Baseline metadata, board and image bytes remained
+identical; browser storage was never called. The real export check still reports
+1,922 records and the same 29 warnings, with zero metadata edits created by testing.
