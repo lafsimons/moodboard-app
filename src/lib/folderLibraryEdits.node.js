@@ -49,7 +49,7 @@ export async function readFolderLibraryEdits(snapshot) {
 
 // Writes deliberately disallow symlinked metadata directories and files, even
 // inside the root. No user-supplied path is ever used for a write destination.
-async function safeTarget(root, relative, directory = false, optional = false) {
+export async function safeTarget(root, relative, directory = false, optional = false) {
   const parts = relative.split('/');
   let current = root;
   for (let i = 0; i < parts.length; i++) {
@@ -64,12 +64,12 @@ async function safeTarget(root, relative, directory = false, optional = false) {
   return current;
 }
 
-async function writeExclusive(filename, content) {
+export async function writeExclusive(filename, content) {
   const file = await open(filename, 'wx', 0o600);
   try { await file.writeFile(content); await file.sync(); } finally { await file.close(); }
 }
 
-async function syncDirectory(directory) {
+export async function syncDirectory(directory) {
   const handle = await open(directory, 'r');
   try { await handle.sync(); } finally { await handle.close(); }
 }
@@ -79,6 +79,7 @@ export async function saveFolderLibraryMetadata(snapshot, itemUuid, request) {
   const metadata = validateMetadataFields(request.metadata);
   const record = snapshot.items.find((item) => item.itemUuid === itemUuid);
   if (!record) throw new MetadataEditError(404, 'Image is not registered in this library.');
+  if (record.syncDeletedAt) throw new MetadataEditError(409, 'This image was removed by folder sync. Reload the library.');
   await safeTarget(snapshot.root, 'metadata', true);
   const lockPath = await safeTarget(snapshot.root, 'metadata/edits.lock', false, true);
   let lock;

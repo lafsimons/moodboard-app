@@ -3,6 +3,7 @@ import { folderLibraryTagOptions, selectFolderLibraryItems } from '../lib/folder
 import { getReferencePreviewNavigation } from '../lib/referencePreview.js';
 import './FolderLibrary.css';
 import FolderBoard from './FolderBoard.jsx';
+import FolderLibrarySync from './FolderLibrarySync.jsx';
 
 const PAGE_SIZE = 80;
 const badge = (item) => !item.assets.image ? 'Image unavailable' : item.imageKind === 'preview-fallback' ? 'Preview fallback' : '';
@@ -149,7 +150,8 @@ export default function FolderLibrary() {
         <a className="secondary-button" href={window.location.pathname}>Return to browser library</a>
       </div>
     </header>
-    <p className="folder-library-note">Edit names, descriptions, tags, and favorites with Save metadata. Edits and versioned backups stay in the library folder. Boards are read-only; folder sync is not enabled yet.</p>
+    <p className="folder-library-note">Edit names, descriptions, tags, and favorites with Save metadata. Edits and versioned backups stay in the library folder. Boards are read-only. Use Scan folders to review new or moved images.</p>
+    <FolderLibrarySync onApplied={() => setReload((n) => n + 1)} />
     {error ? <div role="alert" className="folder-load-state"><p>{error}</p><button className="primary-button" onClick={() => setReload((n) => n + 1)}>Retry</button></div>
       : !data ? <p role="status" className="folder-load-state">Loading folder library…</p>
       : <>
