@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream';
 import { readFolderLibrary, inspectPath } from './folderLibraryReader.node.js';
+import { projectFolderBoard } from './folderBoardView.js';
 
 export const FOLDER_LIBRARY_PREFIX = '/__folder-library';
 const renderVariants = new Set(['image', 'image-thumbs', 'image-thumbs-mobile']);
@@ -16,6 +17,7 @@ export function folderLibraryClientSnapshot(snapshot) {
   const indexed = new Map(snapshot.assets.map((asset) => [assetKey(asset.itemUuid, asset.variant), asset]));
   return {
     inventory: snapshot.inventory,
+    currentBoard: projectFolderBoard(snapshot.appState.board),
     warningCounts: snapshot.warnings.reduce((counts, warning) => {
       counts[warning.code] = (counts[warning.code] ?? 0) + 1;
       return counts;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { folderLibraryTagOptions, selectFolderLibraryItems } from '../lib/folderLibraryView.js';
 import { getReferencePreviewNavigation } from '../lib/referencePreview.js';
 import './FolderLibrary.css';
+import FolderBoard from './FolderBoard.jsx';
 
 const PAGE_SIZE = 80;
 const badge = (item) => !item.assets.image ? 'Image unavailable' : item.imageKind === 'preview-fallback' ? 'Preview fallback' : '';
@@ -62,6 +63,7 @@ export default function FolderLibrary() {
   const [sort, setSort] = useState('name');
   const [page, setPage] = useState(0);
   const [activeId, setActiveId] = useState(null);
+  const [viewMode, setViewMode] = useState('library');
   useEffect(() => {
     const abort = new AbortController();
     setData(null); setError(''); setActiveId(null);
@@ -93,10 +95,16 @@ export default function FolderLibrary() {
         <a className="secondary-button" href={window.location.pathname}>Return to browser library</a>
       </div>
     </header>
-    <p className="folder-library-note">Browse the exported library. Editing, board viewing, and folder sync are not enabled in this mode yet.</p>
+    <p className="folder-library-note">Browse the exported library and current board. Editing and folder sync are not enabled in this mode yet.</p>
     {error ? <div role="alert" className="folder-load-state"><p>{error}</p><button className="primary-button" onClick={() => setReload((n) => n + 1)}>Retry</button></div>
       : !data ? <p role="status" className="folder-load-state">Loading folder library…</p>
       : <>
+        <nav className="folder-library-tabs" aria-label="Folder library views">
+          <button className="secondary-button" aria-pressed={viewMode === 'library'} onClick={() => setViewMode('library')}>Library</button>
+          <button className="secondary-button" aria-pressed={viewMode === 'board'} onClick={() => { setActiveId(null); setViewMode('board'); }}>Current board</button>
+        </nav>
+        {viewMode === 'board' ? <FolderBoard key={reload} board={data.currentBoard} items={items} /> : null}
+        <div hidden={viewMode !== 'library'}>
         <div className="folder-tools">
           <label>Search<input type="search" placeholder="Names, descriptions, tags…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
           <label>Folder<select value={folder} onChange={(event) => setFolder(event.target.value)}><option value="">All folders</option>{folders.map((value) => <option key={value}>{value}</option>)}</select></label>
@@ -121,6 +129,7 @@ export default function FolderLibrary() {
         {!visible.length ? <p className="folder-load-state">No images match these filters.</p> : null}
         <nav className="folder-pagination" aria-label="Image pages"><button className="secondary-button" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>Previous page</button><span>Page {currentPage + 1} of {pageCount}</span><button className="secondary-button" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Next page</button></nav>
         {active ? <ItemViewer item={active} navigation={getReferencePreviewNavigation(visible, active.id)} onSelect={setActiveId} onClose={() => setActiveId(null)} /> : null}
+        </div>
       </>}
   </main>;
 }

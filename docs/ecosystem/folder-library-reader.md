@@ -55,7 +55,7 @@ assets are present with the recorded sizes. The 29 warnings are 26 unresolved
 originals, one absent main image, and its two absent thumbnails. No unresolved
 board references were reported.
 
-Stage 1B is described below. Stage 1C (board viewing) remains separate work.
+Stages 1B and 1C are described below.
 
 ## Stage 1B — Local read-only browser
 
@@ -73,13 +73,13 @@ lazy-loaded only outside folder mode. Filters, pagination, and selection are
 session memory only; refresh resets them.
 
 `Reload library` rereads the export catalogue. It does **not** scan folders or
-repair moved-file paths. Folder sync, editing, and board viewing remain deferred.
+repair moved-file paths. Folder sync and editing remain deferred.
 
 The Vite plugin provides GET/HEAD `/__folder-library/catalog` and registered media
 URLs `/__folder-library/media/:itemUuid/:variant`. Only `image`, `image-thumbs`, and
 `image-thumbs-mobile` variants are exposed. The browser catalogue uses an explicit
 field allowlist (IDs, tags, descriptive metadata, presentation settings, and media
-URLs); raw source records, absolute paths, app state, and private backup files are
+URLs); raw source records, absolute paths, raw app state, and private backup files are
 not API responses. Mutations, foreign origins/hosts, and non-loopback clients are
 rejected. Registered file paths are revalidated on every media request.
 
@@ -100,3 +100,33 @@ search, tag filtering, metadata viewing, the missing-image state, desktop/mobile
 layout, reload, and return to the editor. During folder browsing, IndexedDB access
 and browser-storage writes were instrumented to fail: none occurred. The legacy
 App/storage/repository module graph was not requested in folder mode.
+
+
+## Stage 1C — Current-board viewing
+
+Choose **Current board** in folder mode to view the exported working board.
+`currentBoard` in the catalogue is an explicit allowlist of board identity,
+dimensions, and placement geometry/references; the rest of app state stays private.
+Image resolution uses stable UUIDs with legacy-ID fallback. Conflicting identities
+produce placeholders rather than a guessed image. Missing media and references
+keep their placements. Empty or absent boards are shown without generation.
+
+Rendering reuses `boardBounds.js` for image presentation and layout. Crops,
+scaling, rotation, stacking order, and exported placement coordinates are retained.
+Desktop thumbnails load for the five-image board; available main/mobile media
+can serve as fallbacks if a thumbnail is unavailable.
+
+Pointer dragging pans the viewport only. Plus/minus and Ctrl/Command-scroll zoom;
+Fit board restores the fitted view. Arrow keys pan the focused canvas. These
+controls never modify placements or persist viewport changes. Switching back to
+the library preserves its session filters. Reload/reopening reads the original
+export again. No editing, saving, regeneration, or historical-board recovery was
+added.
+
+Validation: 570 tests passed, the production build passed, and a browser check
+verified the actual five-image board, image loading, pan/zoom/fit, responsive
+layout, library switching, reload, and missing/absent-board states. Storage APIs
+were instrumented to fail if called; none were called. Before/after hashes of the
+manifest, item metadata, and app state were identical. A separate clean install
+and build without the sibling hub-core folder also passed using the vendored
+package fix from the preceding commit.
