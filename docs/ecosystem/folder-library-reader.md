@@ -200,3 +200,7 @@ After deletion sync, Node `items` retains recoverable records marked with
 `syncDeletedAt`. Active inventory, resolved assets and the browser catalogue
 exclude these records. Their board placements remain unresolved placeholders.
 Restoring the file and applying sync clears the marker without changing its IDs.
+
+## Board generation follow-up
+
+Folder mode now connects the existing generator to the complete filtered catalogue and saves current/named boards in a separate versioned metadata document. See [Folder library boards](folder-library-boards.md) for the workflow, API, revision conflicts and verification.

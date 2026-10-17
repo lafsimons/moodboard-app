@@ -3811,6 +3811,7 @@ export function generateBoard({
   layoutOptions = {},
   debugHooks = null,
   boardFilters = null,
+  itemsAreFiltered = false,
   boardGuidedOptions = {}
 }) {
   markGenerationPerf(debugHooks, "generate:start", {
@@ -3818,7 +3819,7 @@ export function generateBoard({
     imageCount,
     generationMode
   });
-  const normalizedItems = filterBoardGenerationItems(items, boardFilters);
+  const normalizedItems = itemsAreFiltered ? (Array.isArray(items) ? items : []) : filterBoardGenerationItems(items, boardFilters);
   const aspectRatiosByReferenceId = layoutOptions.aspectRatiosByReferenceId ?? {};
   const sizeMultipliersByReferenceId = layoutOptions.sizeMultipliersByReferenceId ?? {};
   const renderMetadataByReferenceId = layoutOptions.renderMetadataByReferenceId ?? {};

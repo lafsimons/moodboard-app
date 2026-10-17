@@ -20,7 +20,7 @@ function Placement({ entry }) {
   </div>;
 }
 
-export default function FolderBoard({ board, items }) {
+export default function FolderBoard({ board, items, mediaRevision = 0 }) {
   const viewport = useRef(null);
   const drag = useRef(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -57,16 +57,16 @@ export default function FolderBoard({ board, items }) {
   };
   return <section className="folder-board-section" aria-label="Current board viewer">
     <div className="folder-board-tools">
-      <h2>Current board</h2><span>{board.images.length} placements · Read-only</span>
+      <h2>Current board</h2><span>{board.images.length} placements</span>
       <button className="secondary-button" onClick={() => zoom(1 / 1.2)} aria-label="Zoom out">−</button>
       <output aria-label="Board zoom">{Math.round(view.zoom * 100)}%</output>
       <button className="secondary-button" onClick={() => zoom(1.2)} aria-label="Zoom in">+</button>
       <button className="secondary-button" onClick={() => setView(fitFolderBoard(board, size))}>Fit board</button>
     </div>
-    <p className="folder-library-note">Drag to pan. Use +/− to zoom, or Ctrl/⌘ + scroll. Arrow keys pan the focused canvas. Nothing is saved.</p>
+    <p className="folder-library-note">Drag to pan. Use +/− to zoom, or Ctrl/⌘ + scroll. Arrow keys pan the focused canvas. Pan and zoom do not change the saved layout.</p>
     {!board.images.length ? <p>This board is empty.</p> : null}
     {entries.some((entry) => entry.missingReason) ? <p role="status">Some images are unavailable. Their placements remain on the board.</p> : null}
-    <div ref={viewport} className="folder-board-viewport" tabIndex={0} role="region" aria-label="Read-only board canvas"
+    <div ref={viewport} className="folder-board-viewport" tabIndex={0} role="region" aria-label="Board canvas"
       onKeyDown={(event) => {
         const delta = { ArrowLeft: [40, 0], ArrowRight: [-40, 0], ArrowUp: [0, 40], ArrowDown: [0, -40] }[event.key];
         if (delta) { event.preventDefault(); setView((current) => ({ ...current, x: current.x + delta[0], y: current.y + delta[1] })); }
@@ -86,7 +86,7 @@ export default function FolderBoard({ board, items }) {
       }} onPointerUp={endDrag} onPointerCancel={endDrag} onLostPointerCapture={() => { drag.current = null; }}>
       <div className="folder-board-surface" style={{ width: board.width, height: board.height,
         transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
-        {entries.map((entry, index) => <Placement key={`${index}-${entry.placement.id}`} entry={entry} />)}
+        {entries.map((entry, index) => <Placement key={`${index}-${entry.placement.id}-${mediaRevision}`} entry={entry} />)}
       </div>
     </div>
   </section>;

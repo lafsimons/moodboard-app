@@ -155,3 +155,27 @@ test('sync API requires same-origin review and serves newly registered media aft
   assert.equal((await post('/sync/apply', { revision: restore.revision })).status, 200);
   assert.equal((await (await f.request('/catalog')).json()).items[1].itemUuid, added.itemUuid);
 });
+
+
+test('board endpoints protect revisions, origin and the shared write lock', async (t) => {
+  const f = await serve(t);
+  const initial = await (await f.request('/boards')).json();
+  assert.equal(initial.state.current.board, null);
+  assert.ok(!JSON.stringify(initial).includes('/Users/'));
+  const put = (value) => f.request('/boards', { method: 'PUT', headers: { Origin: f.url, 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  assert.equal((await f.request('/boards', { method: 'PUT' })).status, 403);
+  assert.equal((await f.request('/boards', { method: 'PUT', headers: { Origin: f.url, 'Content-Type': 'text/plain' } })).status, 415);
+  const next = structuredClone(initial);
+  next.state.current.settings.imageCount = 7;
+  const response = await put(next); assert.equal(response.status, 200);
+  const saved = await response.json(); assert.notEqual(saved.revision, initial.revision);
+  assert.deepEqual(await (await f.request('/boards')).json(), saved);
+  assert.equal((await put(initial)).status, 409);
+  assert.equal((await put(next)).status, 200);
+  await writeFile(path.join(f.root, 'metadata/edits.lock'), 'busy');
+  assert.equal((await put(saved)).status, 423);
+  await rm(path.join(f.root, 'metadata/edits.lock'));
+  saved.state.current.settings.imageCount = 31;
+  assert.equal((await put(saved)).status, 400);
+  assert.equal((await f.request('/metadata/boards.json')).status, 404);
+});

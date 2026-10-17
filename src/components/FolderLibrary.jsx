@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { folderLibraryTagOptions, selectFolderLibraryItems } from '../lib/folderLibraryView.js';
 import { getReferencePreviewNavigation } from '../lib/referencePreview.js';
 import './FolderLibrary.css';
-import FolderBoard from './FolderBoard.jsx';
+import FolderBoardWorkspace from './FolderBoardWorkspace.jsx';
+import useFolderBoards from '../hooks/useFolderBoards.js';
 import FolderLibrarySync from './FolderLibrarySync.jsx';
 
 const PAGE_SIZE = 80;
@@ -119,6 +120,11 @@ export default function FolderLibrary() {
   const [page, setPage] = useState(0);
   const [activeId, setActiveId] = useState(null);
   const [viewMode, setViewMode] = useState('library');
+  const restoreBoardFilters = useCallback((filters) => {
+    setSearch(filters.search); setTags(filters.tags); setFolder(filters.folder); setTagMode(filters.tagMode); setSort(filters.sort);
+  }, []);
+  const boards = useFolderBoards(restoreBoardFilters);
+
   useEffect(() => {
     const abort = new AbortController();
     setData(null); setError(''); setActiveId(null);
@@ -136,7 +142,7 @@ export default function FolderLibrary() {
   const items = data?.items ?? [];
   const visible = useMemo(() => selectFolderLibraryItems(items, { search, tags, tagMode, folder, sort }), [data, search, tags, tagMode, folder, sort]);
   const tagOptions = useMemo(() => folderLibraryTagOptions(items), [data]);
-  const folders = useMemo(() => [...new Set(items.map((item) => item.folder))].sort(), [data]);
+  const folders = useMemo(() => [...new Set(items.flatMap((item) => item.folder.split('/').map((_, index, parts) => parts.slice(0, index + 1).join('/'))))].filter(Boolean).sort(), [data]);
   const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const active = items.find((item) => item.id === activeId);
@@ -150,7 +156,8 @@ export default function FolderLibrary() {
         <a className="secondary-button" href={window.location.pathname}>Return to browser library</a>
       </div>
     </header>
-    <p className="folder-library-note">Edit names, descriptions, tags, and favorites with Save metadata. Edits and versioned backups stay in the library folder. Boards are read-only. Use Scan folders to review new or moved images.</p>
+    <p className="folder-library-note">Edit names, descriptions, tags, and favorites with Save metadata. Edits and versioned backups stay in the library folder. Generate boards from your library filters and save copies to keep. Use Scan folders to review new or moved images.</p>
+    {boards.dirty && viewMode !== 'board' ? <p role="status">{boards.busy ? 'Saving board…' : 'Your board has unsaved changes.'} <button className="secondary-button" onClick={() => setViewMode('board')}>View board save status</button></p> : null}
     <FolderLibrarySync onApplied={() => setReload((n) => n + 1)} />
     {error ? <div role="alert" className="folder-load-state"><p>{error}</p><button className="primary-button" onClick={() => setReload((n) => n + 1)}>Retry</button></div>
       : !data ? <p role="status" className="folder-load-state">Loading folder library…</p>
@@ -159,7 +166,7 @@ export default function FolderLibrary() {
           <button className="secondary-button" aria-pressed={viewMode === 'library'} onClick={() => setViewMode('library')}>Library</button>
           <button className="secondary-button" aria-pressed={viewMode === 'board'} onClick={() => { setActiveId(null); setViewMode('board'); }}>Current board</button>
         </nav>
-        {viewMode === 'board' ? <FolderBoard key={reload} board={data.currentBoard} items={items} /> : null}
+        {viewMode === 'board' ? <FolderBoardWorkspace controller={boards} items={items} filters={{ search, tags, tagMode, folder, sort }} mediaRevision={reload} onEditFilters={() => setViewMode('library')} /> : null}
         <div hidden={viewMode !== 'library'}>
         <div className="folder-tools">
           <label>Search<input type="search" placeholder="Names, descriptions, tags…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
