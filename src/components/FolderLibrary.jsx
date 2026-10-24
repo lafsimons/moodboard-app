@@ -5,6 +5,7 @@ import './FolderLibrary.css';
 import FolderBoardWorkspace from './FolderBoardWorkspace.jsx';
 import useFolderBoards from '../hooks/useFolderBoards.js';
 import FolderLibrarySync from './FolderLibrarySync.jsx';
+import FolderFilterTree from './FolderFilterTree.jsx';
 
 const PAGE_SIZE = 80;
 const badge = (item) => !item.assets.image ? 'Image unavailable' : item.imageKind === 'preview-fallback' ? 'Preview fallback' : '';
@@ -13,11 +14,12 @@ function LibraryImage({ item, large = false }) {
   const [failed, setFailed] = useState(false);
   const desktop = item.assets['image-thumbs']?.url;
   const mobile = item.assets['image-thumbs-mobile']?.url;
-  const src = large ? desktop || item.assets.image?.url : mobile || desktop;
+  const src = large ? desktop || item.assets.image?.url : mobile || desktop || item.assets.image?.url;
+  const dimensions = item.assets['image-thumbs'] || item.assets.image || item.assets['image-thumbs-mobile'];
   if (!src || failed) return <span className="folder-image-missing">Image unavailable</span>;
   return <picture>
-    {!large && desktop && mobile ? <source media="(min-width: 900px)" srcSet={desktop} /> : null}
-    <img src={src} alt={item.name} loading={large ? 'eager' : 'lazy'} decoding="async" onError={() => setFailed(true)} />
+    {!large && desktop && mobile ? <source media="(min-width: 768px)" srcSet={desktop} /> : null}
+    <img src={src} width={dimensions?.width} height={dimensions?.height} alt={item.name} loading={large ? 'eager' : 'lazy'} decoding="async" onError={() => setFailed(true)} />
   </picture>;
 }
 
@@ -120,6 +122,7 @@ export default function FolderLibrary() {
   const [page, setPage] = useState(0);
   const [activeId, setActiveId] = useState(null);
   const [viewMode, setViewMode] = useState('library');
+  const [gridSize, setGridSize] = useState('medium');
   const restoreBoardFilters = useCallback((filters) => {
     setSearch(filters.search); setTags(filters.tags); setFolder(filters.folder); setTagMode(filters.tagMode); setSort(filters.sort);
   }, []);
@@ -170,22 +173,29 @@ export default function FolderLibrary() {
         <div hidden={viewMode !== 'library'}>
         <div className="folder-tools">
           <label>Search<input type="search" placeholder="Names, descriptions, tags…" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-          <label>Folder<select value={folder} onChange={(event) => setFolder(event.target.value)}><option value="">All folders</option>{folders.map((value) => <option key={value}>{value}</option>)}</select></label>
           <label>Sort<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="name">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="favorites">Favorites first</option></select></label>
           <button className="ghost-button" onClick={clear}>Clear filters</button>
         </div>
+        <div className="folder-filter-panels">
+        <details className="folder-tag-filter">
+          <summary>Folders · {folder || 'All folders'}</summary>
+          <FolderFilterTree paths={folders} selected={folder ? [folder] : []} onSelect={setFolder} label="Filter folders" />
+        </details>
         <details className="folder-tag-filter">
           <summary>Filter tags{tags.length ? ` (${tags.length})` : ''}</summary>
           <div className="folder-tag-tools"><label>Find a tag<input type="search" value={tagSearch} onChange={(event) => setTagSearch(event.target.value)} /></label><label>Match<select value={tagMode} onChange={(event) => setTagMode(event.target.value)}><option value="all">All selected tags</option><option value="any">Any selected tag</option></select></label></div>
-          <div className="folder-tag-options">{tagOptions.filter((tag) => tag.toLowerCase().includes(tagSearch.toLowerCase())).map((tag) => <label key={tag}><input type="checkbox" checked={tags.includes(tag)} onChange={() => toggleTag(tag)} />{tag}</label>)}</div>
+          <FolderFilterTree paths={tagOptions} selected={tags} onSelect={toggleTag} multiple query={tagSearch} label="Filter tags" />
         </details>
+        </div>
         {tags.length ? <div className="folder-active-tags">{tags.map((tag) => <button key={tag} className="secondary-button" onClick={() => toggleTag(tag)} aria-label={`Remove filter ${tag}`}>{tag} ×</button>)}</div> : null}
         <div className="folder-results-summary"><p role="status">{visible.length.toLocaleString()} of {items.length.toLocaleString()} images</p><p>{data.inventory.previewFallbacks} preview fallbacks · {data.inventory.metadataOnly} metadata-only</p></div>
         {Object.keys(data.warningCounts).some((code) => !['ORIGINAL_UNRESOLVED', 'NO_MAIN_IMAGE', 'NO_THUMBNAIL'].includes(code)) ? <details><summary>Library warnings</summary><ul>{Object.entries(data.warningCounts).map(([code, count]) => <li key={code}>{code}: {count}</li>)}</ul></details> : null}
-        <div className="folder-grid">
-          {visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map((item) => <button type="button" className="folder-card" key={item.id} onClick={() => setActiveId(item.id)} aria-label={`View ${item.name || 'Untitled'}`}>
+        <div className="folder-grid-controls" role="group" aria-label="Photo grid size">
+          {['small', 'medium', 'large'].map((size) => <button key={size} type="button" aria-label={`${size[0].toUpperCase() + size.slice(1)} photos`} aria-pressed={gridSize === size} onClick={() => setGridSize(size)}>{size[0].toUpperCase()}</button>)}
+        </div>
+        <div className={`folder-grid folder-grid-${gridSize}`}>
+          {visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map((item) => <button type="button" className="folder-card" key={item.id} onClick={() => setActiveId(item.id)} title={item.name || 'Untitled'} aria-label={`View ${item.name || 'Untitled'}`}>
             <div className="folder-card-image"><LibraryImage key={`${reload}-${item.id}`} item={item} /></div>
-            <span className="folder-card-title">{item.name || 'Untitled'}</span>
             {badge(item) ? <span className="folder-status">{badge(item)}</span> : null}
           </button>)}
         </div>
