@@ -7,7 +7,7 @@ import useFolderBoards from '../hooks/useFolderBoards.js';
 import FolderLibrarySync from './FolderLibrarySync.jsx';
 import FolderFilterTree from './FolderFilterTree.jsx';
 
-const PAGE_SIZE = 80;
+const LOAD_BATCH_SIZE = 80;
 const badge = (item) => !item.assets.image ? 'Image unavailable' : item.imageKind === 'preview-fallback' ? 'Preview fallback' : '';
 
 function LibraryImage({ item, large = false }) {
@@ -119,7 +119,9 @@ export default function FolderLibrary() {
   const [tagMode, setTagMode] = useState('all');
   const [folder, setFolder] = useState('');
   const [sort, setSort] = useState('name');
-  const [page, setPage] = useState(0);
+  const [visibleCount, setVisibleCount] = useState(LOAD_BATCH_SIZE);
+  const scrollRoot = useRef(null);
+  const loadMore = useRef(null);
   const [activeId, setActiveId] = useState(null);
   const [viewMode, setViewMode] = useState('library');
   const [gridSize, setGridSize] = useState('medium');
@@ -141,17 +143,26 @@ export default function FolderLibrary() {
       }).then(setData).catch((failure) => { if (failure.name !== 'AbortError') setError(failure.message); });
     return () => abort.abort();
   }, [reload]);
-  useEffect(() => { setPage(0); }, [search, tags, folder, sort, tagMode]);
+  useEffect(() => { setVisibleCount(LOAD_BATCH_SIZE); }, [search, tags, folder, sort, tagMode, reload]);
   const items = data?.items ?? [];
   const visible = useMemo(() => selectFolderLibraryItems(items, { search, tags, tagMode, folder, sort }), [data, search, tags, tagMode, folder, sort]);
   const tagOptions = useMemo(() => folderLibraryTagOptions(items), [data]);
   const folders = useMemo(() => [...new Set(items.flatMap((item) => item.folder.split('/').map((_, index, parts) => parts.slice(0, index + 1).join('/'))))].filter(Boolean).sort(), [data]);
-  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount - 1);
+  useEffect(() => {
+    if (viewMode !== 'library' || !loadMore.current || visibleCount >= visible.length) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        observer.disconnect();
+        setVisibleCount((count) => Math.min(count + LOAD_BATCH_SIZE, visible.length));
+      }
+    }, { root: scrollRoot.current, rootMargin: '800px 0px' });
+    observer.observe(loadMore.current);
+    return () => observer.disconnect();
+  }, [viewMode, visibleCount, visible.length, data]);
   const active = items.find((item) => item.id === activeId);
   const toggleTag = (tag) => setTags((current) => current.includes(tag) ? current.filter((value) => value !== tag) : [...current, tag]);
   const clear = () => { setSearch(''); setTags([]); setFolder(''); setTagSearch(''); };
-  return <main className="folder-library">
+  return <main className="folder-library" ref={scrollRoot}>
     <header className="folder-library-header">
       <div><p className="eyebrow">Moodboard</p><h1>Folder library <span className="folder-readonly">Local files</span></h1></div>
       <div className="folder-header-actions">
@@ -194,13 +205,15 @@ export default function FolderLibrary() {
           {['small', 'medium', 'large'].map((size) => <button key={size} type="button" aria-label={`${size[0].toUpperCase() + size.slice(1)} photos`} aria-pressed={gridSize === size} onClick={() => setGridSize(size)}>{size[0].toUpperCase()}</button>)}
         </div>
         <div className={`folder-grid folder-grid-${gridSize}`}>
-          {visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map((item) => <button type="button" className="folder-card" key={item.id} onClick={() => setActiveId(item.id)} title={item.name || 'Untitled'} aria-label={`View ${item.name || 'Untitled'}`}>
+          {visible.slice(0, visibleCount).map((item) => <button type="button" className="folder-card" key={item.id} onClick={() => setActiveId(item.id)} title={item.name || 'Untitled'} aria-label={`View ${item.name || 'Untitled'}`}>
             <div className="folder-card-image"><LibraryImage key={`${reload}-${item.id}`} item={item} /></div>
             {badge(item) ? <span className="folder-status">{badge(item)}</span> : null}
           </button>)}
         </div>
         {!visible.length ? <p className="folder-load-state">No images match these filters.</p> : null}
-        <nav className="folder-pagination" aria-label="Image pages"><button className="secondary-button" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>Previous page</button><span>Page {currentPage + 1} of {pageCount}</span><button className="secondary-button" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Next page</button></nav>
+        {visibleCount < visible.length ? <div className="folder-load-more" ref={loadMore}>
+          <button className="secondary-button" onClick={() => setVisibleCount((count) => Math.min(count + LOAD_BATCH_SIZE, visible.length))}>Load more images</button>
+        </div> : visible.length > 0 ? <p className="folder-scroll-end">All {visible.length.toLocaleString()} matching images shown</p> : null}
         {active ? <ItemViewer key={active.itemUuid} item={active} onSaved={(updated) => setData((current) => ({ ...current, items: current.items.map((entry) => entry.itemUuid === updated.itemUuid ? { ...entry, ...updated } : entry) }))} navigation={getReferencePreviewNavigation(visible, active.id)} onSelect={setActiveId} onClose={() => setActiveId(null)} /> : null}
         </div>
       </>}
